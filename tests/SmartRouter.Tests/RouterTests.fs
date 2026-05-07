@@ -14,7 +14,7 @@ open Expecto
 let rootTests : Test list =
     [
         SmartRouter.Tests.RoutingTests.tests
-        // SmartRouter.Tests.IntegrationTests.tests   // <- added in later phases
+        SmartRouter.Tests.StreamingTests.tests
     ]
 
 [<EntryPoint>]
