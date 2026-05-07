@@ -133,72 +133,70 @@ Deferred. Tracked but not in current roadmap.
 
 ## Traceability
 
-Empty. Populated by gsd-roadmapper when phases are created.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| API-01 | — | Pending |
-| API-02 | — | Pending |
-| API-03 | — | Pending |
-| API-04 | — | Pending |
-| API-05 | — | Pending |
-| API-06 | — | Pending |
-| API-07 | — | Pending |
-| ROUT-01 | — | Pending |
-| ROUT-02 | — | Pending |
-| ROUT-03 | — | Pending |
-| ROUT-04 | — | Pending |
-| ROUT-05 | — | Pending |
-| ROUT-06 | — | Pending |
-| ROUT-07 | — | Pending |
-| CONC-01 | — | Pending |
-| CONC-02 | — | Pending |
-| CONC-03 | — | Pending |
-| CONC-04 | — | Pending |
-| CONC-05 | — | Pending |
-| CONC-06 | — | Pending |
-| CONC-07 | — | Pending |
-| STRM-01 | — | Pending |
-| STRM-02 | — | Pending |
-| STRM-03 | — | Pending |
-| STRM-04 | — | Pending |
-| STRM-05 | — | Pending |
-| STRM-06 | — | Pending |
-| STRM-07 | — | Pending |
-| REL-01 | — | Pending |
-| REL-02 | — | Pending |
-| REL-03 | — | Pending |
-| REL-04 | — | Pending |
-| REL-05 | — | Pending |
-| OBS-01 | — | Pending |
-| OBS-02 | — | Pending |
-| OBS-03 | — | Pending |
-| OBS-04 | — | Pending |
-| ARCH-01 | — | Pending |
-| ARCH-02 | — | Pending |
-| ARCH-03 | — | Pending |
-| ARCH-04 | — | Pending |
-| ARCH-05 | — | Pending |
-| ARCH-06 | — | Pending |
-| ARCH-07 | — | Pending |
-| OPS-01 | — | Pending |
-| OPS-02 | — | Pending |
-| OPS-03 | — | Pending |
-| OPS-04 | — | Pending |
-| OPS-05 | — | Pending |
-| TEST-01 | — | Pending |
-| TEST-02 | — | Pending |
-| TEST-03 | — | Pending |
-| TEST-04 | — | Pending |
-| TEST-05 | — | Pending |
-| TEST-06 | — | Pending |
-| TEST-07 | — | Pending |
+| API-01 | Phase 1 | Pending |
+| API-02 | Phase 1 | Pending |
+| API-03 | Phase 1 | Pending |
+| API-04 | Phase 1 | Pending |
+| API-05 | Phase 4 | Pending |
+| API-06 | Phase 6 | Pending |
+| API-07 | Phase 3 | Pending |
+| ROUT-01 | Phase 1 | Pending |
+| ROUT-02 | Phase 1 | Pending |
+| ROUT-03 | Phase 1 | Pending |
+| ROUT-04 | Phase 1 | Pending |
+| ROUT-05 | Phase 1 | Pending |
+| ROUT-06 | Phase 1 | Pending |
+| ROUT-07 | Phase 1 | Pending |
+| CONC-01 | Phase 3 | Pending |
+| CONC-02 | Phase 3 | Pending |
+| CONC-03 | Phase 3 | Pending |
+| CONC-04 | Phase 3 | Pending |
+| CONC-05 | Phase 3 | Pending |
+| CONC-06 | Phase 3 | Pending |
+| CONC-07 | Phase 1 | Pending |
+| STRM-01 | Phase 2 | Pending |
+| STRM-02 | Phase 2 | Pending |
+| STRM-03 | Phase 2 | Pending |
+| STRM-04 | Phase 2 | Pending |
+| STRM-05 | Phase 2 | Pending |
+| STRM-06 | Phase 2 | Pending |
+| STRM-07 | Phase 2 | Pending |
+| REL-01 | Phase 4 | Pending |
+| REL-02 | Phase 4 | Pending |
+| REL-03 | Phase 4 | Pending |
+| REL-04 | Phase 4 | Pending |
+| REL-05 | Phase 3 | Pending |
+| OBS-01 | Phase 5 | Pending |
+| OBS-02 | Phase 3 | Pending |
+| OBS-03 | Phase 5 | Pending |
+| OBS-04 | Phase 1 | Pending |
+| ARCH-01 | Phase 1 | Pending |
+| ARCH-02 | Phase 1 | Pending |
+| ARCH-03 | Phase 1 | Pending |
+| ARCH-04 | Phase 1 | Pending |
+| ARCH-05 | Phase 1 | Pending |
+| ARCH-06 | Phase 1 | Pending |
+| ARCH-07 | Phase 1 | Pending |
+| OPS-01 | Phase 6 | Pending |
+| OPS-02 | Phase 6 | Pending |
+| OPS-03 | Phase 6 | Pending |
+| OPS-04 | Phase 1 | Pending |
+| OPS-05 | Phase 1 | Pending |
+| TEST-01 | Phase 5 | Pending |
+| TEST-02 | Phase 5 | Pending |
+| TEST-03 | Phase 2 | Pending |
+| TEST-04 | Phase 3 | Pending |
+| TEST-05 | Phase 4 | Pending |
+| TEST-06 | Phase 3 | Pending |
+| TEST-07 | Phase 1 | Pending |
 
 **Coverage:**
 - v1 requirements: 56 total
-- Mapped to phases: 0 ⚠️ (populated during roadmap creation)
-- Unmapped: 56
+- Mapped to phases: 56 ✓
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-05-07*
-*Last updated: 2026-05-07 after initial definition*
+*Last updated: 2026-05-07 after roadmap creation — all 56 requirements mapped*
