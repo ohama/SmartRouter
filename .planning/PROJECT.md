@@ -3,21 +3,37 @@
 ## What This Is
 
 An F# .NET 10 OpenAI-compatible LLM gateway that fronts two local Qwen models
-on a Mac and auto-routes each request by prompt complexity. It serves
+on a Mac and routes each request to the right one. It serves
 `http://localhost:4000/v1/chat/completions` and forwards to Qwen 35B
-(`localhost:8000`) for simple work or Qwen 122B (`localhost:8001`) for complex
-work. Built specifically so Hermes Agent (Nous Research) can target a single
-endpoint and stop paying 122B latency on prompts the 35B can handle.
+(`localhost:8000`) for fast / lightweight work or Qwen 122B
+(`localhost:8001`) for heavy reasoning. Two distinct consumers depend on it:
+
+- **Hermes Agent** (Nous Research) — latency-sensitive interactive use; sends
+  no `task` field; routing decided purely by heuristic.
+- **Graphify** (yet to be built) — task-typed Graph-RAG / compiler / multi-file
+  reasoning workloads; sends an explicit `task` field (`graph_indexing`,
+  `retrieval`, `summary`, `reasoning`, `compiler_debug`,
+  `architecture_analysis`, `dependency_analysis`); needs concurrency
+  protection on 122B and quality-correct routing.
+
+Both clients use the same OpenAI-compatible wire format. The router
+reconciles their needs through a single decision pipeline:
+explicit-task → heuristic fallback → 35B-aggressive default.
 
 ## Core Value
 
-**Cut average response latency by routing simple requests to the fast 35B model
-without losing quality on the requests that genuinely need 122B.**
+**Route every request to the model best suited to it — fast 35B for simple
+work, expensive 122B only when the task or signals justify it — while
+protecting 122B from concurrent overload.**
 
-When a tradeoff arises, latency wins over thoroughness: aggressively prefer 35B
-unless the prompt strongly signals complexity. Misrouting a complex prompt to
-35B produces a worse answer once; misrouting every simple prompt to 122B taxes
-every interaction.
+When tradeoffs arise:
+- For Hermes (no task field): bias toward 35B; latency wins over thoroughness.
+- For Graphify (task field present): the task type wins. `graph_indexing` and
+  `compiler_debug` always go to 122B even at the cost of queue wait;
+  `retrieval` and `summary` always go to 35B.
+- Across both: 122B concurrency is capped at 1; everyone else queues. Better
+  to make a Hermes call wait 200ms than to thrash 122B and starve a Graphify
+  graph index.
 
 ## Requirements
 
@@ -31,97 +47,189 @@ every interaction.
 
 <!-- Current scope. Building toward these. -->
 
+**API surface**
+
 - [ ] OpenAI-compatible `POST /v1/chat/completions` endpoint on `localhost:4000`
-- [ ] Heuristic complexity classification (prompt length, keyword set, code-block detection, message count)
-- [ ] Route simple → 35B (`localhost:8000`), complex → 122B (`localhost:8001`); aggressively prefer 35B
-- [ ] Honor explicit `model` override in request body when value is `35b`/`122b` (or matching alias); otherwise route by complexity heuristic
-- [ ] Pass-through SSE streaming when client sends `stream=true` (forward upstream chunks unchanged)
-- [ ] Configurable routing rules via `appsettings.json` (threshold, keyword list, model URLs)
-- [ ] Structured logging with per-request timing and routing-decision metadata (Serilog, stderr)
-- [ ] Hexagonal architecture: pure Core (no HTTP / no logging / `task {}` only) + Cli adapters
-- [ ] Extensibility seams for future providers (Claude / OpenAI / DeepSeek / Gemini) — interfaces in place, no implementations
-- [ ] Stateless service (no static mutable state, DI throughout)
-- [ ] Test pyramid via Expecto: unit (complexity scoring, keyword detection, routing decisions) + integration (fake upstream servers, end-to-end) + load (concurrent requests) + failure (timeout, malformed JSON, unavailable upstream)
-- [ ] Mock OpenAI-compatible upstream for deterministic tests (controlled latency + failure simulation)
+- [ ] Request parsing: `messages`, `model`, `stream`, `temperature`, `top_p`, `max_tokens`, plus optional non-OpenAI `task` field
+- [ ] Preserve unknown fields when forwarding upstream (don't strip)
+- [ ] `GET /health` — liveness + upstream reachability for both ports
+- [ ] `GET /v1/models` — proxies upstream model lists, deduped
+- [ ] `GET /stats` — queue size, waiting requests, active model, average wait time, requests/sec, failures, streaming duration
+
+**Routing decision pipeline**
+
+- [ ] Honor explicit `model` override when value matches `35b` / `122b` (or alias) — short-circuits routing
+- [ ] Honor explicit `task` field via task-routing table (graph_indexing/compiler_debug/architecture_analysis/dependency_analysis/reasoning → 122B; retrieval/summary → 35B)
+- [ ] Heuristic fallback when no task and no override: prompt length, complex-keyword set, code-block detection, message count, total context size
+- [ ] Aggressive 35B preference for ambiguous heuristic cases (Hermes path)
+- [ ] Configurable routing rules in `appsettings.json` (threshold, keyword list, task→model table, model URLs)
+
+**Concurrency + queueing**
+
+- [ ] `SemaphoreSlim(1)` on 122B — at most one heavy request in flight per gateway process
+- [ ] Priority queue for 122B: high (graph_indexing, compiler_debug, architecture_analysis), low (everything else routed to 122B)
+- [ ] 35B served with higher concurrency (no semaphore-1; bounded by HttpClient pool)
+- [ ] Cancellation token propagated client → router → upstream HttpClient call
+- [ ] Configurable per-request timeout (default 300s to cover 122B cold-start, matching blueCode)
+
+**Reliability**
+
+- [ ] Retry policy on transient upstream failures (idempotent `chat/completions`; bounded retries with backoff)
+- [ ] Backend health probing (track 35B / 122B reachability for `/health` and fallback decisions)
+- [ ] Fallback: when 122B is unavailable, route to 35B *except* for `graph_indexing` (which must return an error — wrong-model output is worse than no output)
+
+**Streaming**
+
+- [ ] Pass-through SSE when client sends `stream=true` — forward upstream chunks unchanged, no buffering
+- [ ] Preserve chunk ordering
+- [ ] Support cancellation mid-stream (downstream disconnect aborts upstream call)
+
+**Observability**
+
+- [ ] Structured logging (Serilog, stderr) per request: selected model, routing reason, latency, token count, backend status, queue wait time
+- [ ] Counters/gauges feeding `/stats`: requests/sec, active requests, 122B queue depth, average latency, failure count, streaming duration
+
+**Architecture**
+
+- [ ] Hexagonal: pure Core (no HTTP / no logging / `task {}` only) + Cli adapters
+- [ ] Stateless service (no static mutable state; queue + semaphore + counters held in DI-scoped singletons)
+- [ ] Extensibility seams for future providers (Claude / OpenAI / DeepSeek / Gemini / Gemma / Llama) — interfaces in place, no implementations
+- [ ] Composable routing rules (chain of decision functions; testable in isolation)
+
+**Operability**
+
 - [ ] launchd plist for daemonized operation (matches `com.ohama.qwen122b.plist` pattern)
-- [ ] README with architecture, routing logic, threshold tuning, debugging, Hermes integration steps
+- [ ] README: architecture, routing rules, threshold tuning, debugging, Hermes integration steps, Graphify integration steps
+
+**Testing**
+
+- [ ] Expecto unit tests: complexity scoring, keyword detection, task-routing table, priority comparison, fallback decisions
+- [ ] Integration tests with fake upstream OpenAI servers (deterministic responses, controlled latency, controlled failures)
+- [ ] Streaming tests (chunk ordering, cancellation, mid-stream upstream failure)
+- [ ] Concurrency tests (semaphore enforcement, priority ordering, queue starvation)
+- [ ] Load tests (concurrent request throughput, latency under contention)
+- [ ] Failure tests (timeout, malformed JSON from upstream, unavailable model server, fallback path, graph_indexing-must-fail path)
 
 ### Out of Scope
 
 <!-- Explicit boundaries. Includes reasoning to prevent re-adding. -->
 
-- **Retry / circuit breaker** — defer to v2; add only if real failures observed in operation
-- **Request queueing** — defer to v2; not needed at single-user / single-Hermes load profile
-- **Rate limiting** — defer to v2; only one client (local Hermes Agent), no abuse vector
-- **`/metrics` Prometheus endpoint** — defer to v2; Serilog timing logs cover v1 observability needs
-- **`/health` probe endpoint** — defer to v2; launchd handles process supervision
-- **ML / learned routing** — heuristics only for v1; revisit once we have logged routing data to train against
-- **Concrete Claude / OpenAI / DeepSeek / Gemini provider implementations** — extension seams only, no live integrations
-- **Windows support** — Mac-only, mirrors blueCode constraint (Unix path heuristic in `tryParseModelId`)
-- **Auth / API keys on the router** — purely loopback (`localhost:4000`), single-user, no auth surface
-- **Authoring a non-OpenAI client protocol** — strictly OpenAI chat-completions wire format on both sides
-- **Persistence / session state** — router is stateless per request; conversation memory lives in Hermes
+- **Circuit breaker as a distinct mechanism** — retry policy + health probing covers immediate failures. Add later only if a recurring failure mode is observed that needs explicit "open" state.
+- **Rate limiting** — single host, two known clients, no abuse vector. Defer until a real abuse / runaway-loop scenario appears.
+- **Auth / API keys** — loopback-only (`localhost:4000`); no external exposure, no auth surface.
+- **Prometheus `/metrics` endpoint** — `/stats` covers v1 observability needs. Add Prometheus exposition only if a scraper actually arrives.
+- **ML / learned routing** — heuristics only for v1; revisit after `/stats` + structured logs accumulate enough decision data to train against.
+- **Concrete provider implementations beyond Qwen 35B / 122B** — Claude / OpenAI / DeepSeek / Gemini / Gemma / Llama get extension *seams* only, no live integrations.
+- **Docker / docker-compose deployment** — Mac-only via launchd; matches blueCode operational pattern. Container packaging deferred until a reason to run elsewhere appears.
+- **Windows support** — Mac-only; mirrors blueCode's Unix-path heuristic in `tryParseModelId`.
+- **Persistence / session state** — router is stateless per request; conversation memory lives in the client (Hermes / Graphify).
+- **xUnit / FsUnit** — test framework brief mentioned them; we use Expecto only (matches blueCode, single test framework across both projects).
+- **Channels / TPL Dataflow as a baseline pattern** — graphify prompt suggested them; v1 uses a simple priority queue + SemaphoreSlim. Reach for Dataflow only if v2 introduces fan-out pipelines that justify it.
 
 ## Context
 
-**Consumer.** The router fronts [Hermes Agent](https://github.com/NousResearch/hermes-agent),
-configured through its `custom` provider plugin
-(`plugins/model-providers/custom`). Hermes will set `base_url=http://localhost:4000/v1`
-and call `chat.completions.create(stream=True, ...)` — pass-through SSE is
-therefore a v1 must, not a nice-to-have.
+**Two consumers, one router.**
 
-**Why now.** Qwen 122B (`Qwen/Qwen3.5-122B-A10B-4bit` MoE) is the canonical
-production model in the user's local LLM rig but it's slow — 240s cold-start,
-RSS ~45 GB, generation latency dominates interactive sessions. Qwen 35B is
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) (local clone at
+`~/hermes-agent`) connects through its `custom` provider plugin
+(`plugins/model-providers/custom`) with `base_url=http://localhost:4000/v1`.
+Hermes calls `chat.completions.create(stream=True, ...)` by default
+(`run_agent.py:6784`) and never sends a `task` field — its routing path is
+purely heuristic + `model`-override-aware.
+
+Graphify is a Graph-RAG / compiler-reasoning system the operator plans to
+build later. Per `graphify_smart_router_prompt.md`, it will send an explicit
+`task` field on each request. Confirmed v1 routes:
+
+| Task | Model |
+|------|-------|
+| `graph_indexing` | 122B (high prio; **never falls back** — must fail on 122B unavailable) |
+| `compiler_debug` | 122B (high prio) |
+| `architecture_analysis` | 122B (high prio) |
+| `dependency_analysis` | 122B (low prio) |
+| `reasoning` | 122B (low prio) |
+| `retrieval` | 35B |
+| `summary` | 35B |
+
+Heuristic fallback (Hermes path, or Graphify with no `task`): complex-keyword
+hits (recursive, dependency, lowering, MLIR, LLVM, compiler, architecture,
+type inference, graph relation, closure conversion, cross-file, multi-file,
+etc.) → 122B; long contexts → 122B; otherwise 35B.
+
+**Why now.** Qwen 122B is the canonical heavy model in the operator's local
+LLM rig, but it's slow (~240s cold-start, ~45 GB RSS, generation latency
+dominates interactive sessions) and expensive to run concurrently. Qwen 35B is
 already running on `localhost:8000` as the standby/rollback service. Both
 launchd plists already exist
 (`~/Library/LaunchAgents/com.ohama.qwen{35b,122b}.plist`). The router unlocks
-"keep both loaded, route between them" without forcing a per-call manual
-choice.
+"keep both loaded, route correctly between them" for two very different
+workloads sharing the same host.
 
 **Companion project: blueCode** (`/Users/ohama/projs/blueCode`). Existing F#
-.NET 10 hexagonal codebase that already speaks to both Qwen ports. We will
-**copy adapters** from blueCode (decision logged below): `QwenHttpClient.fs`
-(plus its HF-id parsing trap defenses), `Adapters/Json.fs`,
-`Adapters/Logging.fs`. Core will be rewritten cleanly — blueCode's Core is an
-agent loop, not a router, so its domain doesn't transfer. blueCode's hard-won
-operational knowledge is also load-bearing context:
+.NET 10 hexagonal codebase that already speaks to both Qwen ports. We **copy
+adapters** from blueCode: `QwenHttpClient.fs` (plus its HF-id parsing trap
+defenses), `Adapters/Json.fs`, `Adapters/Logging.fs`. Core gets rewritten
+cleanly because blueCode's Core is an agent loop, not a router. Hard-won
+operational knowledge from blueCode is load-bearing context:
 
 - mlx_lm.server HF-fallback trap: send the local path (not the HF id) in the
-  `model` field of POST bodies, otherwise the server overwrites the loaded
+  POST body's `model` field; otherwise the server overwrites the loaded
   Instruct tokenizer with a Base Coder one and responses become FIM-mode
-  garbage. `tryParseModelId` in blueCode's `QwenHttpClient.fs` resolves this by
-  preferring `data[0]` entries that start with `/`.
-- Both servers are launched with `--chat-template-args '{"enable_thinking": false}'`
-  to suppress `<think>...</think>` tokens; the router doesn't need to do
-  anything special, but should not assume thinking traces are absent if a
-  future server change reverts this.
+  garbage. `tryParseModelId` in blueCode's `QwenHttpClient.fs` resolves this
+  by preferring `data[0]` entries that start with `/`.
+- Both servers launch with `--chat-template-args '{"enable_thinking": false}'`
+  to suppress `<think>...</think>` tokens that would break strict-JSON
+  parsing. The router doesn't need to do anything special here.
 - HttpClient timeout: 300s (covers 122B cold-start up to 240s after
   `launchctl kickstart`).
-- Sampling parameters Qwen 3.5 expects: `temperature=0.7, top_p=0.8, top_k=20,
-  presence_penalty=0.0` (non-thinking coding defaults). The router passes
-  client-supplied parameters through; only fills these as defaults when client
-  omits them.
+- Sampling-parameter defaults Qwen 3.5 expects when client omits them:
+  `temperature=0.7, top_p=0.8, top_k=20, presence_penalty=0.0` (non-thinking
+  coding defaults). The router passes client values through; only fills these
+  when client omits them.
 
 **Code-style invariants from blueCode (load-bearing).**
 - Pure Core: no Serilog / Spectre / HTTP client references in `*.Core/**`
-- `task {}` not `async {}` in Core (CI grep enforces in blueCode; we mirror
-  the convention here)
-- Serilog → stderr, application output → stdout
+- `task {}` not `async {}` in Core (blueCode CI grep enforces this; we mirror)
+- Serilog → stderr, application output → stdout (separation matters for tests
+  that capture stdout)
 - Per-task atomic commits; `git add <file>` not `git add -A`
 - Test discovery: explicit `rootTests` list pattern in the test entrypoint —
   Expecto auto-discovery is unreliable and burned multiple executors
 
+**Why task-based routing beats prompt-length-only routing.** A short
+prompt that says "build the dependency graph for this 30-file project" looks
+trivial to a length heuristic but needs 122B's reasoning. The `task` field
+lets Graphify declare intent the router can't otherwise infer cheaply.
+Heuristic stays as fallback for clients (Hermes) that can't or won't
+annotate.
+
+**Why 122B concurrency must be capped at 1.** mlx_lm.server holds the model
+weights in resident memory; concurrent generations contend for the same
+forward-pass kernels and serialize at the metal layer with worse latency than
+clean serialization at the application layer. RSS is already ~45 GB for one
+generation; a second concurrent generation risks `[METAL] Insufficient Memory`
+crashes (observed in blueCode's `~/llm-system/services/logs/122b.err`).
+SemaphoreSlim(1) at the gateway is the cheapest place to enforce this.
+
+**Why graph_indexing must fail on 122B unavailable.** Graph indexing produces
+durable artifacts that downstream queries depend on. A 35B-built index would
+be silently lower quality and would poison every retrieval that hit those
+nodes for as long as the index lived. Loud failure beats silent quality
+regression.
+
 ## Constraints
 
-- **Tech stack**: F# / .NET 10 / ASP.NET Core Minimal API / HttpClientFactory / System.Text.Json — fixed by the brief; `dotnet --version` must support net10.0
-- **No Python** — explicit in brief
-- **Test stack**: Expecto + ASP.NET Core TestServer — overrides brief's xUnit/FsUnit suggestion, matches blueCode for consistency and operator familiarity
-- **Logging**: Serilog (stderr) — match blueCode; stream separation matters for tools that capture stdout
-- **Stateless**: no static mutable state, DI throughout
+- **Tech stack**: F# / .NET 10 / ASP.NET Core Minimal API / HttpClientFactory / System.Text.Json — fixed by user decision; matches blueCode's `net10.0`
+- **No Python** — explicit in original brief
+- **Test stack**: Expecto + ASP.NET Core TestServer — single framework, matches blueCode
+- **Logging**: Serilog → stderr — matches blueCode; stream separation matters for tests that capture stdout
+- **Stateless**: no static mutable state, DI throughout (queue + semaphore + counters live in DI-scoped singletons)
 - **Mac-only**: launchd plist deployment, Unix path conventions
-- **Loopback-only**: binds to `localhost`, no public exposure, no auth required
-- **Aggressive 35B preference**: when in doubt about complexity, route to 35B — false-cheap is worse than false-slow per Core Value
+- **Loopback-only**: binds to `localhost:4000`, no public exposure, no auth surface
+- **122B concurrency cap = 1**: enforced by SemaphoreSlim regardless of caller
+- **Aggressive 35B preference for heuristic-only path**: when in doubt, route to 35B (latency win for Hermes)
+- **Task-routing table is authoritative when `task` is present**: heuristic does not override an explicit task
+- **graph_indexing has no fallback**: 122B unavailable → return error; do not silently downgrade to 35B
 
 ## Key Decisions
 
@@ -129,14 +237,21 @@ operational knowledge is also load-bearing context:
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Test framework: **Expecto** (override brief's xUnit/FsUnit) | Matches blueCode; user knows its quirks (`testSequenced`, explicit `rootTests` list, Console.SetOut races) | — Pending |
-| Code reuse: **copy adapters** from blueCode (`QwenHttpClient.fs`, `Json.fs`, `Logging.fs`); rewrite Core cleanly | blueCode's Core is an agent loop — domain doesn't transfer. Adapters carry hard-won mlx_lm gotchas worth lifting verbatim. Avoids a cross-project shared library refactor. | — Pending |
-| Streaming: **pass-through SSE from v1** | Hermes Agent calls `chat.completions.create(stream=True)` by default; rejecting or buffering breaks Hermes UX. Forwarding upstream chunks unchanged is the simplest correct option. | — Pending |
-| `model` field handling: **honor explicit override (`35b`/`122b` aliases) + log decision** | Lets the operator force a target for debugging while keeping default behavior heuristic. Logging captures the data we'd need later to tune thresholds or train a learned router. | — Pending |
-| Deployment: **launchd plist** (mirror `com.ohama.qwen122b.plist`) | Auto-start + supervision in the same shape as the upstream services; one operational pattern instead of two. | — Pending |
-| v1 scope: **none of the "extra features"** (retry, circuit breaker, queueing, rate limit, /metrics, /health) | Single-user loopback; defer until real failure modes observed. Each adds surface area that has to be tested and maintained for hypothetical needs. | — Pending |
+| Test framework: **Expecto** (override briefs' xUnit/FsUnit) | Matches blueCode; user knows its quirks (`testSequenced`, explicit `rootTests` list, Console.SetOut races) | — Pending |
+| Code reuse: **copy adapters** from blueCode (`QwenHttpClient.fs`, `Json.fs`, `Logging.fs`); rewrite Core cleanly | blueCode's Core is an agent loop — domain doesn't transfer. Adapters carry hard-won mlx_lm gotchas worth lifting verbatim. Avoids cross-project shared library refactor. | — Pending |
+| Streaming: **pass-through SSE from v1** | Both Hermes (default `stream=true`) and Graphify (per spec) need streaming. Forwarding upstream chunks unchanged is the simplest correct option. | — Pending |
+| `model` field: **honor explicit override (`35b`/`122b` aliases) + log decision** | Lets operator force a target for debugging while keeping default behavior heuristic. Logging captures data for later threshold tuning. | — Pending |
+| `task` field: **non-OpenAI extension; authoritative when present** | Lets Graphify declare intent the router can't infer cheaply. Heuristic does not override explicit task — Graphify knows its own workload better than any keyword regex. | — Pending |
+| Routing pipeline: **`model` override → `task` table → heuristic → 35B-default** | Single ordered decision chain; each stage has clear precedence; fully testable in isolation. | — Pending |
+| 122B concurrency: **`SemaphoreSlim(1)` at the gateway** | Single chokepoint matches the underlying single-process model server constraint; cheaper than per-request mlx_lm pushback. | — Pending |
+| Priority queue: **two-level (high/low) FIFO within level** for 122B | Matches Graphify's stated priority shape (graph_indexing high, summaries low). FIFO within level keeps it simple; revisit if starvation observed. | — Pending |
+| Fallback policy: **122B-unavailable → 35B, except `task=graph_indexing` which must fail** | Wrong-model index is silently lower quality and durable; loud failure is the right operational signal. Hermes complex prompts can degrade to 35B safely. | — Pending |
+| Deployment: **launchd plist** (mirror `com.ohama.qwen122b.plist`) | Auto-start + supervision in the same shape as upstream services; one operational pattern instead of two. | — Pending |
 | Architecture: **hexagonal mirror of blueCode** (pure Core + Cli adapters, `task {}` only in Core) | Operator already maintains blueCode under these invariants; matching them keeps both projects on the same mental model and same CI patterns. | — Pending |
 | Mac-only / loopback-only | Matches blueCode constraint and the actual deployment target; cuts auth, TLS, and cross-platform path handling out of v1 scope. | — Pending |
+| Health/stats endpoints in v1 (was v2 in pre-Graphify draft) | Graphify spec needs `/health` for liveness, `/stats` for queue monitoring. Cheap to add at this stage; expensive to retrofit observability later. | — Pending |
+| Retry policy + backend health detection in v1 (was v2 in pre-Graphify draft) | Required by graphify spec; backend health detection is also the input to fallback logic. | — Pending |
+| Reject Channels / TPL Dataflow for v1 | Priority queue + semaphore covers v1 needs without the abstraction tax. Reach for Dataflow only if v2 fan-out pipelines justify it. | — Pending |
 
 ---
-*Last updated: 2026-05-07 after initialization*
+*Last updated: 2026-05-07 after Graphify scope expansion*
