@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SmartRouter.Core/SmartRouter.Core.fsproj" />
+    <Project Path="src/SmartRouter.Cli/SmartRouter.Cli.fsproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SmartRouter.Tests/SmartRouter.Tests.fsproj" />
+  </Folder>
+</Solution>
