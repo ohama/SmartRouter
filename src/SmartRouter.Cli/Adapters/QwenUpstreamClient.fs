@@ -7,6 +7,7 @@ open System.Text
 open System.Text.Json
 open System.Threading
 open System.Threading.Tasks
+open FSharp.Control
 open Microsoft.Extensions.Options
 open Serilog
 open SmartRouter.Core.Domain
@@ -220,17 +221,90 @@ type QwenUpstreamClient(httpFactory: IHttpClientFactory, opts: IOptions<Upstream
                 return Error (ModelUnavailable (target, "upstream timeout"))
         }
 
-    /// Phase-2 stub: SSE streaming not implemented in Phase 1.
-    /// The ChatCompletions endpoint 501s on stream=true before reaching this path.
-    member _.StreamAsync (_req: RouterRequest) (_target: ModelId) (_ct: CancellationToken) : IAsyncEnumerable<Result<string, RouterError>> =
-        // Unreachable in Phase 1 — endpoint short-circuits stream=true to HTTP 501.
-        // Phase 2 replaces this with real SSE streaming.
-        { new IAsyncEnumerable<Result<string, RouterError>> with
-            member _.GetAsyncEnumerator(_ct2) =
-                { new IAsyncEnumerator<Result<string, RouterError>> with
-                    member _.Current = Ok ""
-                    member _.MoveNextAsync() = ValueTask<bool>(false)
-                    member _.DisposeAsync() = ValueTask() } }
+    /// Streaming POST to upstream /v1/chat/completions.
+    /// Uses taskSeq {} to produce an IAsyncEnumerable<Result<string, RouterError>>.
+    ///
+    /// SSE pitfalls addressed:
+    ///   STRM-01 / PITFALL-2: HttpCompletionOption.ResponseHeadersRead — no body buffering.
+    ///   STRM-06 / PITFALL-4: use _ = resp immediately after let! — disposal scope covers full read loop.
+    ///   PITFALL-14: let! + use _ pattern for Task<IDisposable> in taskSeq {}.
+    ///
+    /// Yields Ok line for each non-blank SSE event line from the upstream stream.
+    /// Yields a single Error _ on probe failure or non-2xx response; sequence terminates.
+    /// Never throws — all failure paths yield Error _ (consistent with CompleteAsync contract).
+    member _.StreamAsync (req: RouterRequest) (target: ModelId) (ct: CancellationToken) : IAsyncEnumerable<Result<string, RouterError>> =
+        taskSeq {
+            let probe, clientName, upstreamUrl = resolveProbe target
+
+            // 1. Resolve upstream model id (lazy probe — fires at most once per process per upstream).
+            let! probeResult = probe.Value
+            match probeResult with
+            | Error e ->
+                yield Error e
+                // Yield the error and let the sequence terminate naturally.
+            | Ok modelId ->
+
+            // 2. Build wire messages.
+            let msgs =
+                req.Messages
+                |> List.map (fun m ->
+                    {| role = roleString m.Role; content = m.Content |})
+                |> List.toArray
+
+            // 3. Build request body dict — same shape as CompleteAsync but stream=true.
+            let bodyDict = Dictionary<string, obj>()
+            bodyDict.["model"]            <- modelId
+            bodyDict.["messages"]         <- msgs
+            bodyDict.["stream"]           <- true  // streaming
+            bodyDict.["temperature"]      <- (req.Temperature |> Option.defaultValue 0.7) :> obj
+            bodyDict.["top_p"]            <- (req.TopP        |> Option.defaultValue 0.8) :> obj
+            bodyDict.["top_k"]            <- 20 :> obj
+            bodyDict.["presence_penalty"] <- 0.0 :> obj
+
+            match req.MaxTokens with
+            | Some n -> bodyDict.["max_tokens"] <- n :> obj
+            | None   -> ()
+
+            // 4. Merge UnknownFields last — client-supplied non-OpenAI fields flow through verbatim (API-04).
+            for kv in req.UnknownFields do
+                bodyDict.[kv.Key] <- kv.Value :> obj
+
+            let bodyJson = JsonSerializer.Serialize(bodyDict, jsonOptions)
+
+            Log.Debug("StreamAsync POST {Url}/v1/chat/completions (stream=true)", upstreamUrl)
+
+            // 5. Build the HTTP request message. Do NOT cache the client (PITFALL-15).
+            let client = httpFactory.CreateClient(clientName)
+            use reqMsg = new HttpRequestMessage(HttpMethod.Post, upstreamUrl + "/v1/chat/completions")
+            reqMsg.Content <- new StringContent(bodyJson, Encoding.UTF8, "application/json")
+
+            // 6. Open upstream connection with ResponseHeadersRead — no body buffering (STRM-01 / PITFALL-2).
+            //    Direct let! form — NO task { return! ... } wrapper (per plan constraint).
+            //    use _ = resp immediately after — disposal scope covers entire read loop (STRM-06 / PITFALL-4).
+            let! resp = client.SendAsync(reqMsg, HttpCompletionOption.ResponseHeadersRead, ct)
+            use _ = resp
+
+            if not resp.IsSuccessStatusCode then
+                let! errorBody = resp.Content.ReadAsStringAsync(ct)
+                let snippet = if errorBody.Length > 200 then errorBody.Substring(0, 200) else errorBody
+                yield Error (ModelUnavailable (target, $"HTTP {int resp.StatusCode}: {snippet}"))
+            else
+                // 7. Read upstream stream line-by-line.
+                //    StreamReader default buffer = 4096 bytes — sufficient for SSE events (50–200 bytes each).
+                //    ReadLineAsync(ct) propagates cancellation (CancellationToken overload — .NET 7+).
+                use stream = resp.Content.ReadAsStream()
+                use reader = new System.IO.StreamReader(stream)
+
+                let mutable isDone = false
+                while not isDone && not ct.IsCancellationRequested do
+                    let! line = reader.ReadLineAsync(ct)
+                    if isNull line then
+                        isDone <- true   // EOF — upstream stream complete
+                    elif line.Length > 0 then
+                        yield Ok line    // e.g. "data: {\"id\":\"...\",\"choices\":[...]}"
+                        // Blank separator lines between SSE events are intentionally skipped here;
+                        // the endpoint re-appends \n\n when writing each yielded chunk to the client.
+        }
 
     interface IUpstreamClient with
         member this.CompleteAsync req target ct = this.CompleteAsync req target ct
