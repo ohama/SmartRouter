@@ -5,33 +5,33 @@
 See: .planning/PROJECT.md (updated 2026-05-07)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 1 — Foundation
+**Current focus:** Phase 2 — Streaming (next) OR Phase 3 — Concurrency Gate (parallel track)
 
 ## Current Position
 
-Phase: 1 of 6 (Foundation)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-05-07 — Completed 01-02-CORE-DOMAIN-PLAN.md (Domain.fs, Routing.fs, Ports.fs, Json.fs, Logging.fs, RoutingTests.fs 22 tests)
+Phase: 1 of 6 (Foundation) — COMPLETE
+Plan: 3 of 3 in current phase
+Status: Phase 1 complete; ready for Phase 2 or Phase 3
+Last activity: 2026-05-07 — Completed 01-03-UPSTREAM-WIRING-PLAN.md (QwenUpstreamClient, ChatCompletions endpoint, CompositionRoot, Program.fs, appsettings.json)
 
-Progress: [██░░░░░░░░] ~12% (2 of ~17 plans estimated)
+Progress: [███░░░░░░░] ~18% (3 of ~17 plans estimated)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2
-- Average duration: 4 min
-- Total execution time: ~8 min
+- Total plans completed: 3
+- Average duration: ~7 min
+- Total execution time: ~21 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01-foundation | 2/3 | 8 min | 4 min |
+| 01-foundation | 3/3 | ~21 min | 7 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (3 min), 01-02 (5 min)
-- Trend: —
+- Last 5 plans: 01-01 (3 min), 01-02 (5 min), 01-03 (13 min)
+- Trend: Increasing with complexity (infrastructure wiring > domain logic > scaffolding)
 
 *Updated after each plan completion*
 
@@ -46,11 +46,14 @@ Recent decisions affecting current work:
 - Roadmap: graph_indexing no-fallback rule ships in same phase as health probing (Phase 4)
 - Roadmap: Phase 3 depends on Phase 1 only (not Phase 2); Phases 2 and 3 have no cross-dependency
 - 01-01: `dotnet new slnx` unavailable in SDK 10.0.203 — SmartRouter.slnx written manually in XML (no functional difference)
-- 01-01: Cli stub Program.fs required to satisfy F# FS0988 (empty main module); replaced in plan 01-03
 - 01-01: launchSettings.json has no applicationUrl — appsettings.json is single source of truth for Kestrel binding (OPS-04)
 - 01-02: RoutingConfig is a plain F# record in Core (no IOptions<T>); Cli constructs it from appsettings.json at composition time (ARCH-01)
 - 01-02: taskToDecision is utility-only (compile-time DU completeness anchor); routeRequest/tryTaskTable read config.TaskTable Map at runtime (ROUT-05 locked decision)
 - 01-02: MessageRole.System DU case shadows System namespace — test code must use String.replicate not System.String.replicate
+- 01-03: wireJsonOptions uses standard STJ without FSharpConverter for incoming wire body — FSharp.SystemTextJson record converter requires all fields to be present; standard STJ tolerates missing optional fields
+- 01-03: Lazy probe returns Result<string, RouterError> (not ModelInfo record) — probe failure maps directly to ModelUnavailable, no silent fallback to empty model id
+- 01-03: F# interpolated strings reject escaped quotes inside interpolation expressions — use sprintf for error messages containing quotes
+- 01-03: Phase 3 concurrency gate swap is one-line DI change: AddSingleton<IUpstreamClient>(QueueDispatcher(QwenUpstreamClient())) in CompositionRoot
 
 ### Pending Todos
 
@@ -58,11 +61,12 @@ None.
 
 ### Blockers/Concerns
 
-- NuGet package versions all resolved at pinned versions — no concerns remaining from earlier MEDIUM-confidence list.
+- NuGet package versions all resolved at pinned versions — no concerns remaining.
 - Graphify task field string literals ("graph_indexing", etc.) must be confirmed against actual Graphify client when it is built.
+- Scenario B (live upstream smoke) not yet verified — Qwen 35B was not running during 01-03 execution. Phase 5 verifier must run this against a live upstream.
 
 ## Session Continuity
 
-Last session: 2026-05-07T06:42:15Z
-Stopped at: Completed 01-02-CORE-DOMAIN-PLAN.md
+Last session: 2026-05-07T06:58:00Z
+Stopped at: Completed 01-03-UPSTREAM-WIRING-PLAN.md — Phase 1 Foundation complete
 Resume file: None
