@@ -5,17 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-07)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 2 — SSE Streaming Pass-Through (next; per ROADMAP execution order)
+**Current focus:** Phase 2 — SSE Streaming Pass-Through (in progress — plan 01 complete)
 
 ## Current Position
 
-Phase: 1 of 6 (Foundation) — COMPLETE ✓
-Plan: 3 of 3 in current phase
-Status: Phase 1 verified; user approved on automated evidence (live-upstream Scenario B deferred to Phase 6 deploy)
-Last activity: 2026-05-07 — Phase 1 complete; verifier 9/10 automated checks passed; human-verification item (live upstream Scenario B) approved without re-test
-Next: /gsd:plan-phase 2
+Phase: 2 of 6 (SSE Streaming Pass-Through) — In progress
+Plan: 1 of 2 in current phase — COMPLETE ✓
+Status: 02-01 streaming implementation done; 02-02 (StreamingTests) next
+Last activity: 2026-05-07 — Completed 02-01-STREAMING-IMPL-PLAN.md — SSE forward loop ships; all 5 pitfalls mitigated
 
-Progress: [███░░░░░░░] ~18% (3 of ~17 plans estimated)
+Progress: [████░░░░░░] ~24% (4 of ~17 plans estimated)
 
 ## Performance Metrics
 
@@ -29,10 +28,11 @@ Progress: [███░░░░░░░] ~18% (3 of ~17 plans estimated)
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-foundation | 3/3 | ~21 min | 7 min |
+| 02-sse-streaming-pass-through | 1/2 | ~18 min | 18 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (3 min), 01-02 (5 min), 01-03 (13 min)
-- Trend: Increasing with complexity (infrastructure wiring > domain logic > scaffolding)
+- Last 5 plans: 01-01 (3 min), 01-02 (5 min), 01-03 (13 min), 02-01 (18 min)
+- Trend: Increasing with complexity (SSE implementation required solving F# task{} finally limitation)
 
 *Updated after each plan completion*
 
@@ -55,6 +55,9 @@ Recent decisions affecting current work:
 - 01-03: Lazy probe returns Result<string, RouterError> (not ModelInfo record) — probe failure maps directly to ModelUnavailable, no silent fallback to empty model id
 - 01-03: F# interpolated strings reject escaped quotes inside interpolation expressions — use sprintf for error messages containing quotes
 - 01-03: Phase 3 concurrency gate swap is one-line DI change: AddSingleton<IUpstreamClient>(QueueDispatcher(QwenUpstreamClient())) in CompositionRoot
+- 02-01: F# task{} does not support do! in finally blocks — enumerator.DisposeAsync() called explicitly in each catch arm (normal, cancel, error); semantically equivalent to finally
+- 02-01: StreamAsync uses direct let! resp = client.SendAsync(..., HttpCompletionOption.ResponseHeadersRead, ct) — no task{return!...} wrapper
+- 02-01: StreamingTests deferred to Plan 02-02 — 02-01 ships the implementation only; 02-02 owns the fake-Kestrel integration test harness
 
 ### Pending Todos
 
@@ -68,6 +71,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-07T06:58:00Z
-Stopped at: Completed 01-03-UPSTREAM-WIRING-PLAN.md — Phase 1 Foundation complete
+Last session: 2026-05-07T17:46:00Z
+Stopped at: Completed 02-01-STREAMING-IMPL-PLAN.md — SSE pass-through implementation complete
 Resume file: None
