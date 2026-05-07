@@ -25,17 +25,19 @@ type WireMessage =
 /// Wire format for the POST /v1/chat/completions request body.
 /// [<JsonExtensionData>] captures any unrecognized JSON properties into `extra`
 /// so they can be forwarded verbatim to the upstream (API-04 / ROUT-07).
+/// Uses [<CLIMutable>] with standard .NET types for standard STJ compatibility
+/// (no FSharpConverter on wireJsonOptions — that avoids missing-field errors).
 [<CLIMutable>]
 type RouterRequestWire =
-    { messages    : WireMessage[]
-      model       : string                            // null/missing in JSON maps to null string
-      stream      : Nullable<bool>
-      temperature : Nullable<float>
-      top_p       : Nullable<float>
-      max_tokens  : Nullable<int>
-      task        : string                            // null when absent
+    { mutable messages    : WireMessage[]
+      mutable model       : string                    // null when absent
+      mutable stream      : Nullable<bool>
+      mutable temperature : Nullable<float>
+      mutable top_p       : Nullable<float>
+      mutable max_tokens  : Nullable<int>
+      mutable task        : string                    // null when absent
       [<JsonExtensionData>]
-      extra       : Dictionary<string, JsonElement> }
+      mutable extra       : Dictionary<string, JsonElement> }
 
 // ── Wire → Domain mapping ────────────────────────────────────────────────────
 
@@ -93,8 +95,8 @@ let handler
     (upstream      : IUpstreamClient)
     (ctx           : HttpContext) : Task =
     task {
-        // 1. Parse wire body
-        let! wireBody = ctx.Request.ReadFromJsonAsync<RouterRequestWire>(jsonOptions, ctx.RequestAborted)
+        // 1. Parse wire body — use wireJsonOptions (allows missing/null fields for optional wire fields)
+        let! wireBody = ctx.Request.ReadFromJsonAsync<RouterRequestWire>(wireJsonOptions, ctx.RequestAborted)
 
         if isNull (wireBody :> obj) then
             ctx.Response.StatusCode <- 400

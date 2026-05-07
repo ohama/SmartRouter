@@ -1,6 +1,46 @@
 module SmartRouter.Cli.Program
 
-// Stub entry point — full wiring added in plans 01-02 and 01-03.
+open Microsoft.AspNetCore.Builder
+open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.Options
+open Serilog
+open SmartRouter.Cli.Adapters
+open SmartRouter.Cli.CompositionRoot
+open SmartRouter.Cli.Endpoints
+
 [<EntryPoint>]
-let main _argv =
-    0
+let main args =
+    // Configure Serilog BEFORE WebApplication.CreateBuilder so even host startup
+    // logs (e.g., "Now listening on...") go to stderr — OBS-04.
+    Logging.configure ()
+
+    try
+        try
+            let builder = WebApplication.CreateBuilder(args)
+
+            // Wire Serilog as the ASP.NET host logger
+            builder.Host.UseSerilog() |> ignore
+
+            // Register all DI services: named HttpClients, IUpstreamClient, RoutingConfig
+            CompositionRoot.configureServices builder.Services builder.Configuration
+            |> ignore
+
+            let app = builder.Build()
+
+            // Validate routing config now that DI container is built (fails fast on typos)
+            let routingOpts = app.Services.GetRequiredService<IOptions<RoutingOptions>>().Value
+            CompositionRoot.validateConfig routingOpts
+
+            // Serilog request logging middleware
+            app.UseSerilogRequestLogging() |> ignore
+
+            // Register POST /v1/chat/completions
+            ChatCompletions.mapEndpoints app
+
+            app.Run()
+            0
+        with ex ->
+            Log.Fatal(ex, "Host terminated unexpectedly")
+            1
+    finally
+        Logging.shutdown ()

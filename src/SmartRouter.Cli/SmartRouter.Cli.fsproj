@@ -11,7 +11,7 @@
     <Compile Include="Adapters/Logging.fs" />
     <Compile Include="Adapters/QwenUpstreamClient.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />
-    <!-- CompositionRoot.fs added by plan 01-03 task 3 -->
+    <Compile Include="CompositionRoot.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

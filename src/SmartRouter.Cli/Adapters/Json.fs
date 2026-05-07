@@ -29,3 +29,22 @@ let jsonOptions: JsonSerializerOptions =
     let opts = JsonSerializerOptions()
     opts.Converters.Add(JsonFSharpConverter(JsonFSharpOptions.Default().WithUnionUnwrapFieldlessTags(true)))
     opts
+
+/// Wire deserialization options for incoming HTTP request bodies.
+///
+/// Extends jsonOptions with WithAllowNullFields(true) so that optional fields
+/// (like `model`, `task`, `stream`) can be absent from the client's JSON without
+/// the FSharp.SystemTextJson converter throwing "Missing field for record type".
+/// Using a separate instance keeps upstream serialization strict while incoming
+/// requests are tolerant of missing fields (OpenAI clients omit most optional fields).
+/// Wire deserialization options for incoming HTTP request bodies.
+///
+/// Uses standard System.Text.Json WITHOUT the FSharp converter — the wire type
+/// RouterRequestWire uses [<CLIMutable>] with standard .NET/option types so STJ's
+/// own converter handles null/missing fields gracefully. The FSharpConverter is only
+/// needed when serializing F# union types (for upstream bodies); it is not used here.
+let wireJsonOptions: JsonSerializerOptions =
+    let opts = JsonSerializerOptions()
+    opts.PropertyNameCaseInsensitive <- true
+    opts.DefaultIgnoreCondition <- System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    opts
