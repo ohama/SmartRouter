@@ -13,8 +13,8 @@ open Expecto
 /// phases may.
 let rootTests : Test list =
     [
-        // SmartRouter.Tests.RoutingTests.tests        // <- added in plan 01-02
-        // SmartRouter.Tests.IntegrationTests.tests    // <- added in later phases
+        SmartRouter.Tests.RoutingTests.tests
+        // SmartRouter.Tests.IntegrationTests.tests   // <- added in later phases
     ]
 
 [<EntryPoint>]

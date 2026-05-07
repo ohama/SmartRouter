@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Test modules added by plans 01-02 and 01-03 BEFORE RouterTests.fs -->
+    <Compile Include="RoutingTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
