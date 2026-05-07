@@ -12,7 +12,7 @@ Smart Router ships in six phases that follow the build-order constraint of the h
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation** — Project scaffold, Core domain types, routing pipeline, non-streaming HTTP adapter, appsettings wiring
+- [x] **Phase 1: Foundation** ✓ — Project scaffold, Core domain types, routing pipeline, non-streaming HTTP adapter, appsettings wiring
 - [ ] **Phase 2: SSE Streaming Pass-Through** — Complete atomic SSE correctness cluster (STRM-01..07); Hermes is unblocked when this ships
 - [ ] **Phase 3: 122B Concurrency Gate** — Complete atomic concurrency cluster (CONC-01..06 + REL-05); Graphify concurrent requests are safe when this ships
 - [ ] **Phase 4: Health + Fallback + graph_indexing No-Fallback** — Health probing, retry policy, fallback routing, and the graph_indexing-must-fail correctness unit
@@ -34,9 +34,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
 
 Plans:
-- [ ] 01-01-SCAFFOLD-PLAN.md — Scaffold solution (SmartRouter.Core/Cli/Tests), pin NuGet packages, wire Kestrel to 127.0.0.1:4000, add check-no-async.sh + explicit Expecto rootTests skeleton
-- [ ] 01-02-CORE-DOMAIN-PLAN.md — Core domain (Domain.fs DUs, Routing.fs three-stage pipeline, Ports.fs interfaces), copy Json.fs + Logging.fs from blueCode, write RoutingTests.fs covering full pipeline
-- [ ] 01-03-UPSTREAM-WIRING-PLAN.md — QwenUpstreamClient non-streaming path (HF-id defense, 300s timeout, sampling defaults, UnknownFields forwarding), ChatCompletions endpoint with 501 on stream=true, CompositionRoot DI wiring, full appsettings.json
+- [x] 01-01-SCAFFOLD-PLAN.md ✓ — Scaffold solution (SmartRouter.Core/Cli/Tests), pin NuGet packages, wire Kestrel to 127.0.0.1:4000, add check-no-async.sh + explicit Expecto rootTests skeleton
+- [x] 01-02-CORE-DOMAIN-PLAN.md ✓ — Core domain (Domain.fs DUs, Routing.fs three-stage pipeline, Ports.fs interfaces), copy Json.fs + Logging.fs from blueCode, write RoutingTests.fs covering full pipeline
+- [x] 01-03-UPSTREAM-WIRING-PLAN.md ✓ — QwenUpstreamClient non-streaming path (HF-id defense, 300s timeout, sampling defaults, UnknownFields forwarding), ChatCompletions endpoint with 501 on stream=true, CompositionRoot DI wiring, full appsettings.json
 
 ### Phase 2: SSE Streaming Pass-Through
 **Goal**: Clients that send `stream=true` receive upstream SSE chunks incrementally, mid-stream disconnect aborts the upstream call, and the `[DONE]` sentinel is always forwarded — all five pitfall conditions satisfied atomically.
@@ -125,7 +125,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/3 | Not started | - |
+| 1. Foundation | 3/3 | ✓ Complete | 2026-05-07 |
 | 2. SSE Streaming Pass-Through | 0/2 | Not started | - |
 | 3. 122B Concurrency Gate | 0/3 | Not started | - |
 | 4. Health + Fallback + graph_indexing No-Fallback | 0/3 | Not started | - |

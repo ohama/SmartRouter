@@ -5,14 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-05-07)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 2 — Streaming (next) OR Phase 3 — Concurrency Gate (parallel track)
+**Current focus:** Phase 2 — SSE Streaming Pass-Through (next; per ROADMAP execution order)
 
 ## Current Position
 
-Phase: 1 of 6 (Foundation) — COMPLETE
+Phase: 1 of 6 (Foundation) — COMPLETE ✓
 Plan: 3 of 3 in current phase
-Status: Phase 1 complete; ready for Phase 2 or Phase 3
-Last activity: 2026-05-07 — Completed 01-03-UPSTREAM-WIRING-PLAN.md (QwenUpstreamClient, ChatCompletions endpoint, CompositionRoot, Program.fs, appsettings.json)
+Status: Phase 1 verified; user approved on automated evidence (live-upstream Scenario B deferred to Phase 6 deploy)
+Last activity: 2026-05-07 — Phase 1 complete; verifier 9/10 automated checks passed; human-verification item (live upstream Scenario B) approved without re-test
+Next: /gsd:plan-phase 2
 
 Progress: [███░░░░░░░] ~18% (3 of ~17 plans estimated)
 
@@ -63,7 +64,7 @@ None.
 
 - NuGet package versions all resolved at pinned versions — no concerns remaining.
 - Graphify task field string literals ("graph_indexing", etc.) must be confirmed against actual Graphify client when it is built.
-- Scenario B (live upstream smoke) not yet verified — Qwen 35B was not running during 01-03 execution. Phase 5 verifier must run this against a live upstream.
+- Scenario B (live upstream HTTP 200 passthrough) was not verified during Phase 1 execution because Qwen 35B was not running. User explicitly approved on automated evidence (502-on-down was already proven; full passthrough will be exercised during Phase 6 deploy + first Hermes/Graphify smoke).
 
 ## Session Continuity
 
