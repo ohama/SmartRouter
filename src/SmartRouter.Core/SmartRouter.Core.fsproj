@@ -4,7 +4,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Compile items added by plan 01-02 -->
+    <Compile Include="Domain.fs" />
+    <Compile Include="Routing.fs" />
+    <Compile Include="Ports.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="FsToolkit.ErrorHandling" Version="5.2.0" />
