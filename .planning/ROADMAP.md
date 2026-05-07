@@ -48,11 +48,11 @@ Plans:
   3. The final event in the stream is `data: [DONE]\n\n`.
   4. Killing the curl client mid-stream causes the upstream HTTP call to abort within one chunk interval — no orphaned upstream call remains.
   5. The streaming tests (chunk ordering, mid-stream cancellation, `[DONE]` sentinel, header assertions) all pass against a fake upstream Kestrel server that delivers chunks with controlled latency.
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 02-01: Add `StreamAsync` to QwenUpstreamClient (ResponseHeadersRead, use! scope, raw byte-buffer loop); wire SSE headers + per-chunk FlushAsync in ChatCompletions.fs endpoint; [DONE] injection
-- [ ] 02-02: Write StreamingTests.fs (TTFB timing, chunk ordering, 100-chunk integrity, mid-stream cancellation, [DONE] sentinel, header assertions)
+- [ ] 02-01-STREAMING-IMPL-PLAN.md — Implement `QwenUpstreamClient.StreamAsync` (taskSeq + `HttpCompletionOption.ResponseHeadersRead` + `use _ = resp` disposal scope + line-level `ReadLineAsync` yielding); wire SSE headers + per-chunk `FlushAsync` + Strategy D `[DONE]` injection in `ChatCompletions.fs` (replaces the Phase-1 HTTP 501 stub)
+- [ ] 02-02-STREAMING-TESTS-PLAN.md — Author `StreamingTests.fs` with real Kestrel-on-`127.0.0.1:0` fake upstream wrapped in `testSequenced`: TTFB under 2 s, chunk ordering, 100-chunk integrity, mid-stream cancellation (asserts fake upstream's RequestAborted fires), `[DONE]` forwarded + `[DONE]` injected, SSE header assertions, routing-error-before-streaming order-of-operations test
 
 ### Phase 3: 122B Concurrency Gate
 **Goal**: At most one 122B request is in flight at any time; high-priority tasks (graph_indexing, compiler_debug, architecture_analysis) preempt low-priority ones in the queue; cancellation or upstream hang never leaks the semaphore.
