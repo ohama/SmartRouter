@@ -9,9 +9,9 @@
     <!-- Adapters (Infrastructure) — must precede Endpoints and Program -->
     <Compile Include="Adapters/Json.fs" />
     <Compile Include="Adapters/Logging.fs" />
-    <!-- Adapters/QwenUpstreamClient.fs added by plan 01-03 -->
-    <!-- Endpoints/ChatCompletions.fs added by plan 01-03 -->
-    <!-- CompositionRoot.fs added by plan 01-03 -->
+    <Compile Include="Adapters/QwenUpstreamClient.fs" />
+    <!-- Endpoints/ChatCompletions.fs added by plan 01-03 task 2 -->
+    <!-- CompositionRoot.fs added by plan 01-03 task 3 -->
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
