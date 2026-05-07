@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-07)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 2 — SSE Streaming Pass-Through (in progress — plan 01 complete)
+**Current focus:** Phase 3 — Concurrency Gate (Phase 2 complete)
 
 ## Current Position
 
-Phase: 2 of 6 (SSE Streaming Pass-Through) — In progress
-Plan: 1 of 2 in current phase — COMPLETE ✓
-Status: 02-01 streaming implementation done; 02-02 (StreamingTests) next
-Last activity: 2026-05-07 — Completed 02-01-STREAMING-IMPL-PLAN.md — SSE forward loop ships; all 5 pitfalls mitigated
+Phase: 2 of 6 (SSE Streaming Pass-Through) — COMPLETE ✓
+Plan: 2 of 2 in current phase — COMPLETE ✓
+Status: Phase 2 complete — SSE implementation + 8 streaming tests green; 30/30 tests pass
+Last activity: 2026-05-07 — Completed 02-02-STREAMING-TESTS-PLAN.md — all 5 SSE pitfalls have code mitigations + passing tests
 
-Progress: [████░░░░░░] ~24% (4 of ~17 plans estimated)
+Progress: [█████░░░░░] ~29% (5 of ~17 plans estimated)
 
 ## Performance Metrics
 
@@ -28,11 +28,11 @@ Progress: [████░░░░░░] ~24% (4 of ~17 plans estimated)
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-foundation | 3/3 | ~21 min | 7 min |
-| 02-sse-streaming-pass-through | 1/2 | ~18 min | 18 min |
+| 02-sse-streaming-pass-through | 2/2 | ~24 min | 12 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (3 min), 01-02 (5 min), 01-03 (13 min), 02-01 (18 min)
-- Trend: Increasing with complexity (SSE implementation required solving F# task{} finally limitation)
+- Last 5 plans: 01-02 (5 min), 01-03 (13 min), 02-01 (18 min), 02-02 (6 min)
+- Trend: 02-02 quick because test infrastructure pattern was well-researched; all fixes were auto-resolved
 
 *Updated after each plan completion*
 
@@ -58,6 +58,10 @@ Recent decisions affecting current work:
 - 02-01: F# task{} does not support do! in finally blocks — enumerator.DisposeAsync() called explicitly in each catch arm (normal, cancel, error); semantically equivalent to finally
 - 02-01: StreamAsync uses direct let! resp = client.SendAsync(..., HttpCompletionOption.ResponseHeadersRead, ct) — no task{return!...} wrapper
 - 02-01: StreamingTests deferred to Plan 02-02 — 02-01 ships the implementation only; 02-02 owns the fake-Kestrel integration test harness
+- 02-02: ConfigurationManager.AddInMemoryCollection requires explicit cast to IConfigurationBuilder — extension method on interface, not concrete type
+- 02-02: F# task{} finally blocks do not allow do! — use .GetAwaiter().GetResult() for async teardown (StopAsync/DisposeAsync) in test helpers
+- 02-02: ctx.RequestAborted in Kestrel fires on TCP socket close (response.Dispose()), not on CancellationToken.Cancel() — cancellation test must close the socket
+- 02-02: startTestRouter requires full Routing section in AddInMemoryCollection — validateConfig (called via DI singleton factory) checks all canonical tasks are present
 
 ### Pending Todos
 
@@ -71,6 +75,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-07T17:46:00Z
-Stopped at: Completed 02-01-STREAMING-IMPL-PLAN.md — SSE pass-through implementation complete
+Last session: 2026-05-07T12:04:44Z
+Stopped at: Completed 02-02-STREAMING-TESTS-PLAN.md — Phase 2 complete; 30/30 tests pass
 Resume file: None
