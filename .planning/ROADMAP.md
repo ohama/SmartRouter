@@ -31,12 +31,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Sending `{"model": "35b"}` or `{"model": "122b"}` overrides task and heuristic routing — verified by unit test.
   4. `SmartRouter.Core` has zero compilation references to Serilog, HttpClient, or ASP.NET Core — verified by `dotnet build` succeeding after manually removing those NuGet packages from Core.
   5. `check-no-async.sh` passes; the Expecto test runner uses the explicit `rootTests` list and reports zero test discovery warnings.
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 01-01: Scaffold solution (SmartRouter.Core, SmartRouter.Cli, SmartRouter.Tests), pin NuGet packages, wire Kestrel to 127.0.0.1:4000, add check-no-async.sh
-- [ ] 01-02: Implement Core domain (Domain.fs DUs, Routing.fs three-stage pipeline, Ports.fs interfaces), copy Json.fs + Logging.fs adapters from blueCode
-- [ ] 01-03: Implement QwenUpstreamClient non-streaming path (HF-id defense, 300s timeout, sampling defaults, error mapping), wire appsettings.json, write RoutingTests.fs
+- [ ] 01-01-SCAFFOLD-PLAN.md — Scaffold solution (SmartRouter.Core/Cli/Tests), pin NuGet packages, wire Kestrel to 127.0.0.1:4000, add check-no-async.sh + explicit Expecto rootTests skeleton
+- [ ] 01-02-CORE-DOMAIN-PLAN.md — Core domain (Domain.fs DUs, Routing.fs three-stage pipeline, Ports.fs interfaces), copy Json.fs + Logging.fs from blueCode, write RoutingTests.fs covering full pipeline
+- [ ] 01-03-UPSTREAM-WIRING-PLAN.md — QwenUpstreamClient non-streaming path (HF-id defense, 300s timeout, sampling defaults, UnknownFields forwarding), ChatCompletions endpoint with 501 on stream=true, CompositionRoot DI wiring, full appsettings.json
 
 ### Phase 2: SSE Streaming Pass-Through
 **Goal**: Clients that send `stream=true` receive upstream SSE chunks incrementally, mid-stream disconnect aborts the upstream call, and the `[DONE]` sentinel is always forwarded — all five pitfall conditions satisfied atomically.
