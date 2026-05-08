@@ -64,12 +64,12 @@ Plans:
   3. Cancelling a queued request before it acquires the semaphore removes it from the queue and leaves `SemaphoreSlim.CurrentCount` unchanged.
   4. A request that hangs the upstream beyond the configured timeout releases the semaphore and allows the next queued request to proceed.
   5. `GET /stats` returns current queue depth, active request count, and average wait time that reflect the live queue state.
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 03-01: Implement QueueDispatcher.fs (PriorityQueue + TaskCompletionSource waiter pattern, SemaphoreSlim(1), linked CTS + timeout CTS, try/finally Release, 35B bypass)
-- [ ] 03-02: Wire /stats endpoint (OBS-02 counters/gauges); write QueueTests.fs (semaphore enforcement, priority ordering, cancellation release, timeout release)
-- [ ] 03-03: Load tests validating 122B throughput cap holds under burst
+- [ ] 03-01-QUEUE-DISPATCHER-PLAN.md — Port-shape change (IUpstreamClient takes RoutingDecision) + QueueDispatcher.fs (SemaphoreSlim(1), two Queue<Ticket> high/low + fairness K, dispatcher loop sub-pattern A, linked CTS timeout from acquire, try/finally Release, 35B bypass) + CompositionRoot DI swap + appsettings Queue section + Program.fs MaxConcurrent122B=1 validation
+- [ ] 03-02-STATS-AND-QUEUE-TESTS-PLAN.md — GET /stats endpoint (Stats.fs) reading IStatsProvider; QueueTests.fs with FakeUpstreamClient (5+ tests: serialization, priority preempt, cancellation release, timeout release, 35B bypass, /stats live snapshot, fairness counter)
+- [ ] 03-03-LOAD-TESTS-PLAN.md — LoadTests.fs with ptestCaseAsync burst tests (20 concurrent serialization + mixed-priority cap-holds-under-load); opt-in only, default dotnet test unchanged
 
 ### Phase 4: Health + Fallback + graph_indexing No-Fallback
 **Goal**: The router knows whether each upstream is reachable, gracefully reroutes 122B requests to 35B when 122B is down — except for graph_indexing which must return an error rather than silently downgrade.
