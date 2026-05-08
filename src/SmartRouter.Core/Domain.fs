@@ -82,7 +82,10 @@ type RoutingDecision =
 type RoutingConfig =
     { ComplexityThreshold : int
       Keywords            : string list
-      TaskTable           : Map<string, ModelId * Priority> }
+      TaskTable           : Map<string, ModelId * Priority>
+      /// ML routing threshold: P(Qwen122B) ≥ this value → 122B (Phase 6).
+      /// Heuristic algorithm ignores this field; only ML reads it.
+      MlThreshold         : float32 }
 
 /// Function type for pluggable routing algorithms.
 /// Both Heuristic.applyHeuristic and ML.applyML conform to this shape.

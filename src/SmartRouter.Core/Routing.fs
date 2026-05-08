@@ -134,4 +134,5 @@ let canonicalKeywords : string list =
 let defaultRoutingConfig : RoutingConfig =
     { ComplexityThreshold = 3
       Keywords            = canonicalKeywords
-      TaskTable           = canonicalTaskTable }
+      TaskTable           = canonicalTaskTable
+      MlThreshold         = 0.5f }

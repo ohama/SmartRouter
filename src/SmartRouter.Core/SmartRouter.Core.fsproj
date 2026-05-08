@@ -6,6 +6,7 @@
   <ItemGroup>
     <Compile Include="Domain.fs" />
     <Compile Include="Heuristic.fs" />
+    <Compile Include="MLPorts.fs" />     <!-- NEW: Phase 6 -->
     <Compile Include="ML.fs" />
     <Compile Include="Routing.fs" />
     <Compile Include="Ports.fs" />

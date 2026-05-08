@@ -32,6 +32,7 @@ type RoutingOptions =
     { Algorithm           : string   // "heuristic" (default) | "ml"; null when key absent
       ComplexityThreshold : int
       TimeoutSeconds      : int
+      MlThreshold         : float32  // Phase 6: ML decision threshold; defaults to 0.5 when absent
       Keywords            : string[]
       TaskTable           : Dictionary<string, TaskTableEntry>
       ModelAliases        : Dictionary<string, string> }
@@ -69,7 +70,8 @@ let buildRoutingConfig (opts: RoutingOptions) : RoutingConfig =
 
     { ComplexityThreshold = opts.ComplexityThreshold
       Keywords            = List.ofArray opts.Keywords
-      TaskTable           = taskMap }
+      TaskTable           = taskMap
+      MlThreshold         = if opts.MlThreshold = 0.0f then 0.5f else opts.MlThreshold }
 
 // ── validateConfig ───────────────────────────────────────────────────────────
 
