@@ -182,8 +182,19 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
     //
     // Steps 1+2 run synchronously at configure time so the pool registration has
     // guaranteed file presence. Both are no-ops on second startup.
+    //
+    // DEVIATION (Rule 3 — blocking fix): guard the ML block on Routing.Algorithm = "ml".
+    // The --retrain offline path (Program.fs) reuses configureServices but does not need
+    // IEmbedder/IClassifier; without this guard, ensureEmbeddingFilesPresent always fires
+    // even in heuristic mode or when --retrain bypasses the Kestrel host. Guard makes the
+    // ML wiring conditional on intent, matching the RoutingAlgorithmRegistration "ml" branch.
+    let routingAlgoStr =
+        let routingOpts = config.GetSection("Routing").Get<RoutingOptions>()
+        if obj.ReferenceEquals(routingOpts, null) then "heuristic"
+        else if String.IsNullOrWhiteSpace(routingOpts.Algorithm) then "heuristic"
+        else routingOpts.Algorithm
     let mlOpts = config.GetSection("Routing:ML").Get<MlOptions>()
-    if not (obj.ReferenceEquals(mlOpts, null)) then
+    if not (obj.ReferenceEquals(mlOpts, null)) && routingAlgoStr = "ml" then
         ensureEmbeddingFilesPresent mlOpts.EmbeddingModelPath mlOpts.TokenizerPath
         ensureDummyModel mlOpts.ModelPath
 

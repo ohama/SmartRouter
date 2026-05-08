@@ -4,6 +4,7 @@ open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.Hosting
 open Microsoft.Extensions.Options
 open Serilog
 open SmartRouter.Cli.Adapters
@@ -20,6 +21,94 @@ let main args =
 
     try
         try
+            // Phase 7: --retrain CLI command — runs the offline labeling pipeline and exits.
+            // Does NOT start the Kestrel host. Useful for operator-driven manual retraining
+            // and CI-friendly testing. Phase 8's BackgroundService composes the same DI
+            // singletons on a PeriodicTimer.
+            if args |> Array.contains "--retrain" then
+                let retrainBuilder = Host.CreateApplicationBuilder(args)
+                retrainBuilder.Configuration
+                               .SetBasePath(System.IO.Directory.GetCurrentDirectory())
+                               .AddJsonFile("appsettings.json", optional = false)
+                    |> ignore
+                // Override Routing.Algorithm to "heuristic" for the offline retrain path.
+                // The retrain pipeline needs IFailureDetector + ITeacherLabeler + IHardCaseDatasetWriter
+                // only — it does not route requests and does not need IEmbedder/IClassifier.
+                // Without this override, configureServices's ML block calls ensureEmbeddingFilesPresent,
+                // which hard-fails when models/embed/* files have not been downloaded yet.
+                (retrainBuilder.Configuration :> IConfigurationBuilder)
+                    .AddInMemoryCollection(dict [ "Routing:Algorithm", "heuristic" ])
+                |> ignore
+                CompositionRoot.configureServices retrainBuilder.Services retrainBuilder.Configuration |> ignore
+                use host = retrainBuilder.Build()
+                do host.StartAsync().GetAwaiter().GetResult()
+                try
+                    let detector = host.Services.GetRequiredService<SmartRouter.Core.RetrainingPorts.IFailureDetector>()
+                    let labeler  = host.Services.GetRequiredService<SmartRouter.Core.RetrainingPorts.ITeacherLabeler>()
+                    let writer   = host.Services.GetRequiredService<SmartRouter.Core.RetrainingPorts.IHardCaseDatasetWriter>()
+                    let ct = System.Threading.CancellationToken.None
+
+                    let hardCases =
+                        detector.ExtractHardCases(ct).GetAwaiter().GetResult()
+
+                    Log.Information("Retrain: extracted {N} hard case(s)", List.length hardCases)
+
+                    let mutable labeled  = 0
+                    let mutable skipped  = 0
+                    let mutable failed   = 0
+                    for hc in hardCases do
+                        match hc.PromptText with
+                        | None ->
+                            Log.Information(
+                                "Retrain: skipping correlation_id={Cid} — prompt text not in logs (LOG-01 schema; Phase 8 BackgroundService passes inline)",
+                                hc.CorrelationId)
+                            skipped <- skipped + 1
+                        | Some pt ->
+                            let result = labeler.LabelAsync(pt, hc.CorrelationId, ct).GetAwaiter().GetResult()
+                            match result with
+                            | SmartRouter.Core.RetrainingPorts.Labeled (label, excerpt) ->
+                                let labelInt =
+                                    match label with
+                                    | SmartRouter.Core.RetrainingPorts.Route35B  -> 0
+                                    | SmartRouter.Core.RetrainingPorts.Route122B -> 1
+                                let target =
+                                    match label with
+                                    | SmartRouter.Core.RetrainingPorts.Route35B  -> "Qwen35B"
+                                    | SmartRouter.Core.RetrainingPorts.Route122B -> "Qwen122B"
+                                let entry : SmartRouter.Core.RetrainingPorts.HardCaseEntry =
+                                    { SchemaVersion          = 1
+                                      CorrelationId          = hc.CorrelationId
+                                      PromptHash             = hc.PromptHash
+                                      PromptText             = pt
+                                      Label                  = labelInt
+                                      Source                 = "teacher"
+                                      TeacherResponseExcerpt = Some excerpt
+                                      LabeledAt              = System.DateTimeOffset.UtcNow
+                                      PromptKoreanCharRatio  = hc.PromptKoreanCharRatio
+                                      RoutingAlgorithm       = hc.RoutingAlgorithm
+                                      Target                 = target }
+                                writer.AppendAsync(entry, ct).GetAwaiter().GetResult()
+                                labeled <- labeled + 1
+                            | SmartRouter.Core.RetrainingPorts.Unparseable raw ->
+                                Log.Warning("Retrain: unparseable response for {Cid}: {Raw}", hc.CorrelationId, raw)
+                                failed <- failed + 1
+                            | SmartRouter.Core.RetrainingPorts.Skipped reason ->
+                                Log.Information("Retrain: skipped {Cid} — {Reason}", hc.CorrelationId, reason)
+                                skipped <- skipped + 1
+                            | SmartRouter.Core.RetrainingPorts.Failed err ->
+                                Log.Warning("Retrain: failed {Cid} — {Err}", hc.CorrelationId, err)
+                                failed <- failed + 1
+
+                    if List.isEmpty hardCases then
+                        printfn "Retrain: 0 hard cases found; run scripts/seed-hard-cases.fsx for synthetic data."
+                    else
+                        printfn "Retrain: %d labeled, %d skipped, %d failed of %d total"
+                            labeled skipped failed (List.length hardCases)
+                finally
+                    host.StopAsync().GetAwaiter().GetResult()
+                Logging.shutdown ()
+                exit 0
+
             let builder = WebApplication.CreateBuilder(args)
 
             // Wire Serilog as the ASP.NET host logger
