@@ -38,7 +38,8 @@ let scoreComplexity (config: RoutingConfig) (req: RouterRequest) : int =
 let applyHeuristic (config: RoutingConfig) (req: RouterRequest) : RoutingDecision =
     let score  = scoreComplexity config req
     let target = if score >= config.ComplexityThreshold then Qwen122B else Qwen35B
-    { Target     = target
-      Priority   = Low
-      Reason     = Heuristic score
-      IsFallback = false }
+    { Target       = target
+      Priority     = Low
+      Reason       = Heuristic score
+      IsFallback   = false
+      ModelVersion = "" }

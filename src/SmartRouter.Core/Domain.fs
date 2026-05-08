@@ -42,16 +42,19 @@ type Message = { Role: MessageRole; Content: string }
 
 /// Incoming request from a consumer (Hermes / Graphify).
 /// All fields are optional except Messages.
+/// CorrelationId is "" for internal/non-HTTP paths; ChatCompletions sets it from
+/// HttpContext.Items[CorrelationIdKey]. ML.fs canary gate consumes it for sticky bucketing.
 /// UnknownFields carries any unrecognized JSON keys so the adapter can
 /// forward them upstream verbatim (PROJECT.md: "Preserve unknown fields").
 type RouterRequest =
-    { Messages      : Message list
+    { Messages       : Message list
       ModelOverride  : string option   // "35b" | "122b" | any alias
       Task           : string option   // raw task string; Routing.fs parses to TaskType
       Stream         : bool
       Temperature    : float option
       TopP           : float option
       MaxTokens      : int option
+      CorrelationId  : string          // NEW (Phase 9): "" for non-HTTP construction; per-request HttpContext correlation_id otherwise
       UnknownFields  : Map<string, System.Text.Json.JsonElement> }
 
 /// Errors the Core routing layer can produce.
@@ -66,14 +69,19 @@ type RouterError =
 /// Priority is included because it is a *property of the decision*, not an
 /// adapter concern. The QueueDispatcher reads Priority to place the request
 /// in the correct queue tier. Core decides Priority; adapter enforces it.
+/// ModelVersion (Phase 9): cohort label.
+///   ""                — non-ML stage (override / task table / heuristic); ChatCompletions falls back to IModelVersionProvider.CurrentVersion
+///   "ml-{sha8}"       — ML baseline cohort
+///   "ml-{sha8}-canary" — ML canary cohort
 type RoutingDecision =
-    { Target    : ModelId
-      Priority  : Priority
-      Reason    : RoutingReason
+    { Target       : ModelId
+      Priority     : Priority
+      Reason       : RoutingReason
       /// true = 122B unavailable and we fell back to 35B.
       /// false = normal routing.
       /// Never true for graph_indexing (that path must error).
-      IsFallback : bool }
+      IsFallback   : bool
+      ModelVersion : string }   // NEW (Phase 9)
 
 /// Operator-tunable routing configuration.
 /// Plain F# record — no IOptions<T>, no ASP.NET, no JSON binding.

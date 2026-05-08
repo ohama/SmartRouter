@@ -19,10 +19,11 @@ let tryModelOverride (req: RouterRequest) : RoutingDecision option =
     req.ModelOverride
     |> Option.bind tryParseModelAlias
     |> Option.map (fun model ->
-        { Target     = model
-          Priority   = Low
-          Reason     = ExplicitModelOverride (req.ModelOverride |> Option.defaultValue "")
-          IsFallback = false })
+        { Target       = model
+          Priority     = Low
+          Reason       = ExplicitModelOverride (req.ModelOverride |> Option.defaultValue "")
+          IsFallback   = false
+          ModelVersion = "" })
 
 // ── Stage 2: explicit task table ─────────────────────────────────────────────
 
@@ -48,25 +49,25 @@ let taskToDecision : TaskType -> RoutingDecision =
     function
     | GraphIndexing ->
         { Target = Qwen122B; Priority = High
-          Reason = ExplicitTask GraphIndexing; IsFallback = false }
+          Reason = ExplicitTask GraphIndexing; IsFallback = false; ModelVersion = "" }
     | CompilerDebug ->
         { Target = Qwen122B; Priority = High
-          Reason = ExplicitTask CompilerDebug; IsFallback = false }
+          Reason = ExplicitTask CompilerDebug; IsFallback = false; ModelVersion = "" }
     | ArchitectureAnalysis ->
         { Target = Qwen122B; Priority = High
-          Reason = ExplicitTask ArchitectureAnalysis; IsFallback = false }
+          Reason = ExplicitTask ArchitectureAnalysis; IsFallback = false; ModelVersion = "" }
     | DependencyAnalysis ->
         { Target = Qwen122B; Priority = Low
-          Reason = ExplicitTask DependencyAnalysis; IsFallback = false }
+          Reason = ExplicitTask DependencyAnalysis; IsFallback = false; ModelVersion = "" }
     | Reasoning ->
         { Target = Qwen122B; Priority = Low
-          Reason = ExplicitTask Reasoning; IsFallback = false }
+          Reason = ExplicitTask Reasoning; IsFallback = false; ModelVersion = "" }
     | Retrieval ->
         { Target = Qwen35B; Priority = Low
-          Reason = ExplicitTask Retrieval; IsFallback = false }
+          Reason = ExplicitTask Retrieval; IsFallback = false; ModelVersion = "" }
     | Summary ->
         { Target = Qwen35B; Priority = Low
-          Reason = ExplicitTask Summary; IsFallback = false }
+          Reason = ExplicitTask Summary; IsFallback = false; ModelVersion = "" }
 
 /// Stage 2: config-driven runtime dispatch.
 /// Reads config.TaskTable (a Map<string, ModelId * Priority>) keyed by
@@ -85,7 +86,7 @@ let tryTaskTable (config: RoutingConfig) (req: RouterRequest) : Result<RoutingDe
         | Some t ->
             match Map.tryFind (raw.ToLowerInvariant()) config.TaskTable with
             | Some (model, prio) ->
-                Ok (Some { Target = model; Priority = prio; Reason = ExplicitTask t; IsFallback = false })
+                Ok (Some { Target = model; Priority = prio; Reason = ExplicitTask t; IsFallback = false; ModelVersion = "" })
             | None ->
                 Error (InvalidRequest $"task '{raw}' has no config entry")
 

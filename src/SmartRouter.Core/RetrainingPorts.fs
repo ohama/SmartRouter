@@ -76,14 +76,20 @@ type IHardCaseDatasetWriter =
         entry: HardCaseEntry * ct: CancellationToken
         -> Task<unit>
 
-/// Hot-updatable model version. Phase 8 RetrainingService updates this after each
+/// Hot-updatable model version. Phase 8 RetrainingService updates CurrentVersion after each
 /// successful retrain so DecisionLog.model_version reflects the live model without
-/// host restart. Cli adapter (ModelVersionProvider.fs) holds the mutable string field.
+/// host restart. Phase 9 adds CanaryVersion + UpdateCanary for canary cohort tagging.
+/// Cli adapter (ModelVersionProvider.fs) holds two mutable string fields under a shared lock.
+///
+/// CanaryVersion is "" when no canary is loaded; CanaryService.fs (Plan 09-02) calls
+/// UpdateCanary after detecting a canary file load. /canary/promote calls Update with the
+/// promoted version + UpdateCanary "" to clear.
 ///
 /// Why a port: ARCH-01 (Core BCL-only). The mutable state lives in Cli; Core only
-/// names the contract. ChatCompletions.fs resolves this per-request and feeds
-/// DecisionLog.model_version. RoutingAlgorithmRegistration.ModelVersion remains for
-/// backward-compat at registration time but is no longer the load-bearing source.
+/// names the contract. ChatCompletions.fs falls back to CurrentVersion when
+/// RoutingDecision.ModelVersion = "" (non-ML routing stages).
 type IModelVersionProvider =
-    abstract member CurrentVersion : string with get
+    abstract member CurrentVersion : string with get   // baseline
+    abstract member CanaryVersion  : string with get   // canary; "" when no canary loaded
     abstract member Update         : newVersion: string -> unit
+    abstract member UpdateCanary   : newVersion: string -> unit   // NEW Phase 9
