@@ -15,6 +15,7 @@ let rootTests : Test list =
     [
         SmartRouter.Tests.RoutingTests.tests
         SmartRouter.Tests.StreamingTests.tests
+        SmartRouter.Tests.QueueTests.tests
     ]
 
 [<EntryPoint>]
