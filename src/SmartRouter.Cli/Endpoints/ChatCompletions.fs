@@ -102,6 +102,7 @@ let private mapWireToRequest (wire: RouterRequestWire) : RouterRequest =
 /// singleton, changing runtime dispatch without recompile.
 let handler
     (routingConfig : RoutingConfig)
+    (algorithm     : RoutingAlgorithm)
     (upstream      : IUpstreamClient)
     (ctx           : HttpContext) : Task =
     task {
@@ -122,7 +123,7 @@ let handler
         //    appsettings.json at startup; editing JSON + restart changes this behavior (ROUT-05).
         //    Routing errors return HTTP 400 with normal JSON body BEFORE any SSE headers are set
         //    (STRM-04 ordering: the streaming branch is only entered after a successful routing Ok decision).
-        match routeRequest routingConfig req with
+        match routeRequest routingConfig algorithm req with
         | Error (UnsupportedTask raw) ->
             ctx.Response.StatusCode <- 400
             do! ctx.Response.WriteAsJsonAsync(
@@ -242,5 +243,6 @@ let handler
 let mapEndpoints (app: WebApplication) =
     app.MapPost("/v1/chat/completions", Func<HttpContext, Task>(fun ctx ->
         let routingConfig = ctx.RequestServices.GetRequiredService<RoutingConfig>()
+        let algorithm     = ctx.RequestServices.GetRequiredService<RoutingAlgorithm>()
         let upstream      = ctx.RequestServices.GetRequiredService<IUpstreamClient>()
-        handler routingConfig upstream ctx)) |> ignore
+        handler routingConfig algorithm upstream ctx)) |> ignore

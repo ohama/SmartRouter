@@ -26,7 +26,8 @@ type TaskTableEntry =
 /// Cli-only: Core uses the pure RoutingConfig record from Domain.fs.
 [<CLIMutable>]
 type RoutingOptions =
-    { ComplexityThreshold : int
+    { Algorithm           : string   // "heuristic" (default) | "ml"; null when key absent
+      ComplexityThreshold : int
       TimeoutSeconds      : int
       Keywords            : string[]
       TaskTable           : Dictionary<string, TaskTableEntry>
@@ -136,6 +137,25 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
         let opts = sp.GetRequiredService<IOptions<RoutingOptions>>().Value
         buildRoutingConfig opts)
         |> ignore
+
+    // RoutingAlgorithm as a DI singleton — dispatches to the correct algorithm function
+    // based on Routing.Algorithm config key (or --routing-algorithm CLI override).
+    // null | "" | "heuristic" -> Heuristic.applyHeuristic (default; safe fallback)
+    // "ml"                    -> ML.applyML
+    // other                   -> InvalidOperationException at startup (fail-fast)
+    services.AddSingleton<RoutingAlgorithm>(
+        Func<IServiceProvider, RoutingAlgorithm>(fun sp ->
+            let opts = sp.GetRequiredService<IOptions<RoutingOptions>>().Value
+            match opts.Algorithm with
+            | null | "" | "heuristic" -> SmartRouter.Core.Heuristic.applyHeuristic
+            | "ml"                    -> SmartRouter.Core.ML.applyML
+            | other ->
+                let msg =
+                    sprintf
+                        "appsettings.json Routing.Algorithm = \"%s\" is invalid; valid values: \"heuristic\", \"ml\""
+                        other
+                raise (System.InvalidOperationException(msg))))
+    |> ignore
 
     // Bind Queue section to QueueDispatcherOptions
     services.Configure<QueueDispatcherOptions>(config.GetSection("Queue")) |> ignore
