@@ -18,6 +18,10 @@
     <Compile Include="Adapters/ModelBootstrapper.fs" />        <!-- NEW: depends on MlNetClassifier (RouteInput) -->
     <Compile Include="Adapters/QwenUpstreamClient.fs" />
     <Compile Include="Adapters/QueueDispatcher.fs" />
+    <!-- Phase 7 — Failure detection + teacher labeling -->
+    <Compile Include="Adapters/FailureDetector.fs" />
+    <Compile Include="Adapters/TeacherLabeler.fs" />
+    <Compile Include="Adapters/HardCaseDatasetWriter.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />
     <Compile Include="Endpoints/Stats.fs" />
     <Compile Include="CompositionRoot.fs" />
