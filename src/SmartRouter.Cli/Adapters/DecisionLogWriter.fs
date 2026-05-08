@@ -92,7 +92,8 @@ type DecisionLogWriter(options: DecisionLogOptions) =
                     with ex ->
                         Log.Error(ex, "DecisionLogWriter: write failed for correlation_id={Cid}", entry.correlation_id)
             with
-            | :? OperationCanceledException -> ()   // graceful shutdown signal
+            | :? OperationCanceledException -> ()   // graceful shutdown via stoppingToken
+            | :? ChannelClosedException     -> ()   // graceful shutdown via TryComplete()
             | ex -> Log.Error(ex, "DecisionLogWriter: writer loop crashed")
 
             // Drain remaining items after cancellation (Pitfall P2 — flush in-flight entries).
