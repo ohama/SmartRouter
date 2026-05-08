@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 9 — Canary Routing (next: canary cohort tagging, A/B model comparison, rollback via router.zip.prev; depends on Phase 8 IModelVersionProvider singleton + models/router.zip.prev)
+**Current focus:** Phase 10 — Health/Fallback + graph_indexing no-fallback rule (next: Phase 9 complete; Phase 10 depends on Phase 9 canary infrastructure)
 
 ## Current Position
 
-Phase: 9 of 11 (Canary Deployment) — In Progress
-Plan: 2 of 3 in current phase — COMPLETE ✓
-Status: Phase 9 Plan 2 complete. 8 new Cli files (7 Adapters/ + 1 Endpoints/): CanaryTargetingAccessor, CanaryState, CanaryGate, CanaryMetrics, CanaryWatchdog, RetrainLock, CanaryService, Endpoints/Canary.fs. ContextualTargetingFilter sticky bucketing; dual-classifier keyed dispatch; IRetrainLock shared between RetrainingService + CanaryService.Promote; /canary admin endpoint; rolling-60s watchdog; FileSystemWatcher post-startup canary file detection; ChatCompletions metrics recording; TryAddSingleton fallback + AddSingleton ML-override DI pattern. Build: 0 errors, 0 warnings. Tests: 73 pass + 10 ignored, 0 failed. Canonical run: dotnet run -- --sequenced.
-Last activity: 2026-05-09 — Phase 9 Plan 2 COMPLETE
+Phase: 9 of 11 (Canary Deployment) — COMPLETE ✓
+Plan: 3 of 3 in current phase — COMPLETE ✓
+Status: Phase 9 COMPLETE. Plan 09-03 adds 12 canary tests (5 CANARY-01 unit + 7 mlIntegTest integration). CanaryTests.fs: mkStableCorrelationIds (seed=42 binomial CI [80,120]), sticky bucket, short-circuits; CANARY-02 JsonDocument.Parse cohort tagging; CANARY-03 rollback/enable/promote/auto-rollback; CANARY-04 FileSystemWatcher post-startup lifecycle. CapturingSink for AUTO-ROLLBACK log assertion. testSequenced. Build: 0/0. Tests: 78 pass + 17 ignored + 0 failed (embeddings absent; 85+10+0 when present). SUMMARY: .planning/phases/09-canary-deployment/09-03-SUMMARY.md
+Last activity: 2026-05-09 — Phase 9 Plan 3 (COMPLETE). Phase 9 COMPLETE.
 
-Progress: [████████████████████░░░] 28 of ~30 plans (phase 9 plan 2 of 3 complete; plan 09-03 next)
+Progress: [█████████████████████░░] 29 of ~30 plans (phase 9 of 11 complete; phase 10 next)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 28 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing + 6 failure-detection + 3 retraining-loop + 2 canary-deployment)
+- Total plans completed: 29 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing + 6 failure-detection + 3 retraining-loop + 3 canary-deployment)
 - Average duration: ~7 min
-- Total execution time: ~140 min
+- Total execution time: ~158 min
 
 **By Phase:**
 
@@ -35,7 +35,7 @@ Progress: [████████████████████░░░
 | 06-real-ml-routing | 3/3 | ~18 min | ~6 min |
 | 07-failure-detection-and-teacher-labeling | 6/6 | ~50 min | ~8 min |
 | 08-retraining-loop | 3/3 | ~32 min | ~11 min |
-| 09-canary-deployment | 2/3 | ~20 min | ~10 min |
+| 09-canary-deployment | 3/3 | ~38 min | ~13 min |
 
 **Recent Trend:**
 - Last 5 plans: 08-01 (~8 min), 08-02 (~7 min), 08-03 (~17 min), 09-01 (~8 min)
@@ -169,6 +169,13 @@ Recent decisions affecting current work:
 - 09-02: /canary endpoint shape: GET status / POST promote (File.Move under IRetrainLock; 409 on contention) / POST rollback (idempotent SetPercentage(0)) / POST enable?percentage=N (loopback-only)
 - 09-02: ChatCompletions threads ICanaryMetrics; metrics.Record after each decisionLogger.Log in 5 Ok-decision arms; metricCohort helper computes isCanary from ModelVersion.EndsWith("-canary") + isFallback from IsFallback || ;upstream_error || ;stream_error suffixes
 - 09-02: Test construction site Rule 3 auto-fixes: MLClassifierTests MlNetClassifier(pool, "router"); RetrainingTests (5 sites) RetrainingService(opts, emb, vp, RetrainLock()); Plan 09-03 owns tests/ going forward
+- 09-03: 12 tests (5 CANARY-01 unit + 1 CANARY-02 integration + 5 CANARY-03 manual+auto + 1 CANARY-04 watcher)
+- 09-03: mkStableCorrelationIds (Random(seed=42) → 16-byte → Guid) — deterministic test correlation_ids; binomial 95% CI [80,120] bit-stable (96 hits measured)
+- 09-03: JsonDocument.Parse + GetProperty("model_version") + EndsWith("-canary") for cohort assertion (replaces fragile string-contains)
+- 09-03: CapturingSink ILogEventSink for AUTO-ROLLBACK log verification (mirrors LoggingTests.fs Phase 5 pattern)
+- 09-03: canary04_fileSystemWatcher uses CanaryModelExists=false override + 200ms settle + 20x100ms poll for -canary suffix + delete-and-clear test (verifies Lock 9)
+- 09-03: Auto-rollback test drives ICanaryMetrics.Record() directly via DI (not real HTTP traffic) — avoids fake-upstream cohort-coordination problem; 30 baseline success + 30 canary fail → delta=1.0 >> threshold=0.10 → watchdog fires
+- 09-03: Phase 9 COMPLETE. All Locks 1-17 (CONTEXT.md) have corresponding test or grep guard. Ready for /gsd:verify-phase 9 + /gsd:uat-phase 9.
 
 ### Pending Todos
 
@@ -182,6 +189,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-09T08:19:00Z
-Stopped at: Phase 9 Plan 2 COMPLETE — 8 new Cli files; ContextualTargetingFilter; dual-classifier; IRetrainLock shared; /canary endpoint; FileSystemWatcher; ChatCompletions metrics; build 0/0; 73 pass + 10 ignored, 0 failed
+Last session: 2026-05-09T08:46:00Z
+Stopped at: Phase 9 Plan 3 COMPLETE — 12 canary tests (78 pass + 17 ignored + 0 failed without embed models). Phase 9 COMPLETE.
 Resume file: None
