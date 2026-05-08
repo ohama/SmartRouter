@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 ## Current Position
 
 Phase: 4 of 11 (ML Algorithm Seam) — In progress
-Plan: 1 of 3 in current phase — COMPLETE ✓
-Status: Phase 4 Plan 1 complete. Core refactor done: Heuristic.fs + ML.fs created as flat siblings, routeRequest now 3-arg with RoutingAlgorithm seam, RoutingTests.fs migrated, check-routing-isolation.sh added. Cli callsite fix deferred to 04-02 (expected Wave 1 boundary).
-Last activity: 2026-05-08 — Completed 04-01-CORE-REFACTOR-PLAN.md
+Plan: 2 of 3 in current phase — COMPLETE ✓
+Status: Phase 4 Plan 2 complete. Routing.Algorithm config key + RoutingAlgorithm DI singleton + --routing-algorithm CLI flag wired end-to-end. Full-solution build green (0 warnings). 39/39 tests pass. 04-03 (algorithm tests) is unblocked.
+Last activity: 2026-05-08 — Completed 04-02-CONFIG-AND-CLI-PLAN.md
 
-Progress: [████░░░░░░░░░░░░░░░░░░░] 9 of ~30 plans (4 done; ~5 remaining ML plans + 2 deferred phases × ~3 plans = ~21 remaining)
+Progress: [████░░░░░░░░░░░░░░░░░░░] 10 of ~30 plans (5 done; ~4 remaining ML plans + 2 deferred phases × ~3 plans = ~20 remaining)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9 (3 foundation + 2 streaming + 3 concurrency-gate + 1 ml-seam)
-- Average duration: ~7 min
-- Total execution time: ~24 min
+- Total plans completed: 10 (3 foundation + 2 streaming + 3 concurrency-gate + 2 ml-seam)
+- Average duration: ~8 min
+- Total execution time: ~39 min
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [████░░░░░░░░░░░░░░░░░░░
 | 01-foundation | 3/3 | ~21 min | 7 min |
 | 02-sse-streaming-pass-through | 2/2 | ~24 min | 12 min |
 | 03-122b-concurrency-gate | 3/3 | ~53 min | 18 min |
-| 04-ml-algorithm-seam | 1/3 | ~3 min | 3 min |
+| 04-ml-algorithm-seam | 2/3 | ~18 min | 9 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-01 (15 min), 03-02 (~35 min), 03-03 (~3 min), 04-01 (~3 min)
-- Trend: Pure Core refactor plans are very fast (~3 min); Cli/integration plans take longer
+- Last 5 plans: 03-02 (~35 min), 03-03 (~3 min), 04-01 (~3 min), 04-02 (~15 min)
+- Trend: Cli/integration plans take longer (~15 min); Core-only refactor plans very fast (~3 min)
 
 *Updated after each plan completion*
 
@@ -79,6 +79,9 @@ Recent decisions affecting current work:
 - 04-01: RoutingAlgorithm alias lives in Domain.fs (upstream of both Heuristic.fs and ML.fs in compile order) — both algorithm modules compile before Routing.fs and need to satisfy the type
 - 04-01: Wave 1 boundary state — Tests project build fails because Cli (ChatCompletions.fs) still uses old 2-arg routeRequest; Cli callsite fix + full dotnet test 39/39 deferred to 04-02
 - 04-01: ML.fs comment mentioning Heuristic module name revised to avoid triggering CI isolation grep false positive (grep pattern without trailing dot matched comment text)
+- 04-02: Func<IServiceProvider, RoutingAlgorithm> explicit cast required for AddSingleton<T> when T is an F# function-type alias — without the Func wrapper, F# currying causes DI overload resolver to reject the factory lambda (inferred as 4-arg rather than Func<IServiceProvider, RoutingAlgorithm>)
+- 04-02: open Microsoft.Extensions.Configuration required in Program.fs for both IConfigurationBuilder cast and AddInMemoryCollection extension method (was missing)
+- 04-02: RoutingTests.fs 04-01 latent bug fixed — after open SmartRouter.Core.Heuristic, correct is applyHeuristic not Heuristic.applyHeuristic; Heuristic is not a sub-module; tests were cached from --no-build in 04-01
 
 ### Pending Todos
 
@@ -92,6 +95,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T04:27:30Z
-Stopped at: Completed 04-01-CORE-REFACTOR-PLAN.md — Wave 1 complete; Core builds 0 warnings; RoutingAlgorithm seam + Heuristic.fs/ML.fs + isolation script in place
+Last session: 2026-05-08T13:45:00Z
+Stopped at: Completed 04-02-CONFIG-AND-CLI-PLAN.md — Wave 2 complete; full-solution builds 0 warnings; Routing.Algorithm config key + RoutingAlgorithm DI singleton + --routing-algorithm CLI flag wired; 39/39 tests pass
 Resume file: None
