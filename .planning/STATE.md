@@ -9,13 +9,13 @@ See: .planning/PROJECT.md (updated 2026-05-07)
 
 ## Current Position
 
-Phase: 2 of 6 (SSE Streaming Pass-Through) — COMPLETE ✓
-Plan: 2 of 2 in current phase — COMPLETE ✓
-Status: Phase 2 verified by gsd-verifier — 8/8 must-haves green; 30/30 tests pass; all 5 SSE pitfalls have code mitigations + dedicated tests; Hermes streaming path is unblocked
-Last activity: 2026-05-08 — Phase 2 complete; gsd-verifier returned VERIFICATION PASSED
-Next: /gsd:plan-phase 3
+Phase: 3 of 6 (122B Concurrency Gate) — In progress
+Plan: 1 of 3 in current phase — COMPLETE ✓
+Status: Plan 03-01 complete — IUpstreamClient port-shape refactored; QueueDispatcher live in DI; 30/30 tests pass
+Last activity: 2026-05-08 — Completed 03-01-QUEUE-DISPATCHER-PLAN.md
+Next: Plan 03-02 — QueueTests.fs + /stats endpoint
 
-Progress: [█████░░░░░] ~29% (5 of ~17 plans estimated)
+Progress: [██████░░░░] ~35% (6 of ~17 plans estimated)
 
 ## Performance Metrics
 
@@ -30,10 +30,11 @@ Progress: [█████░░░░░] ~29% (5 of ~17 plans estimated)
 |-------|-------|-------|----------|
 | 01-foundation | 3/3 | ~21 min | 7 min |
 | 02-sse-streaming-pass-through | 2/2 | ~24 min | 12 min |
+| 03-122b-concurrency-gate | 1/3 | ~15 min | 15 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-02 (5 min), 01-03 (13 min), 02-01 (18 min), 02-02 (6 min)
-- Trend: 02-02 quick because test infrastructure pattern was well-researched; all fixes were auto-resolved
+- Last 5 plans: 01-03 (13 min), 02-01 (18 min), 02-02 (6 min), 03-01 (15 min)
+- Trend: 03-01 was the largest single plan (2 tasks, 8 files); port-shape refactor + atomic concurrency cluster + DI swap in one plan
 
 *Updated after each plan completion*
 
@@ -63,6 +64,11 @@ Recent decisions affecting current work:
 - 02-02: F# task{} finally blocks do not allow do! — use .GetAwaiter().GetResult() for async teardown (StopAsync/DisposeAsync) in test helpers
 - 02-02: ctx.RequestAborted in Kestrel fires on TCP socket close (response.Dispose()), not on CancellationToken.Cancel() — cancellation test must close the socket
 - 02-02: startTestRouter requires full Routing section in AddInMemoryCollection — validateConfig (called via DI singleton factory) checks all canonical tasks are present
+- 03-01: IUpstreamClient port shape changed to take decision: RoutingDecision (Option A, locked decision from CONTEXT.md) — QueueDispatcher dispatches on decision.Target + decision.Priority without a separate interface
+- 03-01: Two Queue<Ticket> (high/low) chosen over PriorityQueue<T,int> for two-level priority — FairnessK enforcement is explicit; no rebuild-on-promote complexity
+- 03-01: Sub-pattern A: dispatcher acquires sem122b BEFORE signalling TCS — individual requests park on tcs.Task, never on sem.WaitAsync (PITFALL-9 mitigation)
+- 03-01: Linked CTS created AFTER enqueue122b returns — timeout starts at slot grant, queue wait never burns timeout budget (PITFALL-11 mitigation)
+- 03-01: startTestRouter requires Queue section in AddInMemoryCollection — QueueDispatcherOptions.MaxConcurrent122B defaults to 0 which the QueueDispatcher constructor rejects
 
 ### Pending Todos
 
@@ -76,6 +82,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-07T12:04:44Z
-Stopped at: Completed 02-02-STREAMING-TESTS-PLAN.md — Phase 2 complete; 30/30 tests pass
+Last session: 2026-05-08T10:02:46Z
+Stopped at: Completed 03-01-QUEUE-DISPATCHER-PLAN.md — QueueDispatcher live; 30/30 tests pass
 Resume file: None
