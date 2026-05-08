@@ -9,19 +9,19 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 
 ## Current Position
 
-Phase: 8 of 11 (Retraining Loop) — COMPLETE ✓
-Plan: 3 of 3 in current phase — COMPLETE ✓
-Status: Phase 8 complete. 7 Expecto tests covering RETRAIN-01..06 added. FakeEmbedder (Task.Yield for concurrent semaphore test), ThrowingEmbedder, CapturingSink helpers. test7 runs as testCase (StartAsync + PeriodicTimer count-check integration, ~60-90s). Build: 0 errors, 0 warnings. Tests: 73 pass + 10 ignored, 0 failed (was 66 pass baseline). Canonical run: dotnet run -- --sequenced.
-Last activity: 2026-05-09 — Phase 8 Plan 3 COMPLETE
+Phase: 9 of 11 (Canary Deployment) — In Progress
+Plan: 1 of 3 in current phase — COMPLETE ✓
+Status: Phase 9 Plan 1 complete. RouterRequest.CorrelationId + RoutingDecision.ModelVersion domain fields; ICanaryGate BCL-only port; IModelVersionProvider extended (CanaryVersion + UpdateCanary); ML.fs makeApplyML 6-param factory; NuGet pin Microsoft.FeatureManagement.AspNetCore 4.5.0; appsettings Canary + feature_management sections. 19 construction sites updated. Build: 0 errors, 0 warnings. Tests: 73 pass + 10 ignored, 0 failed (Phase 8 baseline preserved exactly). Canonical run: dotnet run -- --sequenced.
+Last activity: 2026-05-09 — Phase 9 Plan 1 COMPLETE
 
-Progress: [██████████████████░░░░░] 26 of ~30 plans (phase 8 complete; phase 9 next)
+Progress: [███████████████████░░░░] 27 of ~30 plans (phase 9 plan 1 of 3 complete; plan 09-02 next)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 26 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing + 6 failure-detection + 3 retraining-loop)
+- Total plans completed: 27 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing + 6 failure-detection + 3 retraining-loop + 1 canary-deployment)
 - Average duration: ~7 min
-- Total execution time: ~132 min
+- Total execution time: ~140 min
 
 **By Phase:**
 
@@ -35,10 +35,11 @@ Progress: [██████████████████░░░░░
 | 06-real-ml-routing | 3/3 | ~18 min | ~6 min |
 | 07-failure-detection-and-teacher-labeling | 6/6 | ~50 min | ~8 min |
 | 08-retraining-loop | 3/3 | ~32 min | ~11 min |
+| 09-canary-deployment | 1/3 | ~8 min | ~8 min |
 
 **Recent Trend:**
-- Last 5 plans: 07-05 (~8 min), 07-06 (~10 min), 08-01 (~8 min), 08-02 (~7 min), 08-03 (~17 min)
-- Trend: Tests-only plans with ML.NET training take longer (~17 min); core implementation plans ~7-10 min
+- Last 5 plans: 08-01 (~8 min), 08-02 (~7 min), 08-03 (~17 min), 09-01 (~8 min)
+- Trend: Domain-field-cascade plans (many files, mechanical edits) are fast ~8 min; tests-only plans with ML.NET training take longer (~17 min)
 
 *Updated after each plan completion*
 
@@ -150,6 +151,14 @@ Recent decisions affecting current work:
 - 08-03: Canonical test run is dotnet run -- --sequenced (73 passed, 10 ignored, 0 failed); parallel mode shows pre-existing flakiness in QueueTests PITFALL-10 and HardCaseDatasetTests graceful-drain tests when run alongside CPU-heavy ML.NET training
 - 08-tests-flake (commit dd1da7d): HardCaseDatasetTests "graceful StopAsync drains in-flight entries" stabilized — replaced Thread.Yield() with Thread.Sleep(200). Pre-existing Phase 7 flake exposed by Phase 8 ThreadPool contention (66→73 tests). File polling failed because HardCaseDatasetWriter holds FileShare.None — peeking the file conflicts with the writer's exclusive lock. 5/5 parallel runs pass after fix. Stable now even without --sequenced.
 - 08-VERIFICATION (verifier scored 27/27 must-haves): Loop B is real and proven. Notable findings: ChatCompletions reads IModelVersionProvider per-request via DI (line 326+114, NOT frozen at startup); Lock 5 split-FIRST pipeline confirmed in runRetrain; cumulative training-set persistence active; RETRAIN-04 verified via provider.CurrentVersion (equivalent to JSONL model_version assertion). Three human-verification items deferred (real-ONNX retrain timing under launchd, PredictionEnginePool hot-swap under live traffic) — non-blocking; require 122B server.
+- 09-01: 19 RouterRequest + RoutingDecision construction sites updated (Lock 16); new fields CorrelationId + ModelVersion are required at construction; "" is the empty-string sentinel for non-ML stages
+- 09-01: ICanaryGate Core port (BCL-only, CanaryPorts.fs); NullCanaryGate inline object expression in CompositionRoot "ml" branch as Plan 09-02 placeholder; FeatureManagementCanaryGate concrete in Plan 09-02
+- 09-01: IModelVersionProvider extended with CanaryVersion getter + UpdateCanary setter; concrete ModelVersionProvider.fs has shared lock gate + mutable canary field; same DI registration as Phase 8 (no new registrations needed)
+- 09-01: ML.fs makeApplyML 6-param factory — SINGLE isCanary boolean gates classifier selection AND ModelVersion assignment in adjacent let-binding (RESEARCH §11 Pitfall 8); CorrelationId="" → bypass canary gate (NullCanaryGate path preserved for non-HTTP construction sites)
+- 09-01: CanaryPorts.fs placed BEFORE ML.fs in Core.fsproj (deviation from plan's "after RetrainingPorts.fs") — F# compile-order requires it because ML.fs opens SmartRouter.Core.CanaryPorts; ARCH-01 preserved
+- 09-01: NuGet pin Microsoft.FeatureManagement.AspNetCore 4.5.0 added to Cli.fsproj only (preserves ARCH-01 for Core)
+- 09-01: appsettings.json Routing.Canary section (7 keys: CanaryModelPath, PercentageEnabled=10, RollingWindowSeconds=60, WatchdogPollIntervalSeconds=10, AutoRollbackThreshold=0.10, AutoRollbackEnabled=false, MinBaselineSampleSize=50) + feature_management section (Microsoft.Targeting filter, DefaultRolloutPercentage=10)
+- 09-01: buildDecisionLog gains decisionOpt: RoutingDecision option param — None for pre-routing failures, Some decision for Ok-routing branches; cascade: decision.ModelVersion → versionProvider.CurrentVersion for "" sentinel
 
 ### Pending Todos
 
@@ -163,6 +172,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-09T06:38:19Z
-Stopped at: Phase 8 COMPLETE — 3/3 plans + verifier 27/27 must-haves passed; RETRAIN-01..RETRAIN-06 marked Complete in REQUIREMENTS.md; HardCaseDatasetTests graceful-drain flake fixed (commit dd1da7d); build clean; 73 pass + 10 ignored, 0 failed in BOTH parallel and --sequenced modes
+Last session: 2026-05-09T23:02:53Z
+Stopped at: Phase 9 Plan 1 COMPLETE — foundation done; 19 construction sites updated; ICanaryGate + IModelVersionProvider extension; NuGet pin; appsettings sections; build 0/0; 73 pass + 10 ignored, 0 failed
 Resume file: None
