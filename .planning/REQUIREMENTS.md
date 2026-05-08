@@ -130,9 +130,9 @@
 
 ### Canary Deployment (Phase 9)
 
-- [ ] **CANARY-01**: `Microsoft.FeatureManagement` + `PercentageFilter` splits traffic between baseline and canary models; bucket assignment is sticky per `correlation_id` (same correlation always lands in the same cohort); verified statistically over 1000 requests (binomial 95% CI)
-- [ ] **CANARY-02**: `Routing.Canary.PercentageEnabled` config (default 10%) controls canary share; `model_version` in DecisionLog distinguishes canary vs baseline cohorts; cohort comparison (avg `fallback_rate`, latency) is trivial via JSONL group-by
-- [ ] **CANARY-03**: Auto-rollback fires when canary's rolling-60s `fallback_rate` exceeds baseline by >10% (configurable threshold); admin endpoint `/canary` supports manual promote (canary → 100%) and rollback (canary → 0%); verified by integration tests for both transitions
+- [x] **CANARY-01**: `Microsoft.FeatureManagement.AspNetCore` + `ContextualTargetingFilter` (NOT `PercentageFilter` — non-sticky) splits traffic between baseline and canary models; bucket assignment is sticky per `correlation_id` (same correlation always lands in the same cohort); verified statistically over 1000 deterministic requests (binomial 95% CI)
+- [x] **CANARY-02**: `Routing.Canary.PercentageEnabled` config (default 10%) controls canary share; `model_version` in DecisionLog distinguishes canary vs baseline cohorts (suffix `-canary`); cohort comparison (avg `fallback_rate`, latency) is trivial via JSONL group-by
+- [x] **CANARY-03**: Auto-rollback fires when canary's rolling-60s `fallback_rate` exceeds baseline by >10% (configurable threshold; `AutoRollbackEnabled` default `false` until Phase 10's signal is real); admin endpoint `/canary` supports manual promote (canary → 100%) and rollback (canary → 0%); verified by integration tests for both transitions
 
 ## v2 Requirements
 
@@ -266,9 +266,9 @@ Deferred. Tracked but not in current roadmap.
 | RETRAIN-04 | Phase 8 | Complete |
 | RETRAIN-05 | Phase 8 | Complete |
 | RETRAIN-06 | Phase 8 | Complete |
-| CANARY-01 | Phase 9 | Pending |
-| CANARY-02 | Phase 9 | Pending |
-| CANARY-03 | Phase 9 | Pending |
+| CANARY-01 | Phase 9 | Complete |
+| CANARY-02 | Phase 9 | Complete |
+| CANARY-03 | Phase 9 | Complete |
 
 **Coverage:**
 - v1 requirements: 83 total (56 original + 27 ML-arc additions; +1 EMBED-03 for bge-m3 latency)

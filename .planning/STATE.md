@@ -174,6 +174,7 @@ Recent decisions affecting current work:
 - 09-03: JsonDocument.Parse + GetProperty("model_version") + EndsWith("-canary") for cohort assertion (replaces fragile string-contains)
 - 09-03: CapturingSink ILogEventSink for AUTO-ROLLBACK log verification (mirrors LoggingTests.fs Phase 5 pattern)
 - 09-03: canary04_fileSystemWatcher uses CanaryModelExists=false override + 200ms settle + 20x100ms poll for -canary suffix + delete-and-clear test (verifies Lock 9)
+- 09-VERIFICATION (verifier scored 36/36 must-haves): Canary deployment is real and proven. Notable findings: Pure-Core invariant preserved (CanaryPorts.fs BCL-only — only System.Threading + System.Threading.Tasks); ML.fs single isCanary boolean correctly gates BOTH classifier selection AND ModelVersion assignment (Pitfall 8 verified); CompositionRoot Step 1.0 TryAddSingleton fallbacks precede ML conditional block (B2 fix); CanaryService FileSystemWatcher arms in StartAsync, disposes in StopAsync via separate try/with (no F# parsing trap); ContextualTargetingFilter via WithTargeting<>, PercentageFilter zero hits in src; AutoRollbackEnabled defaults to false (Lock 1) — proxy signal will become real in Phase 10. Three human-verification items deferred (real traffic distribution at scale, real launchd auto-rollback under upstream failures, macOS FSEvents latency) — non-blocking; require live traffic.
 - 09-03: Auto-rollback test drives ICanaryMetrics.Record() directly via DI (not real HTTP traffic) — avoids fake-upstream cohort-coordination problem; 30 baseline success + 30 canary fail → delta=1.0 >> threshold=0.10 → watchdog fires
 - 09-03: Phase 9 COMPLETE. All Locks 1-17 (CONTEXT.md) have corresponding test or grep guard. Ready for /gsd:verify-phase 9 + /gsd:uat-phase 9.
 
@@ -190,5 +191,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-05-09T08:46:00Z
-Stopped at: Phase 9 Plan 3 COMPLETE — 12 canary tests (78 pass + 17 ignored + 0 failed without embed models). Phase 9 COMPLETE.
+Stopped at: Phase 9 COMPLETE — 3/3 plans + verifier 36/36 must-haves passed; CANARY-01..03 marked Complete in REQUIREMENTS.md; build clean; 78 pass + 17 ignored, 0 failed (without embed models) / 85 + 10 (with embed models). Phase 10 (Health/Fallback) is the next milestone gate.
 Resume file: None
