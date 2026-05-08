@@ -45,6 +45,8 @@ let main args =
 
             // Register POST /v1/chat/completions
             ChatCompletions.mapEndpoints app
+            // Register GET /stats (OBS-02 / API-07)
+            Stats.mapEndpoints app
 
             app.Run()
             0

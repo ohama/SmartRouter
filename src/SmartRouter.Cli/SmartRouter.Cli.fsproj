@@ -12,6 +12,7 @@
     <Compile Include="Adapters/QwenUpstreamClient.fs" />
     <Compile Include="Adapters/QueueDispatcher.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />
+    <Compile Include="Endpoints/Stats.fs" />
     <Compile Include="CompositionRoot.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
