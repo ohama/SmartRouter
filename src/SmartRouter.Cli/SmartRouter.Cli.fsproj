@@ -12,6 +12,7 @@
     <Compile Include="Adapters/DecisionLogger.fs" />
     <Compile Include="Adapters/DecisionLogWriter.fs" />
     <Compile Include="Adapters/CorrelationMiddleware.fs" />
+    <Compile Include="Adapters/RoutingAlgorithm.fs" />
     <Compile Include="Adapters/QwenUpstreamClient.fs" />
     <Compile Include="Adapters/QueueDispatcher.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />

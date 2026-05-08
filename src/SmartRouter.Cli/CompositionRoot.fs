@@ -12,6 +12,7 @@ open SmartRouter.Core.Ports
 open SmartRouter.Core.Routing
 open SmartRouter.Cli.Adapters.DecisionLogger
 open SmartRouter.Cli.Adapters.DecisionLogWriter
+open SmartRouter.Cli.Adapters.RoutingAlgorithm
 open SmartRouter.Cli.Adapters.QwenUpstreamClient
 open SmartRouter.Cli.Adapters.QueueDispatcher
 
@@ -140,23 +141,38 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
         buildRoutingConfig opts)
         |> ignore
 
-    // RoutingAlgorithm as a DI singleton — dispatches to the correct algorithm function
-    // based on Routing.Algorithm config key (or --routing-algorithm CLI override).
-    // null | "" | "heuristic" -> Heuristic.applyHeuristic (default; safe fallback)
-    // "ml"                    -> ML.applyML
+    // RoutingAlgorithmRegistration as a DI singleton — pairs the algorithm function
+    // with its name and model_version so the endpoint can populate DecisionLog.
+    // null | "" | "heuristic" -> applyHeuristic / "heuristic" / "heuristic-v1"
+    // "ml"                    -> applyML        / "ml"        / "ml-v0-placeholder"
     // other                   -> InvalidOperationException at startup (fail-fast)
-    services.AddSingleton<RoutingAlgorithm>(
-        Func<IServiceProvider, RoutingAlgorithm>(fun sp ->
+    services.AddSingleton<RoutingAlgorithmRegistration>(
+        Func<IServiceProvider, RoutingAlgorithmRegistration>(fun sp ->
             let opts = sp.GetRequiredService<IOptions<RoutingOptions>>().Value
             match opts.Algorithm with
-            | null | "" | "heuristic" -> SmartRouter.Core.Heuristic.applyHeuristic
-            | "ml"                    -> SmartRouter.Core.ML.applyML
+            | null | "" | "heuristic" ->
+                { Algorithm    = SmartRouter.Core.Heuristic.applyHeuristic
+                  Name         = "heuristic"
+                  ModelVersion = "heuristic-v1" }
+            | "ml" ->
+                { Algorithm    = SmartRouter.Core.ML.applyML
+                  Name         = "ml"
+                  ModelVersion = "ml-v0-placeholder" }
             | other ->
                 let msg =
                     sprintf
                         "appsettings.json Routing.Algorithm = \"%s\" is invalid; valid values: \"heuristic\", \"ml\""
                         other
                 raise (System.InvalidOperationException(msg))))
+    |> ignore
+
+    // Backwards-compatible alias: register the bare RoutingAlgorithm function so
+    // any existing test or component that resolves RoutingAlgorithm directly still works.
+    // MLRoutingTests Tests 4+5 currently resolve GetRequiredService<RoutingAlgorithm>() —
+    // this preserves that resolution and lets those tests continue to pass without changes.
+    services.AddSingleton<RoutingAlgorithm>(
+        Func<IServiceProvider, RoutingAlgorithm>(fun sp ->
+            sp.GetRequiredService<RoutingAlgorithmRegistration>().Algorithm))
     |> ignore
 
     // Bind Queue section to QueueDispatcherOptions
