@@ -13,19 +13,23 @@ open SmartRouter.Core.Domain
 /// HttpResponseMessage never crosses this boundary (ARCH-05).
 type IUpstreamClient =
     /// Non-streaming call: returns the full response body string.
+    /// Takes the full RoutingDecision so adapters that wrap this port
+    /// (QueueDispatcher) can dispatch on Target + Priority without a separate
+    /// interface. Adapters that only care about Target read decision.Target.
     abstract member CompleteAsync :
-        req    : RouterRequest
-        -> target : ModelId
-        -> ct     : CancellationToken
+        req      : RouterRequest
+        -> decision : RoutingDecision
+        -> ct       : CancellationToken
         -> Task<Result<string, RouterError>>
 
-    /// Streaming call: returns a sequence of raw SSE chunks as strings.
+    /// Streaming call. Same RoutingDecision parameter — adapters wrap this
+    /// to gate on decision.Target / decision.Priority.
     /// Sequence is lazy — each element is read as it arrives from the upstream server.
     /// The endpoint handler writes each chunk to HttpContext.Response as it arrives.
     abstract member StreamAsync :
-        req    : RouterRequest
-        -> target : ModelId
-        -> ct     : CancellationToken
+        req      : RouterRequest
+        -> decision : RoutingDecision
+        -> ct       : CancellationToken
         -> IAsyncEnumerable<Result<string, RouterError>>
 
 /// Clock abstraction — needed by Stats adapter to record timestamps.

@@ -153,8 +153,9 @@ type QwenUpstreamClient(httpFactory: IHttpClientFactory, opts: IOptions<Upstream
     /// 2. Builds request body with sampling defaults (client values win over defaults).
     /// 3. Merges req.UnknownFields verbatim into the serialized body (API-04).
     /// 4. POSTs to {upstreamUrl}/v1/chat/completions and returns the full response body.
-    member _.CompleteAsync (req: RouterRequest) (target: ModelId) (ct: CancellationToken) : Task<Result<string, RouterError>> =
+    member _.CompleteAsync (req: RouterRequest) (decision: RoutingDecision) (ct: CancellationToken) : Task<Result<string, RouterError>> =
         task {
+            let target = decision.Target
             let probe, clientName, upstreamUrl = resolveProbe target
 
             // 1. Resolve upstream model id (lazy probe — fires at most once per process per upstream)
@@ -232,8 +233,9 @@ type QwenUpstreamClient(httpFactory: IHttpClientFactory, opts: IOptions<Upstream
     /// Yields Ok line for each non-blank SSE event line from the upstream stream.
     /// Yields a single Error _ on probe failure or non-2xx response; sequence terminates.
     /// Never throws — all failure paths yield Error _ (consistent with CompleteAsync contract).
-    member _.StreamAsync (req: RouterRequest) (target: ModelId) (ct: CancellationToken) : IAsyncEnumerable<Result<string, RouterError>> =
+    member _.StreamAsync (req: RouterRequest) (decision: RoutingDecision) (ct: CancellationToken) : IAsyncEnumerable<Result<string, RouterError>> =
         taskSeq {
+            let target = decision.Target
             let probe, clientName, upstreamUrl = resolveProbe target
 
             // 1. Resolve upstream model id (lazy probe — fires at most once per process per upstream).
@@ -307,5 +309,5 @@ type QwenUpstreamClient(httpFactory: IHttpClientFactory, opts: IOptions<Upstream
         }
 
     interface IUpstreamClient with
-        member this.CompleteAsync req target ct = this.CompleteAsync req target ct
-        member this.StreamAsync   req target ct = this.StreamAsync   req target ct
+        member this.CompleteAsync req decision ct = this.CompleteAsync req decision ct
+        member this.StreamAsync   req decision ct = this.StreamAsync   req decision ct

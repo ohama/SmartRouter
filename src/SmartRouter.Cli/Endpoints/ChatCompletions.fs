@@ -155,7 +155,7 @@ let handler
                     decision.Target, decision.Reason, decision.Priority)
 
                 let ct = ctx.RequestAborted
-                let chunks = upstream.StreamAsync req decision.Target ct
+                let chunks = upstream.StreamAsync req decision ct
 
                 // Manual enumerator loop — required for precise disposal semantics.
                 // F# task {} does not support do! in finally blocks, so enumerator.DisposeAsync()
@@ -216,7 +216,7 @@ let handler
                     "Routing target={Target} reason={Reason} priority={Priority}",
                     decision.Target, decision.Reason, decision.Priority)
 
-                let! result = upstream.CompleteAsync req decision.Target ctx.RequestAborted
+                let! result = upstream.CompleteAsync req decision ctx.RequestAborted
 
                 match result with
                 | Ok body ->
