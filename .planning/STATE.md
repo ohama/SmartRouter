@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 ## Current Position
 
 Phase: 6 of 11 (Real ML Routing) — In progress
-Plan: 1 of 3 in current phase — COMPLETE ✓
-Status: Phase 6 plan 1 complete. Pure-Core seam (IEmbedder + IClassifier + makeApplyML), RoutingConfig.MlThreshold, 4 ML NuGet pins on Cli, models/ gitignored, model-acquisition scripts shipped. 49/49 tests pass (0 warnings). Wave 1 boundary: Core/Tests/Cli all build clean (applyML placeholder retained; swapped in 06-02).
-Last activity: 2026-05-08 — Completed 06-01-CORE-PORTS-AND-NUGET-PLAN.md
+Plan: 2 of 3 in current phase — COMPLETE ✓
+Status: Phase 6 plan 2 complete. BgeM3Embedder + MlNetClassifier + ModelBootstrapper adapters wired. CompositionRoot ml-branch: ensureEmbeddingFilesPresent → ensureDummyModel → AddPredictionEnginePool → IEmbedder → IClassifier → makeApplyML. Legacy applyML removed. model_version = ml-{8hexchars}. Routing.Algorithm default flipped to "ml". 47/47 tests pass + 4 ignored (0 warnings).
+Last activity: 2026-05-08 — Completed 06-02-CLI-ADAPTERS-AND-DI-PLAN.md
 
-Progress: [███████░░░░░░░░░░░░░░░░] 15 of ~30 plans (phase 6 in progress)
+Progress: [████████░░░░░░░░░░░░░░░] 16 of ~30 plans (phase 6 in progress)
 
 ## Performance Metrics
 
@@ -32,7 +32,7 @@ Progress: [███████░░░░░░░░░░░░░░░░
 | 03-122b-concurrency-gate | 3/3 | ~53 min | 18 min |
 | 04-ml-algorithm-seam | 3/3 | ~21 min | 7 min |
 | 05-routing-decision-logging | 3/3 | ~19 min | 6 min |
-| 06-real-ml-routing | 1/3 | ~5 min | 5 min |
+| 06-real-ml-routing | 2/3 | ~13 min | ~7 min |
 
 **Recent Trend:**
 - Last 5 plans: 05-01 (~8 min), 05-02 (~6 min), 05-03 (~5 min), 06-01 (~5 min)
@@ -101,6 +101,9 @@ Recent decisions affecting current work:
 - 06-01: runSync uses Task.Run factory lambda (Task.Run<'a>(Func<Task<'a>>(taskFactory))) — avoids capturing already-started Task onto ASP.NET SyncContext; canonical deadlock-prevention guard
 - 06-01: CompositionRoot buildRoutingConfig defaults MlThreshold to 0.5f when opts.MlThreshold = 0.0f — CLIMutable float32 defaults to 0.0f when JSON key absent; no appsettings.json change needed at wave 1
 - 06-01: applyML placeholder retained in ML.fs wave 1 so CompositionRoot "ml" branch compiles — swapped out in 06-02 Task 3; 4 NuGet pins (OnnxRuntime 1.25.1, Tokenizers 2.0.0, ML 5.0.0, Extensions.ML 5.0.0) on Cli resolved cleanly with no System.Memory conflict
+- 06-02: SentencePieceTokenizer.Create uses `addBeginningOfSentence` (not `addBeginOfSentence`); EncodeToIds maxTokenCount overload requires ref out-params (normalizedText, charsConsumed); DenseTensor.Buffer.ToArray() not Tensor.ToArray() (Buffer is on DenseTensor subclass, not abstract Tensor<T>); SentencePieceTokenizer has no IDisposable in 2.0.0
+- 06-02: Task 3 (remove applyML) and Task 4 (rewrite tests) committed together atomically — removing applyML immediately breaks MLRoutingTests.fs build
+- 06-02: Routing.Algorithm default flipped to "ml"; StreamingTests + LoggingTests unaffected (both override to "heuristic" explicitly); MLRoutingTests Tests 4+5 gated with mlTestCase (ptestCase when models/embed/* absent)
 
 ### Pending Todos
 
@@ -114,6 +117,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T07:43:57Z
-Stopped at: Completed 06-01-CORE-PORTS-AND-NUGET-PLAN.md — Phase 6 plan 1 of 3 complete; IEmbedder/IClassifier ports + makeApplyML + RoutingConfig.MlThreshold + 4 NuGet pins + models/ gitignore + model scripts; 49/49 tests pass (0 warnings)
+Last session: 2026-05-08T07:56:47Z
+Stopped at: Completed 06-02-CLI-ADAPTERS-AND-DI-PLAN.md — Phase 6 plan 2 of 3 complete; BgeM3Embedder + MlNetClassifier + ModelBootstrapper adapters; CompositionRoot ml-branch wired; legacy applyML removed; model_version = ml-{8hexchars}; Algorithm default = "ml"; 47/47 tests pass + 4 ignored (0 warnings)
 Resume file: None
