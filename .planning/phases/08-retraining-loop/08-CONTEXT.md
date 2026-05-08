@@ -107,14 +107,31 @@ If `.last-retrain.json` is absent, treat `hardCaseCountAtRetrain = 0` (first ret
 
 ---
 
-## Lock 5 — Held-out set strategy
+## Lock 5 — Held-out set strategy + train/validate pipeline order
 
-**Decision:** **Carve from merged dataset via `mlContext.Data.TrainTestSplit(testFraction = 0.2, seed = 42)`.**
+**Decision:** **Carve from merged dataset via `mlContext.Data.TrainTestSplit(testFraction = 0.2, seed = 42)` BEFORE training; train on `split.TrainSet` only; validate (both candidate and baseline) on `split.TestSet`.**
 
 - 80% train / 20% held-out.
 - Seed = 42 (matches `ModelBootstrapper.ensureDummyModel` and the rest of the project).
 - No separate held-out file. Ephemeral per retrain.
 - Reproducible across retrains on the same merged dataset.
+
+**Mandatory pipeline order (RetrainingService.runRetrain):**
+
+1. Build `mlContext = MLContext(seed = Nullable<int>(opts.HeldOutRandomSeed))`.
+2. Load merged samples into `dataView = mlContext.Data.LoadFromEnumerable(mergedSamples)`.
+3. **Split FIRST:** `let split = mlContext.Data.TrainTestSplit(dataView, testFraction = opts.HeldOutFraction, seed = Nullable<int>(opts.HeldOutRandomSeed))`.
+4. **Train candidate on `split.TrainSet`:** `let candidate = Retrainer.retrain mlContext split.TrainSet candidatePath opts.L2Regularization`.
+5. **Evaluate candidate on `split.TestSet`:** `let candidateMetrics = Validator.evaluate mlContext candidate split.TestSet` — fair (held-out is unseen).
+6. **Evaluate baseline on `split.TestSet`:** `let baselineMetrics = Validator.computeBaseline mlContext opts.ModelPath split.TestSet` — same split → fair comparison.
+7. Pass both metrics to `Validator.validate` for the final accept/reject decision.
+
+**Why split-before-train (not train-then-split):**
+- Training on data that includes the held-out set produces an optimistically biased validation metric — the model has memorized samples it's then evaluated on.
+- Worse: if the candidate is trained on full data and the baseline is evaluated on a portion of the candidate's training data, the baseline (which never saw any of these samples) is at an unfair distributional disadvantage.
+- Locking the order at "split first, train on TrainSet only, evaluate both on TestSet" makes the comparison apples-to-apples.
+
+**Retrainer signature:** `retrain : MLContext -> IDataView -> string -> float32 -> ITransformer`. The IDataView parameter is whatever the caller wants trained (typically `split.TrainSet`). Retrainer never internally splits — that responsibility lives in the caller (RetrainingService).
 
 **Configurable via:**
 - `Routing.Retraining.HeldOutFraction` (default 0.2)
