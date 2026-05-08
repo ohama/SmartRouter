@@ -9,19 +9,19 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 
 ## Current Position
 
-Phase: 5 of 11 (Routing Decision Logging) — COMPLETE ✓
-Plan: 3 of 3 in current phase — COMPLETE ✓
-Status: Phase 5 complete. All 3 plans shipped: DecisionLogWriter BackgroundService + CorrelationMiddleware + 8 log call sites + SSE error correlation_id + 5 integration tests. 49/49 tests pass (0 warnings). Ready for Phase 6.
-Last activity: 2026-05-08 — Completed 05-03-LOGGING-TESTS-PLAN.md
+Phase: 6 of 11 (Real ML Routing) — In progress
+Plan: 1 of 3 in current phase — COMPLETE ✓
+Status: Phase 6 plan 1 complete. Pure-Core seam (IEmbedder + IClassifier + makeApplyML), RoutingConfig.MlThreshold, 4 ML NuGet pins on Cli, models/ gitignored, model-acquisition scripts shipped. 49/49 tests pass (0 warnings). Wave 1 boundary: Core/Tests/Cli all build clean (applyML placeholder retained; swapped in 06-02).
+Last activity: 2026-05-08 — Completed 06-01-CORE-PORTS-AND-NUGET-PLAN.md
 
-Progress: [██████░░░░░░░░░░░░░░░░░] 14 of ~30 plans (phase 5 complete)
+Progress: [███████░░░░░░░░░░░░░░░░] 15 of ~30 plans (phase 6 in progress)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 14 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging)
+- Total plans completed: 15 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 1 real-ml-routing)
 - Average duration: ~7 min
-- Total execution time: ~55 min
+- Total execution time: ~60 min
 
 **By Phase:**
 
@@ -32,10 +32,11 @@ Progress: [██████░░░░░░░░░░░░░░░░░
 | 03-122b-concurrency-gate | 3/3 | ~53 min | 18 min |
 | 04-ml-algorithm-seam | 3/3 | ~21 min | 7 min |
 | 05-routing-decision-logging | 3/3 | ~19 min | 6 min |
+| 06-real-ml-routing | 1/3 | ~5 min | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-03 (~3 min), 05-01 (~8 min), 05-02 (~6 min), 05-03 (~5 min)
-- Trend: Cli/integration plans take longer; Core + test-only plans very fast (~3-5 min)
+- Last 5 plans: 05-01 (~8 min), 05-02 (~6 min), 05-03 (~5 min), 06-01 (~5 min)
+- Trend: Core-only plans very fast (~5 min); Cli/integration plans take longer
 
 *Updated after each plan completion*
 
@@ -96,6 +97,10 @@ Recent decisions affecting current work:
 - 05-03: CapturingSink ILogEventSink installed as Log.Logger BEFORE configureServices + testBuilder.Host.UseSerilog() — Serilog Console sink captures Console.Error reference at construction time, making post-hoc Console.SetError redirect ineffective; the only correct approach is a custom ILogEventSink installed before the host pipeline builds
 - 05-03: startFakeStreamingErrorUpstream returns HTTP 502 (not malformed SSE payload) — QwenUpstreamClient.StreamAsync yields Ok line for any non-blank SSE line without JSON-parsing the payload; Error arm is only triggered by non-2xx HTTP status
 - 05-03: DecisionLog:Directory override in AddInMemoryCollection required in all test modules that call configureServices to prevent JSONL pollution under bin/Debug/net10.0/logs/decisions/
+- 06-01: IEmbedder + IClassifier use float32[] not ReadOnlyMemory<float32> — simpler BCL type; Cli adapters can wrap to ReadOnlyMemory if OnnxRuntime requires it in 06-02
+- 06-01: runSync uses Task.Run factory lambda (Task.Run<'a>(Func<Task<'a>>(taskFactory))) — avoids capturing already-started Task onto ASP.NET SyncContext; canonical deadlock-prevention guard
+- 06-01: CompositionRoot buildRoutingConfig defaults MlThreshold to 0.5f when opts.MlThreshold = 0.0f — CLIMutable float32 defaults to 0.0f when JSON key absent; no appsettings.json change needed at wave 1
+- 06-01: applyML placeholder retained in ML.fs wave 1 so CompositionRoot "ml" branch compiles — swapped out in 06-02 Task 3; 4 NuGet pins (OnnxRuntime 1.25.1, Tokenizers 2.0.0, ML 5.0.0, Extensions.ML 5.0.0) on Cli resolved cleanly with no System.Memory conflict
 
 ### Pending Todos
 
@@ -109,6 +114,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T06:24:32Z
-Stopped at: Completed 05-03-LOGGING-TESTS-PLAN.md — Phase 5 complete (all 3 plans); 5 integration tests ship; 49/49 tests pass (0 warnings); Phase 5 SC all proven
+Last session: 2026-05-08T07:43:57Z
+Stopped at: Completed 06-01-CORE-PORTS-AND-NUGET-PLAN.md — Phase 6 plan 1 of 3 complete; IEmbedder/IClassifier ports + makeApplyML + RoutingConfig.MlThreshold + 4 NuGet pins + models/ gitignore + model scripts; 49/49 tests pass (0 warnings)
 Resume file: None
