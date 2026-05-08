@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 
 ## Current Position
 
-Phase: 7 of 11 (Failure Detection + Teacher Labeling) — COMPLETE ✓
-Plan: 6 of 6 in current phase — COMPLETE ✓
-Status: Phase 7 complete. All 4 FAIL REQ-IDs verified by 16 new tests + verifier scored 30/30 must-haves. Core/RetrainingPorts.fs (BCL-only: 3 interfaces + 4 types). Cli adapters real-impl: FailureDetector (JSONL reader + fallback_used filter), TeacherLabeler (named "teacher" HttpClient + persistent UTC daily cost cap + ROUTE_ parser), HardCaseDatasetWriter (Channel + BackgroundService + dedupe HashSet). CompositionRoot triple-reg + AddResilienceHandler (5xx/transient retry, no 4xx). Program.fs --retrain handler. prompts/teacher-prompt.md + scripts/seed-hard-cases.fsx + .gitignore datasets/. Build: 0 errors, 0 warnings. Tests: 66 pass + 10 ignored (0 failed).
-Last activity: 2026-05-08 — Phase 7 verified passed (30/30 must-haves)
+Phase: 8 of 11 (Retraining Loop) — IN PROGRESS
+Plan: 1 of 3 in current phase — COMPLETE ✓
+Status: Phase 8 Plan 1 complete. IModelVersionProvider BCL-only port appended to Core/RetrainingPorts.fs (5 types + 4 interfaces now). Cli adapters: Retrainer.fs (TrainSample [<CLIMutable>] + retrain MLContext->IDataView->string->float32->ITransformer, Lock 5), DatasetMerger.fs (70/30 class-stratified merge + first-retrain bootstrap, Lock 3), Validator.fs (ValidationResult DU + computeBaseline + validate using 1.0-PositiveRecall fallback_rate, Lock 1 + writeRejectionLog). Cli.fsproj: Retrainer→DatasetMerger→Validator (correct order, after HardCaseDatasetWriter, before Endpoints/). Build: 0 errors, 0 warnings. Tests: 66 pass + 10 ignored (0 failed, baseline preserved).
+Last activity: 2026-05-08 — Phase 8 Plan 1 COMPLETE
 
-Progress: [██████████████░░░░░░░░░] 23 of ~30 plans (phase 7 complete; phase 8 not started)
+Progress: [████████████████░░░░░░░] 24 of ~30 plans (phase 8 in progress; 1 of 3 plans complete)
 
 ## Performance Metrics
 
@@ -128,6 +128,13 @@ Recent decisions affecting current work:
 - 07-06: AddHttpClient F# lambda overload trap — services.AddHttpClient(name, fun c -> ...) does not bind reliably; use services.AddHttpClient(name).ConfigureHttpClient(...) chain
 - 07-06: Private F# [<CLIMutable>] record requires JsonFSharpConverter for STJ; default ObjectDefaultConverter cannot access private parameterless ctor
 - 07-06: Drain test pattern — Thread.Yield() between AppendAsync calls and StopAsync exercises both the steady-state and drain paths in BackgroundService
+- 08-01: RESEARCH.md compile-order is inverted for Phase 8 — Retrainer.fs MUST precede DatasetMerger.fs and Validator.fs (both open Retrainer for TrainSample). RESEARCH.md lines 66-71 lists DatasetMerger before Retrainer; that causes FS0039. Use Retrainer→DatasetMerger→Validator order.
+- 08-01: Lock 1 (fallback_rate) enforced — `fallback_rate := 1.0 - metrics.PositiveRecall` in both computeBaseline and validate; decoupled from MlThreshold config
+- 08-01: Lock 5 (mandatory pipeline order) enforced at Retrainer signature level — `retrain : MLContext -> IDataView -> string -> float32 -> ITransformer`; caller does TrainTestSplit and passes split.TrainSet as IDataView; Retrainer never sees held-out set
+- 08-01: Lock 3 (first-retrain bootstrap) enforced — when oldSamples=[||], merge returns new samples post-rebalance without 70/30 scaling, no synthetic noise
+- 08-01: ARCH-01 preserved for IModelVersionProvider — port uses only string + unit (BCL); zero forbidden imports in Core/RetrainingPorts.fs
+- 08-01: TrainSample mirrors MlNetClassifier.RouteInput exactly: [<CLIMutable>] + [<VectorType(1024)>] Features:float32[] + Label:bool (true=Route122B positive class)
+- 08-01: DatasetMerger.hardCaseToTrainSample takes embed callback (string -> float32[]) so DatasetMerger stays free of BgeM3Embedder dependency; Plan 08-02 RetrainingService closes over IEmbedder.EmbedAsync
 
 ### Pending Todos
 
@@ -141,6 +148,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T22:03:53Z
-Stopped at: Phase 7 COMPLETE — 6/6 plans + verifier 30/30 must-haves passed; FAIL-01..FAIL-04 marked Complete in REQUIREMENTS.md; build clean; 66 pass + 10 ignored, 0 failed
+Last session: 2026-05-08T20:20:57Z
+Stopped at: Phase 8 Plan 1 COMPLETE — 08-01 (DatasetMerger+Retrainer+Validator+IModelVersionProvider); build clean; 66 pass + 10 ignored, 0 failed
 Resume file: None
