@@ -15,6 +15,9 @@ open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
 open SmartRouter.Core.Routing
 open SmartRouter.Cli.Adapters.Json
+open SmartRouter.Cli.Adapters.DecisionLogger
+open SmartRouter.Cli.Adapters.CorrelationMiddleware
+open SmartRouter.Cli.Adapters.RoutingAlgorithm
 
 // ── Wire types ───────────────────────────────────────────────────────────────
 
@@ -78,6 +81,38 @@ let private mapWireToRequest (wire: RouterRequestWire) : RouterRequest =
       MaxTokens     = if wire.max_tokens.HasValue then Some wire.max_tokens.Value else None
       UnknownFields = unknownFields }
 
+// ── DecisionLog helpers ──────────────────────────────────────────────────────
+
+/// Escape a string for safe inclusion in a JSON string value.
+/// Handles backslash, double-quote, newline, and carriage return.
+let private escapeJsonString (s: string) =
+    s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r")
+
+/// Build a DecisionLog from request + routing outcome.
+/// Used at every exit point in handler to reduce duplication.
+/// latency_ms is computed at call time (DateTimeOffset.UtcNow - started).
+let private buildDecisionLog
+    (req           : RouterRequest)
+    (regn          : RoutingAlgorithmRegistration)
+    (correlationId : string)
+    (started       : DateTimeOffset)
+    (target        : string)
+    (reason        : string)
+    (fallbackUsed  : bool)
+    : DecisionLog =
+    { schema_version           = 1
+      correlation_id           = correlationId
+      prompt_hash              = computePromptHash req.Messages
+      prompt_korean_char_ratio = computeKoreanRatio req.Messages
+      routing_algorithm        = regn.Name
+      routing_reason           = reason
+      target                   = target
+      latency_ms               = (DateTimeOffset.UtcNow - started).TotalMilliseconds
+      fallback_used            = fallbackUsed
+      model_version            = regn.ModelVersion
+      task_type                = req.Task
+      timestamp                = DateTimeOffset.UtcNow }
+
 // ── Handler ──────────────────────────────────────────────────────────────────
 
 /// POST /v1/chat/completions handler.
@@ -88,6 +123,7 @@ let private mapWireToRequest (wire: RouterRequestWire) : RouterRequest =
 /// 3. On Ok decision AND stream=true: SSE forward loop (Phase 2 streaming).
 /// 4. On Ok decision AND stream=false: calls IUpstreamClient.CompleteAsync (Phase 1 path).
 /// 5. Returns OpenAI-shaped errors on routing failure or upstream error.
+/// 6. Emits a DecisionLog at EVERY exit point (Phase 5 wiring — LOG-01 / OBS-01).
 ///
 /// SSE pitfalls addressed:
 ///   STRM-04 / PITFALL-6: SSE headers set BEFORE any WriteAsync call.
@@ -101,20 +137,41 @@ let private mapWireToRequest (wire: RouterRequestWire) : RouterRequest =
 /// dispatch requirement: editing appsettings.json + restarting rebuilds this
 /// singleton, changing runtime dispatch without recompile.
 let handler
-    (routingConfig : RoutingConfig)
-    (algorithm     : RoutingAlgorithm)
-    (upstream      : IUpstreamClient)
-    (ctx           : HttpContext) : Task =
+    (routingConfig  : RoutingConfig)
+    (regn           : RoutingAlgorithmRegistration)
+    (decisionLogger : IDecisionLogger)
+    (upstream       : IUpstreamClient)
+    (ctx            : HttpContext) : Task =
     task {
+        // Capture start time and correlation ID at the very top of the handler.
+        // correlationId fallback is defensive — if CorrelationMiddleware is somehow
+        // bypassed, the request still gets a unique ID rather than null/empty.
+        let started = DateTimeOffset.UtcNow
+        let correlationId =
+            match ctx.Items.TryGetValue(CorrelationIdKey) with
+            | true, (:? string as cid) when not (String.IsNullOrEmpty(cid)) -> cid
+            | _ -> Guid.NewGuid().ToString("N")
+
         // 1. Parse wire body — use wireJsonOptions (allows missing/null fields for optional wire fields)
         let! wireBody = ctx.Request.ReadFromJsonAsync<RouterRequestWire>(wireJsonOptions, ctx.RequestAborted)
 
         if isNull (wireBody :> obj) then
+            // Null body — log with synthetic empty request (no messages, no task).
+            let emptyReq =
+                { Messages     = []
+                  ModelOverride = None
+                  Task          = None
+                  Stream        = false
+                  Temperature   = None
+                  TopP          = None
+                  MaxTokens     = None
+                  UnknownFields = Map.empty }
             ctx.Response.StatusCode <- 400
             do! ctx.Response.WriteAsJsonAsync(
                     {| error = {| message = "request body is required"
                                   ``type`` = "invalid_request_error" |} |},
                     jsonOptions, ctx.RequestAborted)
+            decisionLogger.Log(buildDecisionLog emptyReq regn correlationId started "unknown" "error:null_body" false)
         else
 
         let req = mapWireToRequest wireBody
@@ -123,13 +180,14 @@ let handler
         //    appsettings.json at startup; editing JSON + restart changes this behavior (ROUT-05).
         //    Routing errors return HTTP 400 with normal JSON body BEFORE any SSE headers are set
         //    (STRM-04 ordering: the streaming branch is only entered after a successful routing Ok decision).
-        match routeRequest routingConfig algorithm req with
+        match routeRequest routingConfig regn.Algorithm req with
         | Error (UnsupportedTask raw) ->
             ctx.Response.StatusCode <- 400
             do! ctx.Response.WriteAsJsonAsync(
                     {| error = {| message = $"unknown task: {raw}"
                                   ``type`` = "invalid_request_error" |} |},
                     jsonOptions, ctx.RequestAborted)
+            decisionLogger.Log(buildDecisionLog req regn correlationId started "unknown" (sprintf "error:unsupported_task:%s" raw) false)
 
         | Error e ->
             ctx.Response.StatusCode <- 400
@@ -137,6 +195,7 @@ let handler
                     {| error = {| message = string e
                                   ``type`` = "invalid_request_error" |} |},
                     jsonOptions, ctx.RequestAborted)
+            decisionLogger.Log(buildDecisionLog req regn correlationId started "unknown" (sprintf "error:%A" e) false)
 
         | Ok decision ->
 
@@ -165,6 +224,7 @@ let handler
                 // which disposes the HttpResponseMessage and closes the upstream socket. (STRM-05 / PITFALL-4)
                 let enumerator = chunks.GetAsyncEnumerator(ct)
                 let mutable sentDone = false
+                let mutable streamError = false
                 try
                     let mutable go = true
                     while go do
@@ -176,10 +236,16 @@ let handler
                             | Error e ->
                                 // Headers already sent — cannot return HTTP 502.
                                 // Emit a best-effort SSE error event in OpenAI error shape.
-                                let errMsg = sprintf "data: {\"error\":{\"message\":\"%s\",\"type\":\"upstream_error\"}}\n\n" (string e)
+                                // LOG-04 / OBS-03: correlation_id MUST be included in SSE error body.
+                                let errMsg =
+                                    sprintf
+                                        "data: {\"error\":{\"message\":\"%s\",\"type\":\"upstream_error\",\"correlation_id\":\"%s\"}}\n\n"
+                                        (escapeJsonString (string e))
+                                        correlationId
                                 let errBytes = Encoding.UTF8.GetBytes(errMsg)
                                 do! ctx.Response.Body.WriteAsync(errBytes, 0, errBytes.Length, ct)
                                 do! ctx.Response.Body.FlushAsync(ct)
+                                streamError <- true
                                 go <- false
                             | Ok chunk ->
                                 // Strategy D (STRM-07 / PITFALL-19): track whether this chunk contains [DONE].
@@ -199,7 +265,13 @@ let handler
                         do! ctx.Response.Body.FlushAsync(ct)
 
                     // Normal path disposal — triggers use _ = resp in StreamAsync → upstream socket close.
+                    // DecisionLog AFTER disposal so latency_ms reflects time-to-last-byte (LOG-01).
                     do! enumerator.DisposeAsync()
+                    let reason =
+                        if streamError
+                        then formatReason decision.Reason + ";stream_error"
+                        else formatReason decision.Reason
+                    decisionLogger.Log(buildDecisionLog req regn correlationId started (sprintf "%A" decision.Target) reason decision.IsFallback)
 
                 with
                 | :? OperationCanceledException ->
@@ -207,9 +279,11 @@ let handler
                     // No more writes possible — log and dispose.
                     Log.Information("StreamAsync: client disconnected mid-stream for {Target}", decision.Target)
                     do! enumerator.DisposeAsync()
+                    decisionLogger.Log(buildDecisionLog req regn correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";cancelled") decision.IsFallback)
                 | ex ->
                     Log.Error(ex, "StreamAsync: unexpected error writing to response for {Target}", decision.Target)
                     do! enumerator.DisposeAsync()
+                    decisionLogger.Log(buildDecisionLog req regn correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";stream_error") decision.IsFallback)
 
             else
                 // ── Non-streaming branch (unchanged from Phase 1) ────────────────────
@@ -223,6 +297,7 @@ let handler
                 | Ok body ->
                     ctx.Response.ContentType <- "application/json"
                     do! ctx.Response.WriteAsync(body, ctx.RequestAborted)
+                    decisionLogger.Log(buildDecisionLog req regn correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason) decision.IsFallback)
 
                 | Error e ->
                     ctx.Response.StatusCode <- 502
@@ -230,6 +305,7 @@ let handler
                             {| error = {| message = string e
                                           ``type`` = "upstream_error" |} |},
                             jsonOptions, ctx.RequestAborted)
+                    decisionLogger.Log(buildDecisionLog req regn correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";upstream_error") decision.IsFallback)
     }
 
 // ── Endpoint registration ────────────────────────────────────────────────────
@@ -242,7 +318,8 @@ let handler
 /// restarting changes the runtime routing behavior.
 let mapEndpoints (app: WebApplication) =
     app.MapPost("/v1/chat/completions", Func<HttpContext, Task>(fun ctx ->
-        let routingConfig = ctx.RequestServices.GetRequiredService<RoutingConfig>()
-        let algorithm     = ctx.RequestServices.GetRequiredService<RoutingAlgorithm>()
-        let upstream      = ctx.RequestServices.GetRequiredService<IUpstreamClient>()
-        handler routingConfig algorithm upstream ctx)) |> ignore
+        let routingConfig   = ctx.RequestServices.GetRequiredService<RoutingConfig>()
+        let regn            = ctx.RequestServices.GetRequiredService<RoutingAlgorithmRegistration>()
+        let decisionLogger  = ctx.RequestServices.GetRequiredService<IDecisionLogger>()
+        let upstream        = ctx.RequestServices.GetRequiredService<IUpstreamClient>()
+        handler routingConfig regn decisionLogger upstream ctx)) |> ignore
