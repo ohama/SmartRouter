@@ -64,7 +64,7 @@ let tests : Test =
 
                 use sp = services.BuildServiceProvider()
                 let pool = sp.GetRequiredService<PredictionEnginePool<RouteInput, RoutePrediction>>()
-                let classifier = MlNetClassifier(pool) :> SmartRouter.Core.MLPorts.IClassifier
+                let classifier = MlNetClassifier(pool, "router") :> SmartRouter.Core.MLPorts.IClassifier
 
                 // Random 1024-dim input
                 let rng = Random(7)

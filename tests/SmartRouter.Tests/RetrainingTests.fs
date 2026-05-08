@@ -15,6 +15,7 @@ open SmartRouter.Cli.Adapters.DatasetMerger
 open SmartRouter.Cli.Adapters.Retrainer
 open SmartRouter.Cli.Adapters.Validator
 open SmartRouter.Cli.Adapters.ModelVersionProvider
+open SmartRouter.Cli.Adapters.RetrainLock
 open SmartRouter.Cli.Adapters.RetrainingService
 open SmartRouter.Cli.Adapters.ModelBootstrapper   // computeModelVersion
 
@@ -266,7 +267,7 @@ let private test4_concurrentTriggers =
 
                 let provider = ModelVersionProvider("ml-test-initial")
                 let embedder = FakeEmbedder()
-                use service = new RetrainingService(opts, embedder :> IEmbedder, provider :> IModelVersionProvider)
+                use service = new RetrainingService(opts, embedder :> IEmbedder, provider :> IModelVersionProvider, new RetrainLock() :> IRetrainLock)
 
                 // Drive both calls concurrently. With Wait(0), exactly one wins; the other
                 // returns immediately after logging a "skipping" Warning.
@@ -331,7 +332,7 @@ let private test5_throwIsolation =
 
             // First service: throws after 5 embeddings; the cycle MUST fail safely.
             let throwingEmbedder = ThrowingEmbedder(5)
-            use service1 = new RetrainingService(opts, throwingEmbedder :> IEmbedder, provider :> IModelVersionProvider)
+            use service1 = new RetrainingService(opts, throwingEmbedder :> IEmbedder, provider :> IModelVersionProvider, new RetrainLock() :> IRetrainLock)
             // RunNowAsync must NOT throw — internal try/with catches.
             (service1.RunNowAsync(CancellationToken.None)).GetAwaiter().GetResult()
             // Initial version must NOT have been flipped (model write didn't happen).
@@ -340,7 +341,7 @@ let private test5_throwIsolation =
 
             // Second service: working embedder; cycle must succeed.
             let goodEmbedder = FakeEmbedder()
-            use service2 = new RetrainingService(opts, goodEmbedder :> IEmbedder, provider :> IModelVersionProvider)
+            use service2 = new RetrainingService(opts, goodEmbedder :> IEmbedder, provider :> IModelVersionProvider, new RetrainLock() :> IRetrainLock)
             (service2.RunNowAsync(CancellationToken.None)).GetAwaiter().GetResult()
             // Version flipped — Loop A is unaffected by the prior failure.
             Expect.notEqual (provider :> IModelVersionProvider).CurrentVersion "ml-test-initial"
@@ -365,7 +366,7 @@ let private test6_modelVersionFlip =
                 "provider seeded with initial model_version"
 
             let embedder = FakeEmbedder()
-            use service = new RetrainingService(opts, embedder :> IEmbedder, provider)
+            use service = new RetrainingService(opts, embedder :> IEmbedder, provider, new RetrainLock() :> IRetrainLock)
             (service.RunNowAsync(CancellationToken.None)).GetAwaiter().GetResult()
 
             let newVersion = provider.CurrentVersion
@@ -414,7 +415,7 @@ let private test7_countTriggerFires =
 
             let provider = ModelVersionProvider(initialModelVersion) :> IModelVersionProvider
             let embedder = FakeEmbedder()
-            use service = new RetrainingService(opts, embedder :> IEmbedder, provider)
+            use service = new RetrainingService(opts, embedder :> IEmbedder, provider, new RetrainLock() :> IRetrainLock)
 
             // Start via the IHostedService entry point — this is what production runs.
             // Distinct from RunNowAsync which bypasses both timers.
