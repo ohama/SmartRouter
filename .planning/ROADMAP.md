@@ -143,12 +143,15 @@ Plans:
   2. Teacher labeler sends a single `prompt` to 122B with the prompt template from `~/projs/smart-router-distillation/prompts/teacher_prompt.md` and parses the response into a label; verified by integration test against a fake upstream Kestrel that returns canned responses.
   3. Teacher labeler enforces 30s timeout per request, 3x retry on transient failure, daily cost cap (configurable; default 1000 calls/day) — verified by tests that exercise each limit.
   4. `datasets/hard-cases.jsonl` is append-only; concurrent runs don't corrupt it (single-writer file lock); verified by 10-concurrent-runs test.
-**Plans**: TBD
+**Plans**: 6 plans
 
 Plans:
-- [ ] 07-01: Implement `FailureDetector` (read JSONL, filter hard cases) and `TeacherLabeler` (HTTP, timeout, retry, cost cap)
-- [ ] 07-02: Implement `HardCaseDatasetWriter` (append-only JSONL, file lock); embed `prompts/teacher_prompt.md` content as a string constant in `SmartRouter.Cli/Resources/`
-- [ ] 07-03: TeacherTests.fs — fixture-based hard-case extraction, fake-Kestrel teacher labeling integration test, timeout/retry/cost-cap enforcement, concurrent-write safety
+- [ ] 07-01-FOUNDATION-PLAN.md — Core RetrainingPorts.fs + 3 Cli adapter stubs + .fsproj wiring (unblocks Wave 2 parallel adapter implementations)
+- [ ] 07-02-FAILURE-DETECTOR-PLAN.md — FailureDetector real impl (JSONL reader + fallback_used filter + empty-result Information log)
+- [ ] 07-03-TEACHER-LABELER-PLAN.md — TeacherLabeler real impl (named HttpClient + prompt template loader + persistent daily cost cap + ROUTE_35B/ROUTE_122B parser)
+- [ ] 07-04-DATASET-WRITER-PLAN.md — HardCaseDatasetWriter real impl (Channel + BackgroundService + Wait-on-overflow + dedupe HashSet)
+- [ ] 07-05-CLI-WIRING-PLAN.md — CompositionRoot DI registrations + named "teacher" HttpClient with retry handler + Program.fs --retrain CLI handler + appsettings.json + prompts/teacher-prompt.md + scripts/seed-hard-cases.fsx + .gitignore datasets/
+- [ ] 07-06-TESTS-PLAN.md — 3 test files (FailureDetectorTests + TeacherLabelerTests + HardCaseDatasetTests; 15+ tests total) + Tests.fsproj + RouterTests.rootTests
 
 ### Phase 8: Retraining Loop
 **Goal**: Loop B is real. A `BackgroundService` periodically (every hour, or when `hard-cases.jsonl` exceeds 500 entries) reads hard-case dataset + old training set, merges 70/30 with class balance, retrains the ML.NET LR classifier, validates against a held-out set, and writes the new model to `models/router.zip` only if validation passes. `PredictionEnginePool` with `watchForChanges:true` swaps the live classifier atomically; in-flight requests complete on the old model. A `Mutex` ensures only one retrain runs at a time. Failures in Loop B never affect Loop A — `try/with` isolation is mandatory.
