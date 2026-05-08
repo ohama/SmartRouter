@@ -1,11 +1,13 @@
 module SmartRouter.Cli.Program
 
 open Microsoft.AspNetCore.Builder
+open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Options
 open Serilog
 open SmartRouter.Cli.Adapters
+open SmartRouter.Cli.Adapters.CorrelationMiddleware
 open SmartRouter.Cli.Adapters.QueueDispatcher
 open SmartRouter.Cli.CompositionRoot
 open SmartRouter.Cli.Endpoints
@@ -78,6 +80,14 @@ let main args =
                 failwithf
                     "appsettings.json Queue.MaxConcurrent122B must be 1 in v1 (correctness invariant); got %d"
                     queueOpts.MaxConcurrent122B
+
+            // Ensure logs directory exists at startup so DecisionLogWriter never races on first write
+            System.IO.Directory.CreateDirectory("logs/decisions") |> ignore
+
+            // Correlation ID middleware — runs FIRST in the pipeline so every downstream
+            // log line and the JSONL DecisionLog entry carry the same correlation_id.
+            app.Use(System.Func<HttpContext, RequestDelegate, System.Threading.Tasks.Task>(fun ctx next ->
+                CorrelationMiddleware.correlationMiddleware ctx next)) |> ignore
 
             // Serilog request logging middleware
             app.UseSerilogRequestLogging() |> ignore

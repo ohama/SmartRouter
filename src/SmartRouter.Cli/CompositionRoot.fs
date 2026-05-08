@@ -10,6 +10,8 @@ open Serilog
 open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
 open SmartRouter.Core.Routing
+open SmartRouter.Cli.Adapters.DecisionLogger
+open SmartRouter.Cli.Adapters.DecisionLogWriter
 open SmartRouter.Cli.Adapters.QwenUpstreamClient
 open SmartRouter.Cli.Adapters.QueueDispatcher
 
@@ -183,5 +185,28 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
     services.AddSingleton<IStatsProvider>(fun sp ->
         sp.GetRequiredService<QueueDispatcher>() :> IStatsProvider)
         |> ignore
+
+    // Bind DecisionLog options from "DecisionLog" section in appsettings.json.
+    services.Configure<DecisionLogOptions>(config.GetSection("DecisionLog")) |> ignore
+
+    // DecisionLogWriter — concrete singleton.
+    // Same instance exposed as IDecisionLogger (for endpoint injection) AND
+    // IHostedService (for ASP.NET host lifecycle: StartAsync/StopAsync).
+    // DO NOT use three separate AddSingleton<DecisionLogWriter> — that creates three instances.
+    services.AddSingleton<DecisionLogWriter>(fun sp ->
+        let opts = sp.GetRequiredService<IOptions<DecisionLogOptions>>().Value
+        // Defensive defaults if config keys absent or blank
+        let dir = if String.IsNullOrWhiteSpace(opts.Directory) then "logs/decisions" else opts.Directory
+        let cap = if opts.ChannelCapacity <= 0 then 10000 else opts.ChannelCapacity
+        new DecisionLogWriter({ Directory = dir; ChannelCapacity = cap }))
+    |> ignore
+
+    services.AddSingleton<IDecisionLogger>(fun sp ->
+        sp.GetRequiredService<DecisionLogWriter>() :> IDecisionLogger)
+    |> ignore
+
+    services.AddHostedService<DecisionLogWriter>(fun sp ->
+        sp.GetRequiredService<DecisionLogWriter>())
+    |> ignore
 
     services

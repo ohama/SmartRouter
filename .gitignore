@@ -3,3 +3,6 @@ obj/
 .vs/
 *.user
 .DS_Store
+
+# Decision logs — contain hashed prompt data; do not commit
+logs/
