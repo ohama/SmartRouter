@@ -108,12 +108,12 @@ Plans:
   2. Two concurrent identical requests both produce two valid JSON lines (no `IOException`, no interleaved bytes) — verified by a 100-concurrent-requests test that reads the file and counts valid JSON lines.
   3. The same correlation ID appears in stderr Serilog output and the JSONL file for the same request — verified by a test that captures both.
   4. JSONL writer flushes on shutdown (graceful `app.StopAsync`) — no in-flight log loss; verified by start/route/stop/read sequence.
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 05-01: Define `DecisionLog` record + JSONL schema; add `Channel<DecisionLog>` + single-writer background task; integrate `correlation_id` middleware (`HttpContext.Items["CorrelationId"]`)
-- [ ] 05-02: Wire decision logging at all routing exit points (`ChatCompletions.fs`, future fallback paths); add `model_version` to RoutingConfig; update Phase 4's placeholder ML to populate it
-- [ ] 05-03: LoggingTests.fs — concurrency safety (100 concurrent), correlation ID propagation, schema completeness, graceful shutdown flush
+- [ ] 05-01-DECISION-LOG-INFRA-PLAN.md — DecisionLog record + 12-field schema, Channel<DecisionLog> + BackgroundService single-writer with daily UTC rotation, CorrelationMiddleware (HttpContext.Items + Serilog LogContext), DI wiring, .gitignore logs/
+- [ ] 05-02-ENDPOINT-WIRING-PLAN.md — RoutingAlgorithmRegistration record (Algorithm + Name + ModelVersion) replaces Phase-4's bare RoutingAlgorithm singleton; ChatCompletions handler emits DecisionLog at every exit point (UnsupportedTask 400, generic Error 400, Ok success, Ok streaming/non-streaming + cancellation)
+- [ ] 05-03-LOGGING-TESTS-PLAN.md — LoggingTests.fs with 4 testSequenced tests (schema completeness, 100-concurrent thread safety, correlation propagation Serilog↔JSONL, graceful shutdown drain); wire into fsproj + rootTests
 
 ### Phase 6: Real ML Routing
 **Goal**: Replace the placeholder `applyML` with a real classifier: bge-m3 **int8 dynamic-quantized** (1024-dim, multilingual, ~580MB) via `Microsoft.ML.OnnxRuntime` + ML.NET `LbfgsLogisticRegression` loaded from a model file. Same-prompt comparison shows heuristic and ML producing different decisions on the same input — including a Korean prompt where bge-m3's tokenizer-aware multilingual semantics differ from the heuristic's English keyword matcher. The first model file is auto-generated at startup if missing (dummy 1024-dim weights → ~50/50 routing) so the system bootstraps without a pre-trained model.
