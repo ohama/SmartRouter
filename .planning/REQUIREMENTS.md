@@ -105,12 +105,12 @@
 
 ### Embeddings + Classifier (Phase 6)
 
-- [ ] **EMBED-01**: `IEmbedder` port in Core (no NuGet deps); `BgeM3Embedder` adapter in Cli using `Microsoft.ML.OnnxRuntime` + SentencePiece tokenizer (XLM-R compatible); loads **bge-m3 int8 dynamic-quantized** ONNX (~580MB, NOT the 2.3GB FP32 baseline); produces **1024-dim** L2-normalized vectors. **bge-m3 chosen over bge-small** because operator's traffic mixes Korean+English; bge-small's tokenizer cannot handle Hangul (sub-`[UNK]` fallback) per `~/projs/smart-router-distillation/docs/embedding-classifier-decision-deep-dive.md` §1.7.1. **int8 from start** (not as fallback) per §1.7.7 row 4 ("라우터 latency budget 빠듯 → bge-m3 int8 quantized"); accuracy regressions caught downstream by Phase 8 validation gate.
-- [ ] **EMBED-02**: Same prompt produces the same vector across runs (determinism); verified by unit test on three fixed prompts (one English, one Korean, one mixed)
-- [ ] **EMBED-03**: Embedding latency budget — single-prompt embedding completes in <50ms p95 on Mac M-series CPU with int8 quantized bge-m3 (cold-start may exceed; warm path target). If int8 path exceeds budget under load, fallback path is ONNX CoreML execution provider (hardware acceleration on Apple Silicon Neural Engine). Verified by latency benchmark test in `MLRoutingTests.fs` or `LoadTests.fs`
-- [ ] **CLS-01**: `IClassifier` port in Core; `MlNetClassifier` adapter in Cli loading via `Microsoft.Extensions.ML.PredictionEnginePool`; predicts a binary label + confidence given a 1024-dim vector
-- [ ] **CLS-02**: First-run bootstrap — when `models/router.zip` is missing at startup, a dummy model with random weights (1024-dim input) is auto-generated; logged warning explains it's a placeholder; `applyML` does not throw on cold start
-- [ ] **CLS-03**: bge-m3 multilingual embedding is verified via **cosine similarity test** in Phase 6: `cosine(embed("디버깅 도와줘"), embed("debug this")) > 0.7` AND `cosine(embed("F# 컴파일러 에러 분석"), embed("analyze F# compiler error")) > 0.7`. This deterministically proves bge-m3 (not bge-small or random weights) is producing meaningful multilingual vectors — independent of the classifier (which has dummy random weights in Phase 6 until Phase 8 retraining produces real ones). Full routing-decision divergence (heuristic vs ML on Korean prompts) is verified later by Phase 8's validation gate when a trained classifier exists.
+- [x] **EMBED-01**: `IEmbedder` port in Core (no NuGet deps); `BgeM3Embedder` adapter in Cli using `Microsoft.ML.OnnxRuntime` + SentencePiece tokenizer (XLM-R compatible); loads **bge-m3 int8 dynamic-quantized** ONNX (~580MB, NOT the 2.3GB FP32 baseline); produces **1024-dim** L2-normalized vectors. **bge-m3 chosen over bge-small** because operator's traffic mixes Korean+English; bge-small's tokenizer cannot handle Hangul (sub-`[UNK]` fallback) per `~/projs/smart-router-distillation/docs/embedding-classifier-decision-deep-dive.md` §1.7.1. **int8 from start** (not as fallback) per §1.7.7 row 4 ("라우터 latency budget 빠듯 → bge-m3 int8 quantized"); accuracy regressions caught downstream by Phase 8 validation gate.
+- [x] **EMBED-02**: Same prompt produces the same vector across runs (determinism); verified by unit test on three fixed prompts (one English, one Korean, one mixed)
+- [x] **EMBED-03**: Embedding latency budget — single-prompt embedding completes in <50ms p95 on Mac M-series CPU with int8 quantized bge-m3 (cold-start may exceed; warm path target). If int8 path exceeds budget under load, fallback path is ONNX CoreML execution provider (hardware acceleration on Apple Silicon Neural Engine). Verified by latency benchmark test in `MLRoutingTests.fs` or `LoadTests.fs`
+- [x] **CLS-01**: `IClassifier` port in Core; `MlNetClassifier` adapter in Cli loading via `Microsoft.Extensions.ML.PredictionEnginePool`; predicts a binary label + confidence given a 1024-dim vector
+- [x] **CLS-02**: First-run bootstrap — when `models/router.zip` is missing at startup, a dummy model with random weights (1024-dim input) is auto-generated; logged warning explains it's a placeholder; `applyML` does not throw on cold start
+- [x] **CLS-03**: bge-m3 multilingual embedding is verified via **cosine similarity test** in Phase 6: `cosine(embed("디버깅 도와줘"), embed("debug this")) > 0.7` AND `cosine(embed("F# 컴파일러 에러 분석"), embed("analyze F# compiler error")) > 0.7`. This deterministically proves bge-m3 (not bge-small or random weights) is producing meaningful multilingual vectors — independent of the classifier (which has dummy random weights in Phase 6 until Phase 8 retraining produces real ones). Full routing-decision divergence (heuristic vs ML on Korean prompts) is verified later by Phase 8's validation gate when a trained classifier exists.
 
 ### Failure Detection + Teacher Labeling (Phase 7)
 
@@ -250,12 +250,12 @@ Deferred. Tracked but not in current roadmap.
 | LOG-02 | Phase 5 | Complete |
 | LOG-03 | Phase 5 | Complete |
 | LOG-04 | Phase 5 | Complete |
-| EMBED-01 | Phase 6 | Pending |
-| EMBED-02 | Phase 6 | Pending |
-| EMBED-03 | Phase 6 | Pending |
-| CLS-01 | Phase 6 | Pending |
-| CLS-02 | Phase 6 | Pending |
-| CLS-03 | Phase 6 | Pending |
+| EMBED-01 | Phase 6 | Complete |
+| EMBED-02 | Phase 6 | Complete |
+| EMBED-03 | Phase 6 | Complete |
+| CLS-01 | Phase 6 | Complete |
+| CLS-02 | Phase 6 | Complete |
+| CLS-03 | Phase 6 | Complete |
 | FAIL-01 | Phase 7 | Pending |
 | FAIL-02 | Phase 7 | Pending |
 | FAIL-03 | Phase 7 | Pending |
@@ -274,9 +274,9 @@ Deferred. Tracked but not in current roadmap.
 - v1 requirements: 83 total (56 original + 27 ML-arc additions; +1 EMBED-03 for bge-m3 latency)
 - Mapped to phases: 83 ✓
 - Unmapped: 0
-- Complete: 54 (Phases 1-5 ✓ + TEST-01/TEST-02 retroactive)
-- Pending: 29 (17 ML arc remaining: Phases 6-9 + 12 deferred heuristic-cleanup)
+- Complete: 60 (Phases 1-6 ✓ + TEST-01/TEST-02 retroactive)
+- Pending: 23 (11 ML arc remaining: Phases 7-9 + 12 deferred heuristic-cleanup)
 
 ---
 *Requirements defined: 2026-05-07*
-*Last updated: 2026-05-08 after Phase 5 (Routing-Decision Logging) completion — 54 requirements verified Complete*
+*Last updated: 2026-05-08 after Phase 6 (Real ML Routing) completion — 60 requirements verified Complete (Phase 6 EMBED-01/02/03 + CLS-01/02/03; live bge-m3 inference verification approved on automated evidence per operator)*

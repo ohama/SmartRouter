@@ -23,7 +23,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: 122B Concurrency Gate** ✓ — Complete atomic concurrency cluster (CONC-01..06 + REL-05); Graphify concurrent requests are safe when this ships
 - [x] **Phase 4: ML Algorithm Seam** ✓ — Placeholder ML algorithm + config dispatch (`Routing.Algorithm: "heuristic" | "ml"`) + CLI `--routing-algorithm` override; heuristic stays default *until Phase 6 ships real ML* (then flips to "ml"); existing tests stay green; same-shape ML test confirms dispatch. **Heuristic soft-paused 2026-05-08; ML is primary path going forward.**
 - [x] **Phase 5: Routing-Decision Logging** ✓ — Per-request structured JSONL log with routing reason, latency, model_version, fallback flag, correlation ID; thread-safe writer; absorbs OBS-01 and OBS-03 from old Phase 5 — this is Loop B's input
-- [ ] **Phase 6: Real ML Routing** — `Microsoft.ML.OnnxRuntime` + bge-m3 **int8 dynamic-quantized** (~580MB, 1024-dim, multilingual; chosen over bge-small for Korean+English mixed traffic; quantized from start per §1.7.7 row 4) + ML.NET `LbfgsLogisticRegression` + replace placeholder; first model file auto-generated on first run; latency budget <50ms p95 (CoreML EP fallback if exceeded under load)
+- [x] **Phase 6: Real ML Routing** ✓ — `Microsoft.ML.OnnxRuntime` + bge-m3 **int8 dynamic-quantized** (~580MB, 1024-dim, multilingual; chosen over bge-small for Korean+English mixed traffic; quantized from start per §1.7.7 row 4) + ML.NET `LbfgsLogisticRegression` + replace placeholder; first model file auto-generated on first run; latency budget <50ms p95 (CoreML EP fallback if exceeded under load)
 - [ ] **Phase 7: Failure Detection + Teacher Labeling** — Failure detector (fallback-used + error + short-response + low-confidence signals); teacher labeler (HTTP to 122B with timeout/retry/cost cap, `prompts/teacher_prompt.md`); hard-case dataset extraction
 - [ ] **Phase 8: Retraining Loop** — Dataset merger (old 70 + new 30 with class balance); ML.NET trainer; held-out validator with rollback gate; `BackgroundService` + `PeriodicTimer`; `PredictionEnginePool` + `watchForChanges:true` for atomic hot-reload; idempotency lock
 - [ ] **Phase 9: Canary Deployment** — `Microsoft.FeatureManagement` + `PercentageFilter` for 10/90 split; `model_version` cohort tagging in logs; comparison + rollout/rollback workflow
@@ -130,9 +130,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 06-01-CORE-PORTS-AND-NUGET-PLAN.md — Core MLPorts.fs (IEmbedder + IClassifier + ClassifierPrediction); RoutingConfig.MlThreshold field; ML.fs makeApplyML closure factory (legacy applyML retained as wave-1 boundary); Cli .fsproj 4 NuGet pins (Microsoft.ML.OnnxRuntime 1.25.1, Microsoft.ML.Tokenizers 2.0.0, Microsoft.ML 5.0.0, Microsoft.Extensions.ML 5.0.0); .gitignore models/; scripts/download-models.sh (huggingface-cli Teradata/bge-m3) + scripts/export-bge-m3-int8.sh (optimum-cli + quantize_dynamic)
-- [ ] 06-02-CLI-ADAPTERS-AND-DI-PLAN.md — Adapters/BgeM3Embedder.fs (ONNX + SentencePiece + mean-pool + L2; warm-up at construction) + Adapters/MlNetClassifier.fs (PredictionEnginePool watchForChanges:true) + Adapters/ModelBootstrapper.fs (ensureEmbeddingFilesPresent + ensureDummyModel + computeModelVersion); CompositionRoot ml-branch wiring; Routing.ML appsettings section + RoutingOptions binding; legacy applyML removed from Core/ML.fs; **Routing.Algorithm default flipped to "ml" as the LAST edit of the plan**
-- [ ] 06-03-ML-TESTS-PLAN.md — MLEmbeddingTests.fs (EMBED-01 dim+L2-norm, EMBED-02 determinism, CLS-03 ko↔en cosine > 0.7, EMBED-03 p95 < 50ms warm) + MLClassifierTests.fs (CLS-01 pool predict, CLS-02 bootstrap idempotent + hash 8 hex chars) + MLRoutingTests +2 tests (model_version = ml-{8hex}, DI smoke); ptestCase-gated when embedding files absent (fresh clone passes dotnet test)
+- [x] 06-01-CORE-PORTS-AND-NUGET-PLAN.md ✓ — Core MLPorts.fs (IEmbedder + IClassifier + ClassifierPrediction); RoutingConfig.MlThreshold field; ML.fs makeApplyML closure factory; Cli .fsproj 4 NuGet pins (Microsoft.ML.OnnxRuntime 1.25.1, Microsoft.ML.Tokenizers 2.0.0, Microsoft.ML 5.0.0, Microsoft.Extensions.ML 5.0.0); .gitignore models/; scripts/download-models.sh + scripts/export-bge-m3-int8.sh
+- [x] 06-02-CLI-ADAPTERS-AND-DI-PLAN.md ✓ — Adapters/BgeM3Embedder.fs (ONNX + SentencePiece + mean-pool + L2 normalize; warm-up) + MlNetClassifier.fs (PredictionEnginePool watchForChanges:true) + ModelBootstrapper.fs (ensureEmbeddingFilesPresent + ensureDummyModel + computeModelVersion); CompositionRoot strict ordering; Routing.ML appsettings section; legacy applyML removed; **Routing.Algorithm flipped to "ml" as last edit**
+- [x] 06-03-ML-TESTS-PLAN.md ✓ — MLEmbeddingTests.fs (EMBED-01/02/03 + CLS-03 cosine) + MLClassifierTests.fs (CLS-01 pool predict + CLS-02 bootstrap + model_version hash) + MLRoutingTests +2 tests; mlTestCase-gated; default `dotnet test` reports 50 pass + 10 ignored without model files
 
 ### Phase 7: Failure Detection + Teacher Labeling
 **Goal**: Build the offline data pipeline that produces labeled training samples from production logs. Failure detector reads JSONL logs and emits hard cases (currently: `fallback_used=true` only — Phase 10 expands signals). Teacher labeler calls 122B (or Claude) per hard case and produces `(prompt, label)` pairs with timeout, retry, and a daily cost cap. Hard-case dataset is appended to `datasets/hard-cases.jsonl`. This phase produces no behavior change at request time — it's prep for Phase 8's retraining loop.
@@ -232,7 +232,7 @@ Phases execute in numeric order: 1 → 2 → 3 → **(ML arc)** 4 → 5 → 6 �
 | 3. 122B Concurrency Gate | 3/3 | ✓ Complete | 2026-05-08 |
 | 4. ML Algorithm Seam | 3/3 | ✓ Complete | 2026-05-08 |
 | 5. Routing-Decision Logging | 3/3 | ✓ Complete | 2026-05-08 |
-| 6. Real ML Routing | 0/3 | Not started | - |
+| 6. Real ML Routing | 3/3 | ✓ Complete | 2026-05-08 |
 | 7. Failure Detection + Teacher Labeling | 0/3 | Not started | - |
 | 8. Retraining Loop | 0/3 | Not started | - |
 | 9. Canary Deployment | 0/3 | Not started | - |
