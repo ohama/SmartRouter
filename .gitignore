@@ -10,3 +10,6 @@ logs/
 # ML model files — too large to commit (~580MB ONNX + auto-generated router.zip)
 # Operators run scripts/download-models.sh once, then routing works locally.
 models/
+
+# Hard-case training datasets — operator-curated, may contain prompt text; do not commit
+datasets/

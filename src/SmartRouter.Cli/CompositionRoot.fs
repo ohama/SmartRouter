@@ -20,6 +20,13 @@ open SmartRouter.Cli.Adapters.ModelBootstrapper
 open SmartRouter.Cli.Adapters.RoutingAlgorithm
 open SmartRouter.Cli.Adapters.QwenUpstreamClient
 open SmartRouter.Cli.Adapters.QueueDispatcher
+open Microsoft.Extensions.Http.Resilience
+open Polly
+open Polly.Retry
+open SmartRouter.Core.RetrainingPorts
+open SmartRouter.Cli.Adapters.FailureDetector
+open SmartRouter.Cli.Adapters.TeacherLabeler
+open SmartRouter.Cli.Adapters.HardCaseDatasetWriter
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -288,6 +295,99 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
 
     services.AddHostedService<DecisionLogWriter>(fun sp ->
         sp.GetRequiredService<DecisionLogWriter>())
+    |> ignore
+
+    // ── Phase 7: Failure detection + teacher labeling ─────────────────────────
+    services.Configure<TeacherLabelerOptions>(config.GetSection("TeacherLabeler")) |> ignore
+    services.Configure<HardCaseDatasetOptions>(config.GetSection("HardCaseDataset")) |> ignore
+
+    // Named HttpClient "teacher" — independent of the QueueDispatcher-gated upstream clients.
+    // Routing teacher calls through QueueDispatcher would starve real inference traffic
+    // of the 122B SemaphoreSlim(1) slot (Pitfall 5 from RESEARCH.md).
+    //
+    // Resilience handler: 3 retry attempts, exponential 1s/2s/4s, transient errors only.
+    // HttpClient.Timeout = TeacherLabeler:TimeoutSeconds (default 30s) — applied per attempt.
+    services.AddHttpClient("teacher", fun (c: System.Net.Http.HttpClient) ->
+        let opts = config.GetSection("TeacherLabeler").Get<TeacherLabelerOptions>()
+        let endpoint = if String.IsNullOrWhiteSpace(opts.Endpoint) then "http://127.0.0.1:8001" else opts.Endpoint
+        let timeoutSec = if opts.TimeoutSeconds <= 0 then 30 else opts.TimeoutSeconds
+        c.BaseAddress <- Uri(endpoint)
+        c.Timeout     <- TimeSpan.FromSeconds(float timeoutSec))
+        .AddResilienceHandler("teacher-pipeline", fun (builder: Polly.ResiliencePipelineBuilder<System.Net.Http.HttpResponseMessage>) ->
+            // Use AddResilienceHandler (NOT AddStandardResilienceHandler) so we can
+            // make the 4xx-skip explicit per FAIL-02 ("transient errors only").
+            // RESEARCH.md Pattern 5 — explicit ShouldHandle predicate:
+            //   - HttpRequestException → retry (transport errors)
+            //   - TaskCanceledException → retry (timeout / per-attempt cancellation)
+            //   - 5xx HTTP responses   → retry
+            //   - 4xx HTTP responses   → DO NOT retry (logic errors; teacher-side rejection)
+            //   - any other exception  → do not retry (fail fast)
+            let opts = config.GetSection("TeacherLabeler").Get<TeacherLabelerOptions>()
+            let timeoutSec = if opts.TimeoutSeconds <= 0 then 30 else opts.TimeoutSeconds
+            let retryOpts = HttpRetryStrategyOptions()
+            retryOpts.MaxRetryAttempts <- 3
+            retryOpts.BackoffType      <- DelayBackoffType.Exponential
+            retryOpts.Delay            <- TimeSpan.FromSeconds(1.0)
+            retryOpts.ShouldHandle     <-
+                Func<RetryPredicateArguments<System.Net.Http.HttpResponseMessage>, System.Threading.Tasks.ValueTask<bool>>(
+                    fun args ->
+                        let retry =
+                            match args.Outcome.Exception with
+                            | :? System.Net.Http.HttpRequestException -> true
+                            | :? System.Threading.Tasks.TaskCanceledException -> true
+                            | null ->
+                                let resp = args.Outcome.Result
+                                not (isNull resp) && int resp.StatusCode >= 500
+                            | _ -> false
+                        System.Threading.Tasks.ValueTask.FromResult(retry))
+            builder.AddRetry(retryOpts) |> ignore
+            builder.AddTimeout(TimeSpan.FromSeconds(float timeoutSec)) |> ignore)
+        |> ignore
+
+    // FailureDetector — reads from the same logs/decisions/ directory as DecisionLogWriter writes to.
+    services.AddSingleton<FailureDetector>(fun sp ->
+        let opts = sp.GetRequiredService<IOptions<DecisionLogOptions>>().Value
+        let dir = if String.IsNullOrWhiteSpace(opts.Directory) then "logs/decisions" else opts.Directory
+        FailureDetector(dir))
+    |> ignore
+
+    services.AddSingleton<IFailureDetector>(fun sp ->
+        sp.GetRequiredService<FailureDetector>() :> IFailureDetector)
+    |> ignore
+
+    // TeacherLabeler — uses IHttpClientFactory + named "teacher" client (registered above).
+    services.AddSingleton<TeacherLabeler>(fun sp ->
+        let opts = sp.GetRequiredService<IOptions<TeacherLabelerOptions>>().Value
+        // Defensive defaults if config absent
+        let normalized =
+            { Endpoint        = if String.IsNullOrWhiteSpace(opts.Endpoint)    then "http://127.0.0.1:8001"         else opts.Endpoint
+              PromptPath      = if String.IsNullOrWhiteSpace(opts.PromptPath)  then "prompts/teacher-prompt.md"     else opts.PromptPath
+              DailyCallCap    = if opts.DailyCallCap   <= 0                    then 1000                            else opts.DailyCallCap
+              TimeoutSeconds  = if opts.TimeoutSeconds <= 0                    then 30                              else opts.TimeoutSeconds
+              DatasetsDir     = if String.IsNullOrWhiteSpace(opts.DatasetsDir) then "datasets"                      else opts.DatasetsDir }
+        TeacherLabeler(sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(), normalized))
+    |> ignore
+
+    services.AddSingleton<ITeacherLabeler>(fun sp ->
+        sp.GetRequiredService<TeacherLabeler>() :> ITeacherLabeler)
+    |> ignore
+
+    // HardCaseDatasetWriter — concrete singleton + IHardCaseDatasetWriter alias + AddHostedService.
+    // Same instance for all three roles (DO NOT use three separate AddSingleton<HardCaseDatasetWriter>
+    // — that creates three instances, each with its own Channel and BackgroundService loop).
+    services.AddSingleton<HardCaseDatasetWriter>(fun sp ->
+        let opts = sp.GetRequiredService<IOptions<HardCaseDatasetOptions>>().Value
+        let p   = if String.IsNullOrWhiteSpace(opts.Path) then "datasets/hard-cases.jsonl" else opts.Path
+        let cap = if opts.ChannelCapacity <= 0 then 1000 else opts.ChannelCapacity
+        new HardCaseDatasetWriter({ Path = p; ChannelCapacity = cap }))
+    |> ignore
+
+    services.AddSingleton<IHardCaseDatasetWriter>(fun sp ->
+        sp.GetRequiredService<HardCaseDatasetWriter>() :> IHardCaseDatasetWriter)
+    |> ignore
+
+    services.AddHostedService<HardCaseDatasetWriter>(fun sp ->
+        sp.GetRequiredService<HardCaseDatasetWriter>())
     |> ignore
 
     services
