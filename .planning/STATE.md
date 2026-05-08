@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 ## Current Position
 
 Phase: 5 of 11 (Routing Decision Logging) — In progress
-Plan: 1 of 3 in current phase — COMPLETE ✓
-Status: Phase 5 plan 1 complete. Decision-log infrastructure landed: 12-field DecisionLog record, Channel BackgroundService writer, correlationMiddleware FIRST in pipeline, DI registrations. 44/44 tests pass (0 warnings). Ready for 05-02 endpoint wiring.
-Last activity: 2026-05-08 — Completed 05-01-DECISION-LOG-INFRA-PLAN.md
+Plan: 2 of 3 in current phase — COMPLETE ✓
+Status: Phase 5 plan 2 complete. RoutingAlgorithmRegistration record + 8 decisionLogger.Log call sites at every ChatCompletions exit point + SSE error correlation_id wired. 44/44 tests pass (0 warnings). Ready for 05-03 integration tests + StreamingTests temp-dir hygiene.
+Last activity: 2026-05-08 — Completed 05-02-ENDPOINT-WIRING-PLAN.md
 
-Progress: [█████░░░░░░░░░░░░░░░░░░] 12 of ~30 plans (phase 5 plan 1 done)
+Progress: [█████░░░░░░░░░░░░░░░░░░] 13 of ~30 plans (phase 5 plan 2 done)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 1 decision-logging)
+- Total plans completed: 13 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 2 decision-logging)
 - Average duration: ~7 min
 - Total execution time: ~50 min
 
@@ -31,10 +31,10 @@ Progress: [█████░░░░░░░░░░░░░░░░░░
 | 02-sse-streaming-pass-through | 2/2 | ~24 min | 12 min |
 | 03-122b-concurrency-gate | 3/3 | ~53 min | 18 min |
 | 04-ml-algorithm-seam | 3/3 | ~21 min | 7 min |
-| 05-routing-decision-logging | 1/3 | ~8 min | 8 min |
+| 05-routing-decision-logging | 2/3 | ~14 min | 7 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-01 (~3 min), 04-02 (~15 min), 04-03 (~3 min), 05-01 (~8 min)
+- Last 5 plans: 04-02 (~15 min), 04-03 (~3 min), 05-01 (~8 min), 05-02 (~6 min)
 - Trend: Cli/integration plans take longer; Core + test-only plans very fast (~3 min)
 
 *Updated after each plan completion*
@@ -88,6 +88,10 @@ Recent decisions affecting current work:
 - 05-01: app.Use requires explicit Func<HttpContext, RequestDelegate, Task> cast for F# lambda — without it the compiler infers incorrect arity
 - 05-01: new DecisionLogWriter(...) required — BackgroundService implements IDisposable; F# FS0760 enforces new Type(...) syntax when used as a value (not a constructor call in a let binding)
 - 05-01: JsonFSharpConverter() accessed via open System.Text.Json.Serialization (not FSharp.SystemTextJson prefix) — consistent with existing Json.fs pattern
+- 05-02: RoutingAlgorithmRegistration lives in its own Adapters/RoutingAlgorithm.fs file (not in CompositionRoot.fs) so ChatCompletions.fs (compile pos 14) can open it without F# compile-order violation — CompositionRoot.fs is at compile pos 16
+- 05-02: streamError mutable flag in streaming branch tracks whether the Error arm fired during the enumerator loop so the normal-exit disposal path can append ;stream_error to the reason without a second try/with
+- 05-02: escapeJsonString private helper in ChatCompletions.fs prevents JSON injection when upstream error messages contain quotes/newlines in SSE error event bodies
+- 05-02: Streaming path logs AFTER enumerator.DisposeAsync() in all 3 try/with arms so latency_ms reflects time-to-last-byte (LOG-01)
 
 ### Pending Todos
 
@@ -101,6 +105,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T06:04:59Z
-Stopped at: Completed 05-01-DECISION-LOG-INFRA-PLAN.md — Phase 5 plan 1 complete; 44/44 tests pass (0 warnings); check-no-async.sh + check-routing-isolation.sh both exit 0; correlationMiddleware FIRST in pipeline; DecisionLogWriter BackgroundService wired
+Last session: 2026-05-08T06:14:07Z
+Stopped at: Completed 05-02-ENDPOINT-WIRING-PLAN.md — Phase 5 plan 2 complete; RoutingAlgorithmRegistration + 8 decisionLogger.Log call sites + SSE error correlation_id; 44/44 tests pass (0 warnings); check scripts pass; smoke test JSONL 12 fields confirmed
 Resume file: None
