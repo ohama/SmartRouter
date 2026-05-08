@@ -26,7 +26,7 @@ let private mkReq (task: string option) (model: string option) (content: string)
 
 /// Convenience: route with the default config. Every test in this suite uses this
 /// unless it's specifically testing config-driven behavior.
-let private route req = routeRequest defaultConfig Heuristic.applyHeuristic req
+let private route req = routeRequest defaultConfig applyHeuristic req
 
 let tests =
     testList "routing" [
@@ -168,7 +168,7 @@ let tests =
                 { defaultConfig with
                     TaskTable = defaultConfig.TaskTable |> Map.add "retrieval" (Qwen122B, Low) }
             let req = mkReq (Some "retrieval") None "x" 1
-            match routeRequest edited Heuristic.applyHeuristic req with
+            match routeRequest edited applyHeuristic req with
             | Ok d ->
                 Expect.equal d.Target Qwen122B "retrieval should now route to 122B per edited config"
                 match d.Reason with
@@ -179,14 +179,14 @@ let tests =
         testCase "config-driven threshold: lowering threshold to 1 promotes a single keyword to 122B" <| fun () ->
             let edited = { defaultConfig with ComplexityThreshold = 1 }
             let req = mkReq None None "recursive" 1   // 1 keyword → score 1
-            match routeRequest edited Heuristic.applyHeuristic req with
+            match routeRequest edited applyHeuristic req with
             | Ok d -> Expect.equal d.Target Qwen122B "score >= threshold(1) should escalate"
             | Error e -> failtestf "expected Ok, got %A" e
 
         testCase "config-driven keywords: empty keyword list neutralizes heuristic" <| fun () ->
             let edited = { defaultConfig with Keywords = [] }
             let req = mkReq None None "recursive compiler architecture dependency" 1
-            match routeRequest edited Heuristic.applyHeuristic req with
+            match routeRequest edited applyHeuristic req with
             | Ok d -> Expect.equal d.Target Qwen35B "no keyword hits → score 0 → 35B"
             | Error e -> failtestf "expected Ok, got %A" e
 

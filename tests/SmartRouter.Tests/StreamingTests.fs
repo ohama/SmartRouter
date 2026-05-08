@@ -118,6 +118,7 @@ let startTestRouter (fakePort: int) : Task<WebApplication * int> =
                 KeyValuePair("Upstreams:Model35B",  sprintf "http://127.0.0.1:%d" fakePort)
                 KeyValuePair("Upstreams:Model122B", sprintf "http://127.0.0.1:%d" fakePort)
                 // Routing section — required for buildRoutingConfig + validateConfig to succeed
+                KeyValuePair("Routing:Algorithm",            "heuristic")
                 KeyValuePair("Routing:ComplexityThreshold", "3")
                 KeyValuePair("Routing:TimeoutSeconds",       "300")
                 KeyValuePair("Routing:Keywords:0",           "recursive")

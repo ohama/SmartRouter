@@ -1,6 +1,7 @@
 module SmartRouter.Cli.Program
 
 open Microsoft.AspNetCore.Builder
+open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Options
 open Serilog
@@ -21,6 +22,44 @@ let main args =
 
             // Wire Serilog as the ASP.NET host logger
             builder.Host.UseSerilog() |> ignore
+
+            // Parse --routing-algorithm CLI flag (last-wins). Supports:
+            //   --routing-algorithm=ml        (equals form)
+            //   --routing-algorithm ml        (space form)
+            // Reject empty/invalid values at startup before any service registration.
+            let routingAlgorithmOverride : string option =
+                args
+                |> Array.tryFindIndexBack (fun a ->
+                    a = "--routing-algorithm" || a.StartsWith("--routing-algorithm="))
+                |> Option.map (fun idx ->
+                    let arg = args.[idx]
+                    if arg.StartsWith("--routing-algorithm=") then
+                        let v = arg.["--routing-algorithm=".Length..]
+                        if v = "" then
+                            failwith "--routing-algorithm= requires a value (heuristic or ml)"
+                        v
+                    elif idx + 1 < args.Length then
+                        let v = args.[idx + 1]
+                        if v.StartsWith("--") then
+                            failwith "--routing-algorithm requires a value (heuristic or ml)"
+                        v
+                    else
+                        failwith "--routing-algorithm requires a value (heuristic or ml)")
+
+            // Validate the value and inject into configuration BEFORE configureServices.
+            match routingAlgorithmOverride with
+            | None -> ()
+            | Some v ->
+                match v with
+                | "heuristic" | "ml" -> ()
+                | other ->
+                    failwithf
+                        "--routing-algorithm=%s is invalid; valid values: heuristic, ml"
+                        other
+                (builder.Configuration :> IConfigurationBuilder)
+                    .AddInMemoryCollection(
+                        dict [ "Routing:Algorithm", v ])
+                |> ignore
 
             // Register all DI services: named HttpClients, IUpstreamClient, RoutingConfig
             CompositionRoot.configureServices builder.Services builder.Configuration
