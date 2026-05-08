@@ -179,7 +179,13 @@ type IModelVersionProvider =
 
 **Cli `ModelVersionProvider`** gets a second `mutable canary` field with the same `lock gate (...)` pattern. **Same instance** services both — no new DI registrations needed beyond what Phase 8 already wired (the existing concrete + interface alias double-reg covers both).
 
-**Initial value:** `CanaryVersion = ""` at construction. `CanaryService` computes it on canary file detection (file watcher event or startup scan): `sprintf "ml-%s-canary" (computeModelVersion mlOpts.CanaryModelPath)`.
+**Initial value:** `CanaryVersion = ""` at construction. `CanaryService` computes it on canary file detection: `sprintf "ml-%s-canary" (computeModelVersion canaryModelPath)`.
+
+**Detection mechanism:** `CanaryService` implements `IHostedService` and owns a `FileSystemWatcher` rooted at `Path.GetDirectoryName(canaryModelPath)` with filter `Path.GetFileName(canaryModelPath)`. On `Created` / `Changed` / `Deleted` / `Renamed` events, the watcher handler recomputes `computeModelVersion canaryModelPath` if the file exists (and calls `versionProvider.UpdateCanary(v)`) or clears it (and calls `versionProvider.UpdateCanary("")`). The handler also fires once at `StartAsync` so initial state reflects the file as it was at boot. `StopAsync` disposes the watcher inside try/with.
+
+**Why a watcher (not just a startup scan):** the router boots BEFORE the operator copies `router-canary.zip` into place (Plan-09-CONTEXT step `cp candidate.zip models/router-canary.zip` is post-boot). Without the watcher, `GET /canary` would return `canary_model_version: ""` until restart or `POST /canary/promote`. The watcher closes the lag. Pattern: identical to `PredictionEnginePool.FromFile(..., watchForChanges = true)` (Phase 8 Lock 11) but at our application layer — independent of ML.NET's internal file watcher.
+
+**DI:** `CanaryService` is triple-registered — `AddSingleton<CanaryService>` + `AddSingleton<ICanaryService>` (alias) + `AddHostedService<CanaryService>(sp -> sp.GetRequiredService<CanaryService>())`. The third registration is what gives the .NET host control of `StartAsync` / `StopAsync` (so the watcher is armed at boot and disposed on shutdown).
 
 ---
 
@@ -192,7 +198,7 @@ type IModelVersionProvider =
 | `ICanaryState` | Double-reg (concrete + interface) | CanaryService updates concrete; ICanaryState consumed by gate + watchdog + endpoint |
 | `ICanaryMetrics` | Double-reg (concrete + interface) | ChatCompletions records via interface; CanaryWatchdog reads via interface; concrete only for testing/diagnostics |
 | `CanaryWatchdog` | Triple-reg (concrete + AddHostedService) | BackgroundService — same pattern as RetrainingService (Phase 8 §08-02 Plan task 3 lock) |
-| `CanaryService` | Double-reg (concrete + interface) | Endpoint resolves via interface; tests resolve via concrete for direct method invocation |
+| `CanaryService` | Triple-reg (concrete + ICanaryService + IHostedService) | Endpoint resolves via interface; tests resolve via concrete for direct method invocation; host drives Start/Stop for FileSystemWatcher lifecycle (see Lock 9) |
 | `IHttpContextAccessor` | `services.AddHttpContextAccessor()` | Required by `WithTargeting<T>()` per RESEARCH §1.4 |
 | `CanaryTargetingContextAccessor` | Single-reg as `ITargetingContextAccessor` (Microsoft FM contract) | Resolved by FeatureManagement library internally |
 
