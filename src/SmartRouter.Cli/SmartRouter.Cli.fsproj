@@ -22,6 +22,10 @@
     <Compile Include="Adapters/FailureDetector.fs" />
     <Compile Include="Adapters/TeacherLabeler.fs" />
     <Compile Include="Adapters/HardCaseDatasetWriter.fs" />
+    <!-- Phase 8 — Retraining loop foundation -->
+    <Compile Include="Adapters/Retrainer.fs" />
+    <Compile Include="Adapters/DatasetMerger.fs" />
+    <Compile Include="Adapters/Validator.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />
     <Compile Include="Endpoints/Stats.fs" />
     <Compile Include="CompositionRoot.fs" />
