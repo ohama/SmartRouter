@@ -18,6 +18,7 @@ let rootTests : Test list =
         SmartRouter.Tests.QueueTests.tests
         SmartRouter.Tests.LoadTests.tests   // pending tests, skipped by default
         SmartRouter.Tests.MLRoutingTests.tests
+        SmartRouter.Tests.LoggingTests.tests
     ]
 
 [<EntryPoint>]

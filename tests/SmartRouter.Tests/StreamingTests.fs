@@ -18,6 +18,15 @@ open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Primitives
 open Expecto
 
+// ── Per-process temp dir for streaming test JSONL output ─────────────────────
+// Prevents DecisionLogWriter from writing into bin/Debug/net10.0/logs/decisions/
+// during streaming test runs.  OS temp cleanup handles removal on process exit.
+
+let private streamingTestsLogDir =
+    let dir = Path.Combine(Path.GetTempPath(), "smart-router-streaming-" + Path.GetRandomFileName())
+    Directory.CreateDirectory(dir) |> ignore
+    dir
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Spin up a fake upstream Kestrel server on http://127.0.0.1:0 (OS-assigned port).
@@ -146,6 +155,10 @@ let startTestRouter (fakePort: int) : Task<WebApplication * int> =
                 KeyValuePair("Queue:FairnessK",                "10")
                 KeyValuePair("Queue:MaxConcurrent122B",        "1")
                 KeyValuePair("Queue:PerRequestTimeoutSeconds", "300")
+                // DecisionLog — redirect JSONL output to a per-process temp dir
+                // so streaming tests don't pollute bin/Debug/net10.0/logs/decisions/
+                KeyValuePair("DecisionLog:Directory",       streamingTestsLogDir)
+                KeyValuePair("DecisionLog:ChannelCapacity", "10000")
             ])
         |> ignore
 
