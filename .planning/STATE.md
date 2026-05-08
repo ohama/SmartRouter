@@ -5,22 +5,22 @@
 See: .planning/PROJECT.md (updated 2026-05-07)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 3 — 122B Concurrency Gate (next; Phase 2 verified Complete)
+**Current focus:** Phase 4 — Health Probing + graph_indexing no-fallback rule (Phase 3 complete)
 
 ## Current Position
 
-Phase: 3 of 6 (122B Concurrency Gate) — In progress
-Plan: 2 of 3 in current phase — COMPLETE ✓
-Status: Plan 03-02 complete — GET /stats endpoint live; 9 QueueTests pass (39 total); all PITFALL mitigations proven
-Last activity: 2026-05-08 — Completed 03-02-STATS-AND-QUEUE-TESTS-PLAN.md
-Next: Plan 03-03 — Load tests (TEST-06, deferred from 03-02)
+Phase: 3 of 6 (122B Concurrency Gate) — COMPLETE ✓
+Plan: 3 of 3 in current phase — COMPLETE ✓
+Status: Plan 03-03 complete — Load tests (TEST-06) shipped; 39 passed, 2 ignored (pending), 0 failed
+Last activity: 2026-05-08 — Completed 03-03-LOAD-TESTS-PLAN.md
+Next: Phase 4 — Health probing + graph_indexing no-fallback rule
 
-Progress: [███████░░░] ~41% (7 of ~17 plans estimated)
+Progress: [████████░░] ~47% (8 of ~17 plans estimated)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
+- Total plans completed: 8 (3 foundation + 2 streaming + 3 concurrency-gate)
 - Average duration: ~7 min
 - Total execution time: ~21 min
 
@@ -30,11 +30,11 @@ Progress: [███████░░░] ~41% (7 of ~17 plans estimated)
 |-------|-------|-------|----------|
 | 01-foundation | 3/3 | ~21 min | 7 min |
 | 02-sse-streaming-pass-through | 2/2 | ~24 min | 12 min |
-| 03-122b-concurrency-gate | 2/3 | ~50 min | 25 min |
+| 03-122b-concurrency-gate | 3/3 | ~53 min | 18 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-01 (18 min), 02-02 (6 min), 03-01 (15 min), 03-02 (~35 min)
-- Trend: 03-02 was large due to 9 test cases with complex concurrency semantics and 3 test design bugs auto-fixed
+- Last 5 plans: 02-02 (6 min), 03-01 (15 min), 03-02 (~35 min), 03-03 (~3 min)
+- Trend: 03-03 was fast (single task, plan code nearly complete; 1 bug auto-fix)
 
 *Updated after each plan completion*
 
@@ -72,6 +72,8 @@ Recent decisions affecting current work:
 - 03-02: StatsWire is a separate private record with snake_case fields (not StatsSnapshot) — F# records serialize as PascalCase by default; StatsWire fields are lowercase and emit correctly via jsonOptions
 - 03-02: QueueDepth is always transient in the dispatcher — dispatcher dequeues a ticket within microseconds of signal.Release() and blocks on sem.WaitAsync; QueueDepth=N assertions in polls race the dispatcher; use Active122B + SemaphoreAvailable + fake.CallCount as stable observables instead
 - 03-02: Test 3 PITFALL-10 proof uses LatencyFake not FakeUpstreamClient — gate-per-call would require knowing the correct drain order before the test runs (circular dependency); LatencyFake auto-completes and lets WhenAll observe the completion order vector
+- 03-03: LatencyFakeLoad re-declared private in LoadTests.fs (not imported from QueueTests) — avoids cross-module coupling; Task.Run lambda cast to :> Task to resolve FS0041 overload ambiguity for Task<Result<_,_>> return type
+- 03-03: ptestCaseAsync chosen over env-var gate — Expecto pending is idiomatic and tooling-friendly; default run reports "2 ignored" (not "0 run")
 
 ### Pending Todos
 
@@ -85,6 +87,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T01:46:09Z
-Stopped at: Completed 03-02-STATS-AND-QUEUE-TESTS-PLAN.md — GET /stats live; 39/39 tests pass; all PITFALL mitigations proven
+Last session: 2026-05-08T01:52:40Z
+Stopped at: Completed 03-03-LOAD-TESTS-PLAN.md — Phase 3 complete; 39/39 pass, 2 ignored (load tests pending); TEST-06 satisfied
 Resume file: None
