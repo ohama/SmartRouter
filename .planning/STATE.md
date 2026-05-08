@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 
 ## Current Position
 
-Phase: 6 of 11 (Real ML Routing) — COMPLETE ✓
-Plan: 3 of 3 in current phase — COMPLETE ✓
-Status: Phase 6 complete. All 6 REQ-IDs (EMBED-01/02/03, CLS-01/02/03) covered by test suite. MLEmbeddingTests.fs + MLClassifierTests.fs shipped. MLRoutingTests +2 Phase 6 tests (model_version hash format + DI smoke). 50 pass + 10 ignored when model files absent (0 failures). CLS-03 cosine + EMBED-03 latency pending model download.
-Last activity: 2026-05-08 — Completed 06-03-ML-TESTS-PLAN.md
+Phase: 7 of 11 (Failure Detection + Teacher Labeling) — In progress
+Plan: 1 of 6 in current phase — COMPLETE ✓
+Status: Phase 7 Plan 1 complete. Core/RetrainingPorts.fs (BCL-only: IFailureDetector/ITeacherLabeler/IHardCaseDatasetWriter + 4 supporting types). Three Cli adapter stubs (FailureDetector.fs, TeacherLabeler.fs, HardCaseDatasetWriter.fs) with NotImplementedException bodies. Both .fsproj files updated. Build: 0 errors, 0 warnings. Tests: 50 pass + 10 ignored (Phase 6 baseline unchanged). Wave 2 plans (07-02/03/04) unblocked for parallel execution.
+Last activity: 2026-05-08 — Completed 07-01-FOUNDATION-PLAN.md
 
-Progress: [█████████░░░░░░░░░░░░░░] 17 of ~30 plans (phase 6 complete)
+Progress: [█████████░░░░░░░░░░░░░░] 18 of ~36 plans (phase 7 in progress — 1/6 done)
 
 ## Performance Metrics
 
@@ -107,6 +107,10 @@ Recent decisions affecting current work:
 - 06-03: Expect.isNotNull on F# interfaces requires box cast (Expect.isNotNull (box iface)) — F# interfaces are non-nullable in .NET 10; plain isNotNull fails with FS0001
 - 06-03: mlTestCase (ptestCase-based) for tests that directly construct BgeM3Embedder; skiptest (runtime guard) for tests calling configureServices — DI throws at registration time when files absent, not at assertion time
 - 06-03: CLS-03 cosine threshold calibration policy — default > 0.7; if bge-m3 measures 0.6-0.7 on test pairs, lower to > 0.6 and document measured values (per 06-CONTEXT.md); not yet measured (model files absent on executor)
+- 07-01: RetrainingPorts.fs placed after Routing.fs and before Ports.fs in Core.fsproj (per CONTEXT.md — no dependency on Routing/ML/Ports; BCL-only; pure-Core invariant confirmed by grep)
+- 07-01: HardCaseDatasetWriter inherits BackgroundService at stub stage so Plan 07-05 AddHostedService<HardCaseDatasetWriter> DI registration requires no signature change
+- 07-01: TeacherLabelerOptions [CLIMutable] record declared in stub file; Plan 07-03 replaces LabelAsync body only; constructor signature final: (httpFactory: IHttpClientFactory, options: TeacherLabelerOptions)
+- 07-01: Wave 1 stub pattern: constructor signatures are final at plan 01; Wave 2 plans (07-02/03/04) replace method bodies exclusively — no .fsproj write conflicts in parallel execution
 
 ### Pending Todos
 
@@ -120,6 +124,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T08:05:46Z
-Stopped at: Completed 06-03-ML-TESTS-PLAN.md — Phase 6 COMPLETE (3/3 plans done); MLEmbeddingTests.fs + MLClassifierTests.fs + MLRoutingTests +2 Phase 6 tests; all 6 REQ-IDs covered; 50 pass + 10 ignored (0 failures) without model files
+Last session: 2026-05-08T12:21:56Z
+Stopped at: Completed 07-01-FOUNDATION-PLAN.md — Phase 7 Plan 1/6 done; Core/RetrainingPorts.fs + 3 Cli adapter stubs; build clean; 50 pass + 10 ignored baseline
 Resume file: None
