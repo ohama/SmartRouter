@@ -164,12 +164,12 @@ Plans:
   4. After a successful retrain, the next request transparently uses the new model — `model_version` in DecisionLog changes; verified by a 3-request test (before / retrain / after).
   5. Concurrent retrain triggers are serialized by `Mutex`; the second trigger waits or skips; verified by a 2-concurrent-trigger test.
   6. A retrain that throws mid-way doesn't crash the host process or block subsequent retrains; verified by a force-throw test that confirms Loop A keeps responding and the next tick retries.
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 08-01: Implement `DatasetMerger` (70/30 balance, class-stratified sampling); `Retrainer` (ML.NET `LbfgsLogisticRegression.Fit`); `Validator` (held-out accuracy + fallback rate vs baseline); `ModelRegistry` (write router.zip atomically via temp file + rename)
-- [ ] 08-02: Implement `RetrainingService : BackgroundService` (`PeriodicTimer` + count-based trigger + Mutex idempotency + try/with isolation); wire `PredictionEnginePool.AddPredictionEnginePool<...>` with `watchForChanges:true`
-- [ ] 08-03: RetrainingTests.fs — merger balance, validation-gate rejection on bad model, concurrent-trigger serialization, mid-retrain throw isolation, end-to-end retrain → hot-reload → DecisionLog model_version flip
+- [ ] 08-01-PLAN.md — DatasetMerger (70/30 + class-balance + bootstrap-empty-old) + Retrainer (LbfgsLogisticRegression + atomic save) + Validator (fallback_rate := 1 - PositiveRecall + rejection log) + IModelVersionProvider port (BCL-only Core port for hot-update seam)
+- [ ] 08-02-PLAN.md — RetrainingService BackgroundService (two PeriodicTimer race + count trigger via FileShare.ReadWrite line count + SemaphoreSlim(1) Wait(0) + nested try/with isolation + train-to-candidate-then-validate + router.zip.prev backup + IModelVersionProvider hot-update) + ModelVersionProvider adapter + ChatCompletions per-request model_version resolution + CompositionRoot triple-registration + appsettings Retraining section (12 keys)
+- [ ] 08-03-PLAN.md — RetrainingTests.fs (6 testCases): merger class-balance + bootstrap, validator accept/reject + rejection-log, concurrent triggers serialize, throw isolation (Loop A unaffected), model_version flip end-to-end via ModelVersionProvider
 
 ### Phase 9: Canary Deployment
 **Goal**: When a new model lands, route only a percentage of traffic (default 10%) to it for a configurable window before promoting to 100%. `Microsoft.FeatureManagement` + `PercentageFilter` does the split based on `correlation_id` hash. Logs always tag `model_version` so cohort comparison is straightforward (canary vs baseline fallback rate, latency, etc.). Manual or automatic rollback: if canary's `fallback_rate` exceeds baseline by >10%, the canary model is unloaded and traffic returns to 100% baseline.
