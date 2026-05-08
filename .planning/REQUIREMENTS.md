@@ -152,7 +152,7 @@ Deferred. Tracked but not in current roadmap.
 - **ML2-01**: Active learning — only label uncertain (low-confidence) cases instead of all fallbacks
 - **ML2-02**: Online learning — real-time weight updates per request without full retrain
 - **ML2-03**: Multi-model routing (3+ models, cost-quality trade-off space) instead of binary 35B/122B
-- **ML2-04**: Embedding model upgrade path (bge-small → bge-large or e5-large) with vector-dim migration
+- **ML2-04**: Embedding model alternatives evaluated when Phase 8 validation gate signals bge-m3 int8 quality is insufficient: (a) bge-m3 FP32 (recover quality at ~5x latency cost if int8 regression observed), (b) `intfloat/multilingual-e5-large` (alt multilingual, 1024-dim, similar cost profile), (c) `Snowflake/snowflake-arctic-embed-l-v2.0` (newer multilingual SOTA), (d) `jhgan/ko-sroberta-multitask` if Korean ratio approaches 80%+ per `~/projs/smart-router-distillation/docs/embedding-classifier-decision-deep-dive.md` §1.7.5. Vector-dim change requires classifier retrain (Phase 8 handles transparently). Migration via Phase 9 canary infrastructure (10/90 split, cohort comparison via `model_version` + `prompt_korean_char_ratio`).
 
 ### Providers
 
