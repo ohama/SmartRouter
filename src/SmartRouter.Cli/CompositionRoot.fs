@@ -2,16 +2,22 @@ module SmartRouter.Cli.CompositionRoot
 
 open System
 open System.Collections.Generic
+open System.IO
 open System.Net.Http
+open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.DependencyInjection.Extensions
 open Microsoft.Extensions.ML
 open Microsoft.Extensions.Options
+open Microsoft.FeatureManagement
+open Microsoft.FeatureManagement.FeatureFilters
 open Serilog
 open SmartRouter.Core.Domain
 open SmartRouter.Core.MLPorts
 open SmartRouter.Core.Ports
 open SmartRouter.Core.Routing
+open SmartRouter.Core.CanaryPorts
 open SmartRouter.Cli.Adapters.BgeM3Embedder
 open SmartRouter.Cli.Adapters.DecisionLogger
 open SmartRouter.Cli.Adapters.DecisionLogWriter
@@ -29,6 +35,13 @@ open SmartRouter.Cli.Adapters.TeacherLabeler
 open SmartRouter.Cli.Adapters.HardCaseDatasetWriter
 open SmartRouter.Cli.Adapters.ModelVersionProvider
 open SmartRouter.Cli.Adapters.RetrainingService
+open SmartRouter.Cli.Adapters.CanaryTargetingAccessor
+open SmartRouter.Cli.Adapters.CanaryState
+open SmartRouter.Cli.Adapters.CanaryMetrics
+open SmartRouter.Cli.Adapters.CanaryGate
+open SmartRouter.Cli.Adapters.CanaryWatchdog
+open SmartRouter.Cli.Adapters.CanaryService
+open SmartRouter.Cli.Adapters.RetrainLock
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -151,6 +164,7 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
     services
         .Configure<UpstreamOptions>(config.GetSection("Upstreams"))
         .Configure<RoutingOptions>(config.GetSection("Routing"))
+        .Configure<CanaryOptions>(config.GetSection("Canary"))     // NEW Phase 9
         |> ignore
 
     // Named HttpClients per upstream — 300s timeout covers 122B cold starts (CONC-07 / PITFALL-12)
@@ -174,6 +188,20 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
         let opts = sp.GetRequiredService<IOptions<RoutingOptions>>().Value
         buildRoutingConfig opts)
         |> ignore
+
+    // ── Phase 9 unconditional fallback defaults (Step 1.0) ───────────────────
+    //
+    // ICanaryGate: NullCanaryGate fallback (ML mode overrides via plain AddSingleton in 1.2).
+    // ICanaryMetrics: NoOpCanaryMetrics fallback (ML mode overrides via plain AddSingleton in 1.2).
+    // These ensure ChatCompletions.handler resolves both interfaces in HEURISTIC mode too —
+    // ChatCompletions does NOT branch on routingAlgo, it always calls metrics.Record(...) and
+    // (transitively, via the ML closure) consults ICanaryGate. Heuristic mode gets a no-op pair.
+    //
+    // TryAddSingleton skips registration if the type is already present; last-registration-wins:
+    // ML mode 1.2 calls plain AddSingleton which APPENDS a second descriptor — GetRequiredService<T>
+    // returns the LAST registered → FeatureManagementCanaryGate overrides NullCanaryGate.
+    services.TryAddSingleton<ICanaryGate>(fun _sp -> NullCanaryGate() :> ICanaryGate) |> ignore
+    services.TryAddSingleton<ICanaryMetrics>(fun _sp -> NoOpCanaryMetrics() :> ICanaryMetrics) |> ignore
 
     // ── ML wiring ──────────────────────────────────────────────────────────────
     //
@@ -200,11 +228,21 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
         ensureEmbeddingFilesPresent mlOpts.EmbeddingModelPath mlOpts.TokenizerPath
         ensureDummyModel mlOpts.ModelPath
 
+        let canaryOpts = config.GetSection("Canary").Get<CanaryOptions>()
+        let canaryModelPath =
+            if obj.ReferenceEquals(canaryOpts, null) || String.IsNullOrWhiteSpace(canaryOpts.CanaryModelPath)
+            then "models/router-canary.zip"
+            else canaryOpts.CanaryModelPath
+
         services
             .AddPredictionEnginePool<RouteInput, RoutePrediction>()
             .FromFile(
                 modelName       = "router",
                 filePath        = mlOpts.ModelPath,
+                watchForChanges = true)
+            .FromFile(
+                modelName       = "router-canary",
+                filePath        = canaryModelPath,
                 watchForChanges = true)
             |> ignore
 
@@ -216,9 +254,21 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
                 mlOpts.MaxTokens) :> IEmbedder)
             |> ignore
 
-        services.AddSingleton<IClassifier>(fun sp ->
+        // Phase 9: keyed classifiers (baseline + canary) from the same pool.
+        services.AddKeyedSingleton<IClassifier>("baseline", System.Func<IServiceProvider, obj, IClassifier>(fun sp _key ->
             let pool = sp.GetRequiredService<PredictionEnginePool<RouteInput, RoutePrediction>>()
-            MlNetClassifier(pool) :> IClassifier)
+            MlNetClassifier(pool, "router") :> IClassifier))
+            |> ignore
+
+        services.AddKeyedSingleton<IClassifier>("canary", System.Func<IServiceProvider, obj, IClassifier>(fun sp _key ->
+            let pool = sp.GetRequiredService<PredictionEnginePool<RouteInput, RoutePrediction>>()
+            MlNetClassifier(pool, "router-canary") :> IClassifier))
+            |> ignore
+
+        // Backwards-compat: provide a non-keyed IClassifier resolution for any
+        // existing tests that might resolve GetRequiredService<IClassifier>().
+        services.AddSingleton<IClassifier>(fun sp ->
+            sp.GetRequiredKeyedService<IClassifier>("baseline"))
             |> ignore
 
     // RoutingAlgorithmRegistration as a DI singleton — pairs the algorithm function
@@ -236,25 +286,31 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
                   ModelVersion = "heuristic-v1" }
             | "ml" ->
                 // ML branch — resolve adapters once; close over them in the makeApplyML factory.
-                // Phase 9: Plan 09-01 ships baseline-only path. canaryClassifier = baselineClassifier and
-                // canaryGate is an inline NullCanaryGate (always returns false). Plan 09-02 replaces both
-                // with the real FeatureManagementCanaryGate + dual-classifier dispatch.
-                let embedder   = sp.GetRequiredService<IEmbedder>()
-                let classifier = sp.GetRequiredService<IClassifier>()
-                let mlPath     = opts.ML.ModelPath
-                let modelHash  = computeModelVersion mlPath
-                let baselineVersion = sprintf "ml-%s" modelHash
-                let nullCanaryGate =
-                    { new SmartRouter.Core.CanaryPorts.ICanaryGate with
-                        member _.IsCanaryAsync(_correlationId, _ct) =
-                            System.Threading.Tasks.Task.FromResult(false) }
+                // Phase 9 Plan 09-02: real FeatureManagementCanaryGate + dual-classifier dispatch.
+                let embedder           = sp.GetRequiredService<IEmbedder>()
+                let baselineClassifier = sp.GetRequiredKeyedService<IClassifier>("baseline")
+                let canaryClassifier   = sp.GetRequiredKeyedService<IClassifier>("canary")
+                let canaryGate         = sp.GetRequiredService<ICanaryGate>()
+                let mlPath             = opts.ML.ModelPath
+                let baselineVersion    = sprintf "ml-%s" (computeModelVersion mlPath)
+                let canaryOpts2        = sp.GetRequiredService<IOptions<CanaryOptions>>().Value
+                let canaryPath =
+                    if obj.ReferenceEquals(canaryOpts2, null) || String.IsNullOrWhiteSpace(canaryOpts2.CanaryModelPath)
+                    then "models/router-canary.zip" else canaryOpts2.CanaryModelPath
+                let canaryVersion =
+                    if File.Exists(canaryPath)
+                    then sprintf "ml-%s-canary" (computeModelVersion canaryPath)
+                    else ""
+                // Update the IModelVersionProvider so /canary GET reflects current canary version.
+                let vp = sp.GetRequiredService<IModelVersionProvider>()
+                vp.UpdateCanary(canaryVersion)
                 { Algorithm    = SmartRouter.Core.ML.makeApplyML
                                     embedder
-                                    classifier
-                                    classifier            // canaryClassifier = baselineClassifier (placeholder; replaced in Plan 09-02)
-                                    nullCanaryGate
+                                    baselineClassifier
+                                    canaryClassifier
+                                    canaryGate
                                     baselineVersion
-                                    ""                    // canaryVersion = "" (no canary loaded yet)
+                                    canaryVersion
                   Name         = "ml"
                   ModelVersion = baselineVersion }
             | other ->
@@ -457,6 +513,98 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
     // No IInterface alias since RetrainingService has no interface consumer — only IHostedService
     // machinery and the test-only RunNowAsync seam consume it directly.
     if routingAlgoStr = "ml" then
+        // ── Phase 9: Canary deployment (ML mode — Step 1.2) ──────────────────
+        services.AddHttpContextAccessor() |> ignore
+
+        services
+            .AddScopedFeatureManagement()
+            .WithTargeting<CanaryTargetingContextAccessor>()
+            |> ignore
+
+        // RetrainLock — shared between Phase 8 RetrainingService and Phase 9 CanaryService
+        // (CONTEXT.md Lock 6). Double-reg: concrete + interface alias.
+        services.AddSingleton<RetrainLock>(fun _sp -> new RetrainLock()) |> ignore
+        services.AddSingleton<IRetrainLock>(fun sp -> sp.GetRequiredService<RetrainLock>() :> IRetrainLock) |> ignore
+
+        // CanaryState — double-reg.
+        services.AddSingleton<CanaryState>(fun sp ->
+            let opts = sp.GetRequiredService<IOptions<CanaryOptions>>().Value
+            let initial = if obj.ReferenceEquals(opts, null) then 10 else opts.PercentageEnabled
+            CanaryState(initial))
+            |> ignore
+        services.AddSingleton<ICanaryState>(fun sp -> sp.GetRequiredService<CanaryState>() :> ICanaryState) |> ignore
+
+        // CanaryMetrics — double-reg. Plain AddSingleton OVERRIDES the (1.0) NoOpCanaryMetrics
+        // fallback via last-registration-wins for GetRequiredService<ICanaryMetrics>.
+        services.AddSingleton<CanaryMetrics>(fun _sp -> CanaryMetrics()) |> ignore
+        services.AddSingleton<ICanaryMetrics>(fun sp -> sp.GetRequiredService<CanaryMetrics>() :> ICanaryMetrics) |> ignore
+
+        // CanaryGate — plain AddSingleton OVERRIDES the (1.0) NullCanaryGate fallback via
+        // last-registration-wins for GetRequiredService<ICanaryGate>.
+        services.AddSingleton<ICanaryGate>(fun sp ->
+            let fm = sp.GetRequiredService<IVariantFeatureManager>()
+            let st = sp.GetRequiredService<ICanaryState>()
+            let opts = sp.GetRequiredService<IOptions<CanaryOptions>>().Value
+            let path =
+                if obj.ReferenceEquals(opts, null) || String.IsNullOrWhiteSpace(opts.CanaryModelPath)
+                then "models/router-canary.zip"
+                else opts.CanaryModelPath
+            FeatureManagementCanaryGate(fm, st, path) :> ICanaryGate)
+            |> ignore
+
+        // CanaryWatchdog — triple-reg (concrete + AddHostedService factory).
+        services.AddSingleton<CanaryWatchdog>(fun sp ->
+            let m  = sp.GetRequiredService<ICanaryMetrics>()
+            let s  = sp.GetRequiredService<ICanaryState>()
+            let opts = sp.GetRequiredService<IOptions<CanaryOptions>>().Value
+            // Defensive defaults for missing/zero keys.
+            let normalized =
+                { CanaryModelPath              = if obj.ReferenceEquals(opts, null) || String.IsNullOrWhiteSpace(opts.CanaryModelPath)
+                                                 then "models/router-canary.zip" else opts.CanaryModelPath
+                  PercentageEnabled            = if obj.ReferenceEquals(opts, null) then 10 else opts.PercentageEnabled
+                  RollingWindowSeconds         = if obj.ReferenceEquals(opts, null) || opts.RollingWindowSeconds <= 0 then 60 else opts.RollingWindowSeconds
+                  WatchdogPollIntervalSeconds  = if obj.ReferenceEquals(opts, null) || opts.WatchdogPollIntervalSeconds <= 0 then 10 else opts.WatchdogPollIntervalSeconds
+                  AutoRollbackThreshold        = if obj.ReferenceEquals(opts, null) || opts.AutoRollbackThreshold <= 0.0 then 0.10 else opts.AutoRollbackThreshold
+                  AutoRollbackEnabled          = if obj.ReferenceEquals(opts, null) then false else opts.AutoRollbackEnabled
+                  MinBaselineSampleSize        = if obj.ReferenceEquals(opts, null) || opts.MinBaselineSampleSize <= 0 then 50 else opts.MinBaselineSampleSize }
+            new CanaryWatchdog(m, s, normalized))
+            |> ignore
+        services.AddHostedService<CanaryWatchdog>(fun sp -> sp.GetRequiredService<CanaryWatchdog>())
+            |> ignore
+
+        // CanaryService — triple-reg: concrete + ICanaryService + IHostedService (CONTEXT.md Lock 9)
+        services.AddSingleton<CanaryService>(fun sp ->
+            let st = sp.GetRequiredService<ICanaryState>()
+            let m  = sp.GetRequiredService<ICanaryMetrics>()
+            let vp = sp.GetRequiredService<IModelVersionProvider>()
+            let rl = sp.GetRequiredService<IRetrainLock>()
+            let opts = sp.GetRequiredService<IOptions<CanaryOptions>>().Value
+            let normalized =
+                { CanaryModelPath              = if obj.ReferenceEquals(opts, null) || String.IsNullOrWhiteSpace(opts.CanaryModelPath)
+                                                 then "models/router-canary.zip" else opts.CanaryModelPath
+                  PercentageEnabled            = if obj.ReferenceEquals(opts, null) then 10 else opts.PercentageEnabled
+                  RollingWindowSeconds         = if obj.ReferenceEquals(opts, null) || opts.RollingWindowSeconds <= 0 then 60 else opts.RollingWindowSeconds
+                  WatchdogPollIntervalSeconds  = if obj.ReferenceEquals(opts, null) || opts.WatchdogPollIntervalSeconds <= 0 then 10 else opts.WatchdogPollIntervalSeconds
+                  AutoRollbackThreshold        = if obj.ReferenceEquals(opts, null) || opts.AutoRollbackThreshold <= 0.0 then 0.10 else opts.AutoRollbackThreshold
+                  AutoRollbackEnabled          = if obj.ReferenceEquals(opts, null) then false else opts.AutoRollbackEnabled
+                  MinBaselineSampleSize        = if obj.ReferenceEquals(opts, null) || opts.MinBaselineSampleSize <= 0 then 50 else opts.MinBaselineSampleSize }
+            // Baseline + previous-model paths come from the existing Retraining options
+            // (Phase 8 owns those paths; Phase 9 only writes router.zip via promote-under-lock).
+            let retrainOpts = sp.GetRequiredService<IOptions<RetrainingOptions>>().Value
+            let baselinePath =
+                if obj.ReferenceEquals(retrainOpts, null) || String.IsNullOrWhiteSpace(retrainOpts.ModelPath)
+                then "models/router.zip" else retrainOpts.ModelPath
+            let previousPath =
+                if obj.ReferenceEquals(retrainOpts, null) || String.IsNullOrWhiteSpace(retrainOpts.PreviousModelPath)
+                then "models/router.zip.prev" else retrainOpts.PreviousModelPath
+            CanaryService(st, m, vp, rl, normalized, baselinePath, previousPath))
+            |> ignore
+        services.AddSingleton<ICanaryService>(fun sp -> sp.GetRequiredService<CanaryService>() :> ICanaryService) |> ignore
+        // CanaryService is also IHostedService (owns FileSystemWatcher for router-canary.zip
+        // post-startup arrival — CONTEXT.md Lock 9). Triple-reg: concrete + ICanaryService + IHostedService.
+        services.AddHostedService<CanaryService>(fun sp -> sp.GetRequiredService<CanaryService>())
+            |> ignore
+
         services.AddSingleton<RetrainingService>(fun sp ->
             let opts = sp.GetRequiredService<IOptions<RetrainingOptions>>().Value
             // Defensive defaults — any missing/zero key falls back to CONTEXT.md Lock 6 values.
@@ -476,7 +624,8 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
             new RetrainingService(
                 normalized,
                 sp.GetRequiredService<IEmbedder>(),
-                sp.GetRequiredService<IModelVersionProvider>()))
+                sp.GetRequiredService<IModelVersionProvider>(),
+                sp.GetRequiredService<IRetrainLock>()))               // NEW Phase 9
         |> ignore
 
         services.AddHostedService<RetrainingService>(fun sp ->

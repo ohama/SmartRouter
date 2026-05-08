@@ -27,12 +27,13 @@
     <Compile Include="Adapters/DatasetMerger.fs" />
     <Compile Include="Adapters/Validator.fs" />
     <Compile Include="Adapters/ModelVersionProvider.fs" />
-    <Compile Include="Adapters/RetrainingService.fs" />
     <!-- Phase 9 — Canary deployment (Task 1 — leaf adapters + Gate) -->
+    <!-- RetrainLock placed before RetrainingService because RetrainingService now consumes IRetrainLock -->
+    <Compile Include="Adapters/RetrainLock.fs" />
+    <Compile Include="Adapters/RetrainingService.fs" />
     <Compile Include="Adapters/CanaryTargetingAccessor.fs" />
     <Compile Include="Adapters/CanaryState.fs" />
     <Compile Include="Adapters/CanaryMetrics.fs" />
-    <Compile Include="Adapters/RetrainLock.fs" />
     <Compile Include="Adapters/CanaryGate.fs" />
     <!-- Phase 9 — Canary deployment (Task 2 — watcher adapters) -->
     <Compile Include="Adapters/CanaryWatchdog.fs" />

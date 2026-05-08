@@ -152,6 +152,18 @@ let main args =
                         dict [ "Routing:Algorithm", v ])
                 |> ignore
 
+            // Phase 9 Lock 13: keep Canary.PercentageEnabled in sync with feature_management's
+            // DefaultRolloutPercentage so operator edits to one section reflect in the other at startup.
+            // Skip silently if Canary section absent (heuristic mode default).
+            let canaryPctRaw = builder.Configuration.["Canary:PercentageEnabled"]
+            match System.Int32.TryParse(if isNull canaryPctRaw then "" else canaryPctRaw) with
+            | true, n when n >= 0 && n <= 100 ->
+                (builder.Configuration :> IConfigurationBuilder)
+                    .AddInMemoryCollection(
+                        dict [ "feature_management:feature_flags:0:conditions:client_filters:0:parameters:Audience:DefaultRolloutPercentage", string n ])
+                |> ignore
+            | _ -> ()
+
             // Register all DI services: named HttpClients, IUpstreamClient, RoutingConfig
             CompositionRoot.configureServices builder.Services builder.Configuration
             |> ignore
@@ -185,6 +197,8 @@ let main args =
             ChatCompletions.mapEndpoints app
             // Register GET /stats (OBS-02 / API-07)
             Stats.mapEndpoints app
+            // Register GET /canary + POST /canary/{promote,rollback,enable} — Phase 9
+            Canary.mapEndpoints app
 
             app.Run()
             0

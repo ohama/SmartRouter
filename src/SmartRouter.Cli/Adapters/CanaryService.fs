@@ -57,6 +57,29 @@ type CanaryService(
     baselineModelPath: string,
     previousModelPath: string) =
 
+    // ── IHostedService state: own a FileSystemWatcher for the canary model file ──
+    //
+    // CONTEXT.md Lock 9 says CanaryVersion is updated by CanaryService on file detection.
+    // Without a watcher, post-startup arrival of router-canary.zip (operator copies the file
+    // AFTER the router has booted) would leave canary_model_version stuck at "" until restart
+    // or POST /canary/promote. The watcher closes the gap: Created/Changed/Deleted events on
+    // the configured CanaryModelPath flip versionProvider.UpdateCanary in real-time.
+    //
+    // F# requires let bindings before interface implementations in the type body.
+    let mutable watcher : FileSystemWatcher option = None
+
+    let onCanaryFileMutation () =
+        try
+            if File.Exists(options.CanaryModelPath) then
+                let v = sprintf "ml-%s-canary" (computeModelVersion options.CanaryModelPath)
+                versionProvider.UpdateCanary(v)
+                Log.Information("CanaryService: canary file mutation observed; canary_version={V}", v)
+            else
+                versionProvider.UpdateCanary("")
+                Log.Information("CanaryService: canary file removed; canary_version cleared")
+        with ex ->
+            Log.Warning(ex, "CanaryService: failed to handle canary file mutation (continuing)")
+
     interface ICanaryService with
         member _.GetStatusAsync(_ct: CancellationToken) =
             task {
@@ -79,7 +102,7 @@ type CanaryService(
                           delta                  = canaryRate - baselineRate } }
             }
 
-        member _.PromoteAsync(ct: CancellationToken) =
+        member _.PromoteAsync(_ct: CancellationToken) =
             task {
                 if not (File.Exists(options.CanaryModelPath)) then
                     return NoCanaryFile
@@ -121,31 +144,6 @@ type CanaryService(
             let clamped = max 0 (min 100 percentage)
             state.SetPercentage(clamped, sprintf "operator-enable %d%%" clamped)
             Log.Information("CanaryService: ENABLE percentage={P}", clamped)
-
-    // ── IHostedService: own a FileSystemWatcher for the canary model file ──
-    //
-    // CONTEXT.md Lock 9 says CanaryVersion is updated by CanaryService on file detection.
-    // Without a watcher, post-startup arrival of router-canary.zip (operator copies the file
-    // AFTER the router has booted) would leave canary_model_version stuck at "" until restart
-    // or POST /canary/promote. The watcher closes the gap: Created/Changed/Deleted events on
-    // the configured CanaryModelPath flip versionProvider.UpdateCanary in real-time.
-    //
-    // Pattern mirrors PredictionEnginePool's watchForChanges:true (Phase 8 Lock 11) but at
-    // OUR application layer — independent of ML.NET's internal file watcher.
-
-    let mutable watcher : FileSystemWatcher option = None
-
-    let onCanaryFileMutation () =
-        try
-            if File.Exists(options.CanaryModelPath) then
-                let v = sprintf "ml-%s-canary" (computeModelVersion options.CanaryModelPath)
-                versionProvider.UpdateCanary(v)
-                Log.Information("CanaryService: canary file mutation observed; canary_version={V}", v)
-            else
-                versionProvider.UpdateCanary("")
-                Log.Information("CanaryService: canary file removed; canary_version cleared")
-        with ex ->
-            Log.Warning(ex, "CanaryService: failed to handle canary file mutation (continuing)")
 
     interface IHostedService with
         member _.StartAsync(_ct: CancellationToken) =
