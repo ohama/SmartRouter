@@ -9,6 +9,7 @@
     <Compile Include="MLPorts.fs" />     <!-- NEW: Phase 6 -->
     <Compile Include="ML.fs" />
     <Compile Include="Routing.fs" />
+    <Compile Include="RetrainingPorts.fs" />   <!-- NEW: Phase 7 — placed after Routing.fs per CONTEXT.md -->
     <Compile Include="Ports.fs" />
   </ItemGroup>
   <ItemGroup>
