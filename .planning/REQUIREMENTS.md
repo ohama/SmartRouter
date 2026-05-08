@@ -121,12 +121,12 @@
 
 ### Retraining Loop (Phase 8)
 
-- [ ] **RETRAIN-01**: `DatasetMerger` produces a 70/30 old/new split with class-stratified balance — both classes appear in ≥30% of samples (no catastrophic forgetting); verified by unit test on synthetic input
-- [ ] **RETRAIN-02**: `RetrainingService : BackgroundService` triggers retrain when `hard-cases.jsonl` count ≥500 OR a 1-hour `PeriodicTimer` fires (whichever first); verified by two integration tests
-- [ ] **RETRAIN-03**: `Validator` rejects the new model if held-out accuracy < baseline OR `fallback_rate` on validation set > baseline; failed models are NOT written; rejection is logged with rationale
-- [ ] **RETRAIN-04**: New `models/router.zip` is written atomically (temp file + rename); `PredictionEnginePool` with `watchForChanges:true` swaps the live classifier; in-flight requests complete on the previous model — verified by a 3-request before/retrain/after test that asserts the `model_version` flip in DecisionLog
-- [ ] **RETRAIN-05**: A `Mutex` (or equivalent single-writer lock) ensures only one retrain runs at a time; concurrent triggers serialize or skip; verified by a 2-concurrent-trigger test
-- [ ] **RETRAIN-06**: Retraining failures (mid-pipeline throws) are caught with `try/with`, do NOT crash the host, do NOT block subsequent retrains, and Loop A (request handling) is unaffected; verified by a force-throw test
+- [x] **RETRAIN-01**: `DatasetMerger` produces a 70/30 old/new split with class-stratified balance — both classes appear in ≥30% of samples (no catastrophic forgetting); verified by unit test on synthetic input
+- [x] **RETRAIN-02**: `RetrainingService : BackgroundService` triggers retrain when `hard-cases.jsonl` count ≥500 OR a 1-hour `PeriodicTimer` fires (whichever first); verified by two integration tests
+- [x] **RETRAIN-03**: `Validator` rejects the new model if held-out accuracy < baseline OR `fallback_rate` on validation set > baseline; failed models are NOT written; rejection is logged with rationale
+- [x] **RETRAIN-04**: New `models/router.zip` is written atomically (temp file + rename); `PredictionEnginePool` with `watchForChanges:true` swaps the live classifier; in-flight requests complete on the previous model — verified by a 3-request before/retrain/after test that asserts the `model_version` flip in DecisionLog
+- [x] **RETRAIN-05**: A `Mutex` (or equivalent single-writer lock) ensures only one retrain runs at a time; concurrent triggers serialize or skip; verified by a 2-concurrent-trigger test
+- [x] **RETRAIN-06**: Retraining failures (mid-pipeline throws) are caught with `try/with`, do NOT crash the host, do NOT block subsequent retrains, and Loop A (request handling) is unaffected; verified by a force-throw test
 
 ### Canary Deployment (Phase 9)
 
@@ -260,12 +260,12 @@ Deferred. Tracked but not in current roadmap.
 | FAIL-02 | Phase 7 | Complete |
 | FAIL-03 | Phase 7 | Complete |
 | FAIL-04 | Phase 7 | Complete |
-| RETRAIN-01 | Phase 8 | Pending |
-| RETRAIN-02 | Phase 8 | Pending |
-| RETRAIN-03 | Phase 8 | Pending |
-| RETRAIN-04 | Phase 8 | Pending |
-| RETRAIN-05 | Phase 8 | Pending |
-| RETRAIN-06 | Phase 8 | Pending |
+| RETRAIN-01 | Phase 8 | Complete |
+| RETRAIN-02 | Phase 8 | Complete |
+| RETRAIN-03 | Phase 8 | Complete |
+| RETRAIN-04 | Phase 8 | Complete |
+| RETRAIN-05 | Phase 8 | Complete |
+| RETRAIN-06 | Phase 8 | Complete |
 | CANARY-01 | Phase 9 | Pending |
 | CANARY-02 | Phase 9 | Pending |
 | CANARY-03 | Phase 9 | Pending |

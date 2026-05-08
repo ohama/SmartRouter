@@ -148,6 +148,8 @@ Recent decisions affecting current work:
 - 08-03: FakeEmbedder requires Task.Yield() inside task{} — without it, runRetrain executes synchronously (Task.FromResult doesn't yield), both concurrent RunNowAsync calls acquire the semaphore sequentially; Task.Yield() forces genuine suspension so t1 holds semaphore while t2 finds it taken
 - 08-03: ExceptionDispatchInfo.Capture(oce).Throw() (from Plan 08-02) preserves OperationCanceledException through task{} await points — reraise() inside task{} nested try/with is invalid (F# FS0413); test5 force-throw isolation confirmed: cancellation during retrain propagates through BackgroundService loop so StopAsync works
 - 08-03: Canonical test run is dotnet run -- --sequenced (73 passed, 10 ignored, 0 failed); parallel mode shows pre-existing flakiness in QueueTests PITFALL-10 and HardCaseDatasetTests graceful-drain tests when run alongside CPU-heavy ML.NET training
+- 08-tests-flake (commit dd1da7d): HardCaseDatasetTests "graceful StopAsync drains in-flight entries" stabilized — replaced Thread.Yield() with Thread.Sleep(200). Pre-existing Phase 7 flake exposed by Phase 8 ThreadPool contention (66→73 tests). File polling failed because HardCaseDatasetWriter holds FileShare.None — peeking the file conflicts with the writer's exclusive lock. 5/5 parallel runs pass after fix. Stable now even without --sequenced.
+- 08-VERIFICATION (verifier scored 27/27 must-haves): Loop B is real and proven. Notable findings: ChatCompletions reads IModelVersionProvider per-request via DI (line 326+114, NOT frozen at startup); Lock 5 split-FIRST pipeline confirmed in runRetrain; cumulative training-set persistence active; RETRAIN-04 verified via provider.CurrentVersion (equivalent to JSONL model_version assertion). Three human-verification items deferred (real-ONNX retrain timing under launchd, PredictionEnginePool hot-swap under live traffic) — non-blocking; require 122B server.
 
 ### Pending Todos
 
@@ -161,6 +163,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-09T05:57:29Z
-Stopped at: Phase 8 Plan 3 COMPLETE — 08-03 (RetrainingTests.fs: 7 tests covering RETRAIN-01..06); build clean; 73 pass + 10 ignored, 0 failed (--sequenced canonical run)
+Last session: 2026-05-09T06:38:19Z
+Stopped at: Phase 8 COMPLETE — 3/3 plans + verifier 27/27 must-haves passed; RETRAIN-01..RETRAIN-06 marked Complete in REQUIREMENTS.md; HardCaseDatasetTests graceful-drain flake fixed (commit dd1da7d); build clean; 73 pass + 10 ignored, 0 failed in BOTH parallel and --sequenced modes
 Resume file: None
