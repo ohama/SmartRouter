@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 ## Current Position
 
 Phase: 8 of 11 (Retraining Loop) — IN PROGRESS
-Plan: 1 of 3 in current phase — COMPLETE ✓
-Status: Phase 8 Plan 1 complete. IModelVersionProvider BCL-only port appended to Core/RetrainingPorts.fs (5 types + 4 interfaces now). Cli adapters: Retrainer.fs (TrainSample [<CLIMutable>] + retrain MLContext->IDataView->string->float32->ITransformer, Lock 5), DatasetMerger.fs (70/30 class-stratified merge + first-retrain bootstrap, Lock 3), Validator.fs (ValidationResult DU + computeBaseline + validate using 1.0-PositiveRecall fallback_rate, Lock 1 + writeRejectionLog). Cli.fsproj: Retrainer→DatasetMerger→Validator (correct order, after HardCaseDatasetWriter, before Endpoints/). Build: 0 errors, 0 warnings. Tests: 66 pass + 10 ignored (0 failed, baseline preserved).
-Last activity: 2026-05-08 — Phase 8 Plan 1 COMPLETE
+Plan: 2 of 3 in current phase — COMPLETE ✓
+Status: Phase 8 Plan 2 complete. ModelVersionProvider.fs (lock-guarded mutable IModelVersionProvider). RetrainingService.fs (BackgroundService, two-timer race via Task.WhenAll, SemaphoreSlim(1,1).Wait(0) skip gate, Lock 5 pipeline order, File.Copy .prev + File.Move candidate, cumulative training-set, versionProvider.Update, RunNowAsync test seam). ChatCompletions.fs: buildDecisionLog reads IModelVersionProvider.CurrentVersion per-request at all 8 exit points. CompositionRoot.fs: 5 new registrations (Configure<RetrainingOptions> + double-reg MVP + double-reg RetrainingService guarded on routingAlgoStr="ml"). appsettings.json: Retraining section (12 keys). Build: 0 errors, 0 warnings. Tests: 66 pass + 10 ignored (0 failed, baseline preserved).
+Last activity: 2026-05-08 — Phase 8 Plan 2 COMPLETE
 
-Progress: [████████████████░░░░░░░] 24 of ~30 plans (phase 8 in progress; 1 of 3 plans complete)
+Progress: [█████████████████░░░░░░] 25 of ~30 plans (phase 8 in progress; 2 of 3 plans complete)
 
 ## Performance Metrics
 
@@ -135,6 +135,13 @@ Recent decisions affecting current work:
 - 08-01: ARCH-01 preserved for IModelVersionProvider — port uses only string + unit (BCL); zero forbidden imports in Core/RetrainingPorts.fs
 - 08-01: TrainSample mirrors MlNetClassifier.RouteInput exactly: [<CLIMutable>] + [<VectorType(1024)>] Features:float32[] + Label:bool (true=Route122B positive class)
 - 08-01: DatasetMerger.hardCaseToTrainSample takes embed callback (string -> float32[]) so DatasetMerger stays free of BgeM3Embedder dependency; Plan 08-02 RetrainingService closes over IEmbedder.EmbedAsync
+- 08-02: SemaphoreSlim(1,1).Wait(0) skip-if-busy — Mutex would break thread affinity across task{} await points (CONTEXT.md Lock 7)
+- 08-02: ModelVersionProvider double-reg pattern (concrete AddSingleton<ModelVersionProvider> + interface alias AddSingleton<IModelVersionProvider> resolving via GetRequiredService); not triple-reg since ModelVersionProvider is not a BackgroundService
+- 08-02: RetrainingService double-reg pattern (concrete AddSingleton<RetrainingService> + AddHostedService factory); no IInterface alias since RetrainingService has no IInterface consumer
+- 08-02: ChatCompletions reads IModelVersionProvider.CurrentVersion per-request (live-updated) instead of frozen-at-startup RoutingAlgorithmRegistration.ModelVersion; all 8 buildDecisionLog call sites updated
+- 08-02: runRetrain pipeline order: split FIRST → train on split.TrainSet only → evaluate baseline + candidate on split.TestSet (fair comparison; held-out genuinely held out — CONTEXT.md Lock 5)
+- 08-02: ExceptionDispatchInfo.Capture(oce).Throw() instead of reraise() for OperationCanceledException in task{} nested try/with — FS0413 prevents reraise() inside CE try/with handlers; ExceptionDispatchInfo preserves original stack trace
+- 08-02: Cumulative training-set persistence: Array.append oldEntries hardCaseEntries saved after each successful retrain (not just hardCaseEntries); first-retrain bootstrap: oldEntries=[||] → cumulative=hardCaseEntries (Lock 3)
 
 ### Pending Todos
 
@@ -148,6 +155,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T20:20:57Z
-Stopped at: Phase 8 Plan 1 COMPLETE — 08-01 (DatasetMerger+Retrainer+Validator+IModelVersionProvider); build clean; 66 pass + 10 ignored, 0 failed
+Last session: 2026-05-08T20:36:29Z
+Stopped at: Phase 8 Plan 2 COMPLETE — 08-02 (ModelVersionProvider+RetrainingService+ChatCompletions wiring+CompositionRoot DI); build clean; 66 pass + 10 ignored, 0 failed
 Resume file: None
