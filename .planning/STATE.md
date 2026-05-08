@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 ## Current Position
 
 Phase: 9 of 11 (Canary Deployment) — In Progress
-Plan: 1 of 3 in current phase — COMPLETE ✓
-Status: Phase 9 Plan 1 complete. RouterRequest.CorrelationId + RoutingDecision.ModelVersion domain fields; ICanaryGate BCL-only port; IModelVersionProvider extended (CanaryVersion + UpdateCanary); ML.fs makeApplyML 6-param factory; NuGet pin Microsoft.FeatureManagement.AspNetCore 4.5.0; appsettings Canary + feature_management sections. 19 construction sites updated. Build: 0 errors, 0 warnings. Tests: 73 pass + 10 ignored, 0 failed (Phase 8 baseline preserved exactly). Canonical run: dotnet run -- --sequenced.
-Last activity: 2026-05-09 — Phase 9 Plan 1 COMPLETE
+Plan: 2 of 3 in current phase — COMPLETE ✓
+Status: Phase 9 Plan 2 complete. 8 new Cli files (7 Adapters/ + 1 Endpoints/): CanaryTargetingAccessor, CanaryState, CanaryGate, CanaryMetrics, CanaryWatchdog, RetrainLock, CanaryService, Endpoints/Canary.fs. ContextualTargetingFilter sticky bucketing; dual-classifier keyed dispatch; IRetrainLock shared between RetrainingService + CanaryService.Promote; /canary admin endpoint; rolling-60s watchdog; FileSystemWatcher post-startup canary file detection; ChatCompletions metrics recording; TryAddSingleton fallback + AddSingleton ML-override DI pattern. Build: 0 errors, 0 warnings. Tests: 73 pass + 10 ignored, 0 failed. Canonical run: dotnet run -- --sequenced.
+Last activity: 2026-05-09 — Phase 9 Plan 2 COMPLETE
 
-Progress: [███████████████████░░░░] 27 of ~30 plans (phase 9 plan 1 of 3 complete; plan 09-02 next)
+Progress: [████████████████████░░░] 28 of ~30 plans (phase 9 plan 2 of 3 complete; plan 09-03 next)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 27 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing + 6 failure-detection + 3 retraining-loop + 1 canary-deployment)
+- Total plans completed: 28 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing + 6 failure-detection + 3 retraining-loop + 2 canary-deployment)
 - Average duration: ~7 min
 - Total execution time: ~140 min
 
@@ -35,7 +35,7 @@ Progress: [███████████████████░░░░
 | 06-real-ml-routing | 3/3 | ~18 min | ~6 min |
 | 07-failure-detection-and-teacher-labeling | 6/6 | ~50 min | ~8 min |
 | 08-retraining-loop | 3/3 | ~32 min | ~11 min |
-| 09-canary-deployment | 1/3 | ~8 min | ~8 min |
+| 09-canary-deployment | 2/3 | ~20 min | ~10 min |
 
 **Recent Trend:**
 - Last 5 plans: 08-01 (~8 min), 08-02 (~7 min), 08-03 (~17 min), 09-01 (~8 min)
@@ -159,6 +159,16 @@ Recent decisions affecting current work:
 - 09-01: NuGet pin Microsoft.FeatureManagement.AspNetCore 4.5.0 added to Cli.fsproj only (preserves ARCH-01 for Core)
 - 09-01: appsettings.json Routing.Canary section (7 keys: CanaryModelPath, PercentageEnabled=10, RollingWindowSeconds=60, WatchdogPollIntervalSeconds=10, AutoRollbackThreshold=0.10, AutoRollbackEnabled=false, MinBaselineSampleSize=50) + feature_management section (Microsoft.Targeting filter, DefaultRolloutPercentage=10)
 - 09-01: buildDecisionLog gains decisionOpt: RoutingDecision option param — None for pre-routing failures, Some decision for Ok-routing branches; cascade: decision.ModelVersion → versionProvider.CurrentVersion for "" sentinel
+- 09-02: 8 new Cli adapter/endpoint files (7 Adapters/ + 1 Endpoints/): CanaryTargetingAccessor, CanaryState, CanaryGate, CanaryMetrics, CanaryWatchdog, RetrainLock, CanaryService, Endpoints/Canary.fs
+- 09-02: ContextualTargetingFilter via WithTargeting<CanaryTargetingContextAccessor>; PercentageFilter EXPLICITLY FORBIDDEN (non-sticky — random per evaluation, breaks cohort assignment)
+- 09-02: TryAddSingleton<ICanaryGate>(NullCanaryGate) + TryAddSingleton<ICanaryMetrics>(NoOpCanaryMetrics) Step 1.0 UNCONDITIONAL before ML branch; plain AddSingleton inside ML block overrides via last-registration-wins
+- 09-02: CanaryService implements IHostedService (not BackgroundService) with FileSystemWatcher armed in StartAsync; StopAsync disposes in try/with (separate statement, F# parsing trap avoidance)
+- 09-02: F# FS0960 — let/do bindings must precede interface implementations in type body; CanaryService let mutable watcher + onCanaryFileMutation moved to top of type
+- 09-02: F# compile-order fix — RetrainLock.fs placed BEFORE RetrainingService.fs in fsproj (consumed module must compile first: FS0039)
+- 09-02: RetrainingService refactored to accept shared IRetrainLock parameter (replaces private SemaphoreSlim); skip-if-busy + ExceptionDispatchInfo.Capture semantics preserved
+- 09-02: /canary endpoint shape: GET status / POST promote (File.Move under IRetrainLock; 409 on contention) / POST rollback (idempotent SetPercentage(0)) / POST enable?percentage=N (loopback-only)
+- 09-02: ChatCompletions threads ICanaryMetrics; metrics.Record after each decisionLogger.Log in 5 Ok-decision arms; metricCohort helper computes isCanary from ModelVersion.EndsWith("-canary") + isFallback from IsFallback || ;upstream_error || ;stream_error suffixes
+- 09-02: Test construction site Rule 3 auto-fixes: MLClassifierTests MlNetClassifier(pool, "router"); RetrainingTests (5 sites) RetrainingService(opts, emb, vp, RetrainLock()); Plan 09-03 owns tests/ going forward
 
 ### Pending Todos
 
@@ -172,6 +182,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-09T23:02:53Z
-Stopped at: Phase 9 Plan 1 COMPLETE — foundation done; 19 construction sites updated; ICanaryGate + IModelVersionProvider extension; NuGet pin; appsettings sections; build 0/0; 73 pass + 10 ignored, 0 failed
+Last session: 2026-05-09T08:19:00Z
+Stopped at: Phase 9 Plan 2 COMPLETE — 8 new Cli files; ContextualTargetingFilter; dual-classifier; IRetrainLock shared; /canary endpoint; FileSystemWatcher; ChatCompletions metrics; build 0/0; 73 pass + 10 ignored, 0 failed
 Resume file: None
