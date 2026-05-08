@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation** ✓ — Project scaffold, Core domain types, routing pipeline, non-streaming HTTP adapter, appsettings wiring
 - [x] **Phase 2: SSE Streaming Pass-Through** ✓ — Complete atomic SSE correctness cluster (STRM-01..07); Hermes is unblocked when this ships
-- [ ] **Phase 3: 122B Concurrency Gate** — Complete atomic concurrency cluster (CONC-01..06 + REL-05); Graphify concurrent requests are safe when this ships
+- [x] **Phase 3: 122B Concurrency Gate** ✓ — Complete atomic concurrency cluster (CONC-01..06 + REL-05); Graphify concurrent requests are safe when this ships
 - [ ] **Phase 4: Health + Fallback + graph_indexing No-Fallback** — Health probing, retry policy, fallback routing, and the graph_indexing-must-fail correctness unit
 - [ ] **Phase 5: Observability + Unit/Integration Tests** — Structured per-request logging, correlation IDs, unit tests for routing pipeline, integration tests with fake upstream servers
 - [ ] **Phase 6: Deployment + Documentation** — launchd plist, /v1/models endpoint, README
@@ -67,9 +67,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 03-01-QUEUE-DISPATCHER-PLAN.md — Port-shape change (IUpstreamClient takes RoutingDecision) + QueueDispatcher.fs (SemaphoreSlim(1), two Queue<Ticket> high/low + fairness K, dispatcher loop sub-pattern A, linked CTS timeout from acquire, try/finally Release, 35B bypass) + CompositionRoot DI swap + appsettings Queue section + Program.fs MaxConcurrent122B=1 validation
-- [ ] 03-02-STATS-AND-QUEUE-TESTS-PLAN.md — GET /stats endpoint (Stats.fs) reading IStatsProvider; QueueTests.fs with FakeUpstreamClient (5+ tests: serialization, priority preempt, cancellation release, timeout release, 35B bypass, /stats live snapshot, fairness counter)
-- [ ] 03-03-LOAD-TESTS-PLAN.md — LoadTests.fs with ptestCaseAsync burst tests (20 concurrent serialization + mixed-priority cap-holds-under-load); opt-in only, default dotnet test unchanged
+- [x] 03-01-QUEUE-DISPATCHER-PLAN.md ✓ — Port-shape change (IUpstreamClient takes RoutingDecision) + QueueDispatcher.fs (SemaphoreSlim(1), two Queue<Ticket> high/low + fairness K, dispatcher loop sub-pattern A, linked CTS timeout from acquire, try/finally Release, 35B bypass) + CompositionRoot DI swap + appsettings Queue section + Program.fs MaxConcurrent122B=1 validation
+- [x] 03-02-STATS-AND-QUEUE-TESTS-PLAN.md ✓ — GET /stats endpoint (Stats.fs) reading IStatsProvider; QueueTests.fs with FakeUpstreamClient + LatencyFake (9 tests: serialization, priority preempt, K-th forced low pick at low1Idx==4, cancel-pre-dequeue, cancel-post-dequeue mid-acquire, timeout release, 35B bypass, live snapshot, in-process Kestrel /stats JSON wire assertion for all 10 snake_case keys)
+- [x] 03-03-LOAD-TESTS-PLAN.md ✓ — LoadTests.fs with ptestCaseAsync burst tests (20-concurrent serialization + mixed-priority cap-holds-under-load); opt-in only, default dotnet test unchanged at 39/39
 
 ### Phase 4: Health + Fallback + graph_indexing No-Fallback
 **Goal**: The router knows whether each upstream is reachable, gracefully reroutes 122B requests to 35B when 122B is down — except for graph_indexing which must return an error rather than silently downgrade.
@@ -127,7 +127,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | ✓ Complete | 2026-05-07 |
 | 2. SSE Streaming Pass-Through | 2/2 | ✓ Complete | 2026-05-08 |
-| 3. 122B Concurrency Gate | 0/3 | Not started | - |
+| 3. 122B Concurrency Gate | 3/3 | ✓ Complete | 2026-05-08 |
 | 4. Health + Fallback + graph_indexing No-Fallback | 0/3 | Not started | - |
 | 5. Observability + Unit/Integration Tests | 0/2 | Not started | - |
 | 6. Deployment + Documentation | 0/2 | Not started | - |

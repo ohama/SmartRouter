@@ -13,7 +13,7 @@
 - [x] **API-04**: Router preserves unknown request fields when proxying upstream (no field-stripping)
 - [ ] **API-05**: Router exposes `GET /health` returning liveness + reachability of both upstream ports
 - [ ] **API-06**: Router exposes `GET /v1/models` proxying both upstreams' model lists, deduped
-- [ ] **API-07**: Router exposes `GET /stats` returning queue size, active requests, average wait time, requests/sec, failures, streaming duration
+- [x] **API-07**: Router exposes `GET /stats` returning queue size, active requests, average wait time, requests/sec, failures, streaming duration
 
 ### Routing
 
@@ -27,12 +27,12 @@
 
 ### Concurrency + Queueing
 
-- [ ] **CONC-01**: Router enforces `SemaphoreSlim(1)` on 122B-bound requests — at most one heavy request in flight per gateway process
-- [ ] **CONC-02**: Router applies a two-level priority queue (high / low FIFO-within-level) for 122B-bound requests
-- [ ] **CONC-03**: Tasks `graph_indexing`, `compiler_debug`, `architecture_analysis` map to high priority; everything else routed to 122B is low priority
-- [ ] **CONC-04**: 35B-bound requests bypass the priority queue and run concurrently bounded only by HttpClient pool
-- [ ] **CONC-05**: Cancellation token propagates client → queue wait → semaphore acquire → upstream HTTP call (`HttpContext.RequestAborted` linked to upstream `CancellationToken`)
-- [ ] **CONC-06**: Semaphore release is in `try/finally` — never leaks on exception or cancellation
+- [x] **CONC-01**: Router enforces `SemaphoreSlim(1)` on 122B-bound requests — at most one heavy request in flight per gateway process
+- [x] **CONC-02**: Router applies a two-level priority queue (high / low FIFO-within-level) for 122B-bound requests
+- [x] **CONC-03**: Tasks `graph_indexing`, `compiler_debug`, `architecture_analysis` map to high priority; everything else routed to 122B is low priority
+- [x] **CONC-04**: 35B-bound requests bypass the priority queue and run concurrently bounded only by HttpClient pool
+- [x] **CONC-05**: Cancellation token propagates client → queue wait → semaphore acquire → upstream HTTP call (`HttpContext.RequestAborted` linked to upstream `CancellationToken`)
+- [x] **CONC-06**: Semaphore release is in `try/finally` — never leaks on exception or cancellation
 - [x] **CONC-07**: Per-request timeout is configurable (default 300s, matching blueCode's 122B cold-start window)
 
 ### Streaming
@@ -51,12 +51,12 @@
 - [ ] **REL-02**: Router probes upstream health (35B, 122B reachability) on a background cadence and exposes results via `/health`
 - [ ] **REL-03**: When 122B is unavailable, router falls back to 35B for all 122B-routed requests **except** `task=graph_indexing`
 - [ ] **REL-04**: When 122B is unavailable and request has `task=graph_indexing`, router returns an error (does NOT silently downgrade to 35B)
-- [ ] **REL-05**: Per-request `CancellationToken` always carries a timeout (paired with `CancellationTokenSource.CreateLinkedTokenSource`) so a hung upstream cannot deadlock a queue slot
+- [x] **REL-05**: Per-request `CancellationToken` always carries a timeout (paired with `CancellationTokenSource.CreateLinkedTokenSource`) so a hung upstream cannot deadlock a queue slot
 
 ### Observability
 
 - [ ] **OBS-01**: Per-request structured log line (Serilog → stderr) includes: selected model, routing reason, latency, token count, backend status, queue wait time
-- [ ] **OBS-02**: Router maintains in-process counters/gauges feeding `/stats`: requests/sec, active requests, 122B queue depth, average latency, failure count, streaming duration
+- [x] **OBS-02**: Router maintains in-process counters/gauges feeding `/stats`: requests/sec, active requests, 122B queue depth, average latency, failure count, streaming duration
 - [ ] **OBS-03**: Each request gets a correlation id propagated through logs and SSE-error events
 - [x] **OBS-04**: Logs go to stderr only; stdout is reserved for application output (matches blueCode stream-separation invariant)
 
@@ -83,9 +83,9 @@
 - [ ] **TEST-01**: Expecto unit tests cover routing pipeline: model override, task table, heuristic scoring, keyword detection, priority assignment, fallback decisions
 - [ ] **TEST-02**: Integration tests run against fake upstream Kestrel servers on random ports (deterministic responses, controlled latency, controlled failures)
 - [x] **TEST-03**: Streaming tests verify chunk ordering, mid-stream cancellation, mid-stream upstream failure, `[DONE]` propagation
-- [ ] **TEST-04**: Concurrency tests verify SemaphoreSlim enforcement, priority ordering, semaphore-release on cancellation
+- [x] **TEST-04**: Concurrency tests verify SemaphoreSlim enforcement, priority ordering, semaphore-release on cancellation
 - [ ] **TEST-05**: Failure tests cover upstream timeout, malformed JSON from upstream, unavailable model server, fallback path, `graph_indexing`-must-fail path
-- [ ] **TEST-06**: Load tests measure latency under contention and validate 122B throughput cap holds under burst
+- [x] **TEST-06**: Load tests measure latency under contention and validate 122B throughput cap holds under burst
 - [x] **TEST-07**: Tests use the explicit `rootTests` list pattern in the test entrypoint (matches blueCode; Expecto auto-discovery is unreliable)
 
 ## v2 Requirements
@@ -141,7 +141,7 @@ Deferred. Tracked but not in current roadmap.
 | API-04 | Phase 1 | Complete |
 | API-05 | Phase 4 | Pending |
 | API-06 | Phase 6 | Pending |
-| API-07 | Phase 3 | Pending |
+| API-07 | Phase 3 | Complete |
 | ROUT-01 | Phase 1 | Complete |
 | ROUT-02 | Phase 1 | Complete |
 | ROUT-03 | Phase 1 | Complete |
@@ -149,12 +149,12 @@ Deferred. Tracked but not in current roadmap.
 | ROUT-05 | Phase 1 | Complete |
 | ROUT-06 | Phase 1 | Complete |
 | ROUT-07 | Phase 1 | Complete |
-| CONC-01 | Phase 3 | Pending |
-| CONC-02 | Phase 3 | Pending |
-| CONC-03 | Phase 3 | Pending |
-| CONC-04 | Phase 3 | Pending |
-| CONC-05 | Phase 3 | Pending |
-| CONC-06 | Phase 3 | Pending |
+| CONC-01 | Phase 3 | Complete |
+| CONC-02 | Phase 3 | Complete |
+| CONC-03 | Phase 3 | Complete |
+| CONC-04 | Phase 3 | Complete |
+| CONC-05 | Phase 3 | Complete |
+| CONC-06 | Phase 3 | Complete |
 | CONC-07 | Phase 1 | Complete |
 | STRM-01 | Phase 2 | Complete |
 | STRM-02 | Phase 2 | Complete |
@@ -167,9 +167,9 @@ Deferred. Tracked but not in current roadmap.
 | REL-02 | Phase 4 | Pending |
 | REL-03 | Phase 4 | Pending |
 | REL-04 | Phase 4 | Pending |
-| REL-05 | Phase 3 | Pending |
+| REL-05 | Phase 3 | Complete |
 | OBS-01 | Phase 5 | Pending |
-| OBS-02 | Phase 3 | Pending |
+| OBS-02 | Phase 3 | Complete |
 | OBS-03 | Phase 5 | Pending |
 | OBS-04 | Phase 1 | Complete |
 | ARCH-01 | Phase 1 | Complete |
@@ -187,18 +187,18 @@ Deferred. Tracked but not in current roadmap.
 | TEST-01 | Phase 5 | Pending |
 | TEST-02 | Phase 5 | Pending |
 | TEST-03 | Phase 2 | Complete |
-| TEST-04 | Phase 3 | Pending |
+| TEST-04 | Phase 3 | Complete |
 | TEST-05 | Phase 4 | Pending |
-| TEST-06 | Phase 3 | Pending |
+| TEST-06 | Phase 3 | Complete |
 | TEST-07 | Phase 1 | Complete |
 
 **Coverage:**
 - v1 requirements: 56 total
 - Mapped to phases: 56 ✓
 - Unmapped: 0
-- Complete: 31 (Phase 1 ✓ + Phase 2 ✓)
-- Pending: 25
+- Complete: 42 (Phase 1 ✓ + Phase 2 ✓ + Phase 3 ✓)
+- Pending: 14
 
 ---
 *Requirements defined: 2026-05-07*
-*Last updated: 2026-05-08 after Phase 2 (SSE Streaming Pass-Through) completion — 31 requirements verified Complete*
+*Last updated: 2026-05-08 after Phase 3 (122B Concurrency Gate) completion — 42 requirements verified Complete*
