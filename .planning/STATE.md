@@ -5,14 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-05-07)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 3 — Concurrency Gate (Phase 2 complete)
+**Current focus:** Phase 3 — 122B Concurrency Gate (next; Phase 2 verified Complete)
 
 ## Current Position
 
 Phase: 2 of 6 (SSE Streaming Pass-Through) — COMPLETE ✓
 Plan: 2 of 2 in current phase — COMPLETE ✓
-Status: Phase 2 complete — SSE implementation + 8 streaming tests green; 30/30 tests pass
-Last activity: 2026-05-07 — Completed 02-02-STREAMING-TESTS-PLAN.md — all 5 SSE pitfalls have code mitigations + passing tests
+Status: Phase 2 verified by gsd-verifier — 8/8 must-haves green; 30/30 tests pass; all 5 SSE pitfalls have code mitigations + dedicated tests; Hermes streaming path is unblocked
+Last activity: 2026-05-08 — Phase 2 complete; gsd-verifier returned VERIFICATION PASSED
+Next: /gsd:plan-phase 3
 
 Progress: [█████░░░░░] ~29% (5 of ~17 plans estimated)
 

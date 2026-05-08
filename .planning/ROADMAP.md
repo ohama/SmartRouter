@@ -13,7 +13,7 @@ Smart Router ships in six phases that follow the build-order constraint of the h
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation** ✓ — Project scaffold, Core domain types, routing pipeline, non-streaming HTTP adapter, appsettings wiring
-- [ ] **Phase 2: SSE Streaming Pass-Through** — Complete atomic SSE correctness cluster (STRM-01..07); Hermes is unblocked when this ships
+- [x] **Phase 2: SSE Streaming Pass-Through** ✓ — Complete atomic SSE correctness cluster (STRM-01..07); Hermes is unblocked when this ships
 - [ ] **Phase 3: 122B Concurrency Gate** — Complete atomic concurrency cluster (CONC-01..06 + REL-05); Graphify concurrent requests are safe when this ships
 - [ ] **Phase 4: Health + Fallback + graph_indexing No-Fallback** — Health probing, retry policy, fallback routing, and the graph_indexing-must-fail correctness unit
 - [ ] **Phase 5: Observability + Unit/Integration Tests** — Structured per-request logging, correlation IDs, unit tests for routing pipeline, integration tests with fake upstream servers
@@ -51,8 +51,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 02-01-STREAMING-IMPL-PLAN.md — Implement `QwenUpstreamClient.StreamAsync` (taskSeq + `HttpCompletionOption.ResponseHeadersRead` + `use _ = resp` disposal scope + line-level `ReadLineAsync` yielding); wire SSE headers + per-chunk `FlushAsync` + Strategy D `[DONE]` injection in `ChatCompletions.fs` (replaces the Phase-1 HTTP 501 stub)
-- [ ] 02-02-STREAMING-TESTS-PLAN.md — Author `StreamingTests.fs` with real Kestrel-on-`127.0.0.1:0` fake upstream wrapped in `testSequenced`: TTFB under 2 s, chunk ordering, 100-chunk integrity, mid-stream cancellation (asserts fake upstream's RequestAborted fires), `[DONE]` forwarded + `[DONE]` injected, SSE header assertions, routing-error-before-streaming order-of-operations test
+- [x] 02-01-STREAMING-IMPL-PLAN.md ✓ — Implement `QwenUpstreamClient.StreamAsync` (taskSeq + `HttpCompletionOption.ResponseHeadersRead` + `use _ = resp` disposal scope + line-level `ReadLineAsync` yielding); wire SSE headers + per-chunk `FlushAsync` + Strategy D `[DONE]` injection in `ChatCompletions.fs` (replaces the Phase-1 HTTP 501 stub)
+- [x] 02-02-STREAMING-TESTS-PLAN.md ✓ — Author `StreamingTests.fs` with real Kestrel-on-`127.0.0.1:0` fake upstream wrapped in `testSequenced`: TTFB under 2 s, chunk ordering, 100-chunk integrity, mid-stream cancellation (asserts fake upstream's RequestAborted fires within 5 s), `[DONE]` forwarded + `[DONE]` injected, SSE header assertions, routing-error-before-streaming order-of-operations test
 
 ### Phase 3: 122B Concurrency Gate
 **Goal**: At most one 122B request is in flight at any time; high-priority tasks (graph_indexing, compiler_debug, architecture_analysis) preempt low-priority ones in the queue; cancellation or upstream hang never leaks the semaphore.
@@ -126,7 +126,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | ✓ Complete | 2026-05-07 |
-| 2. SSE Streaming Pass-Through | 0/2 | Not started | - |
+| 2. SSE Streaming Pass-Through | 2/2 | ✓ Complete | 2026-05-08 |
 | 3. 122B Concurrency Gate | 0/3 | Not started | - |
 | 4. Health + Fallback + graph_indexing No-Fallback | 0/3 | Not started | - |
 | 5. Observability + Unit/Integration Tests | 0/2 | Not started | - |
