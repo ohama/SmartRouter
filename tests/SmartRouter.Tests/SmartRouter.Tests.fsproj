@@ -18,6 +18,8 @@
     <Compile Include="HardCaseDatasetTests.fs" />
     <!-- Phase 8 -->
     <Compile Include="RetrainingTests.fs" />
+    <!-- Phase 9 -->
+    <Compile Include="CanaryTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
