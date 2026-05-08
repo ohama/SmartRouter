@@ -14,6 +14,7 @@ open Serilog
 open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
 open SmartRouter.Core.Routing
+open SmartRouter.Core.RetrainingPorts   // IModelVersionProvider
 open SmartRouter.Cli.Adapters.Json
 open SmartRouter.Cli.Adapters.DecisionLogger
 open SmartRouter.Cli.Adapters.CorrelationMiddleware
@@ -92,13 +93,14 @@ let private escapeJsonString (s: string) =
 /// Used at every exit point in handler to reduce duplication.
 /// latency_ms is computed at call time (DateTimeOffset.UtcNow - started).
 let private buildDecisionLog
-    (req           : RouterRequest)
-    (regn          : RoutingAlgorithmRegistration)
-    (correlationId : string)
-    (started       : DateTimeOffset)
-    (target        : string)
-    (reason        : string)
-    (fallbackUsed  : bool)
+    (req             : RouterRequest)
+    (regn            : RoutingAlgorithmRegistration)
+    (versionProvider : IModelVersionProvider)
+    (correlationId   : string)
+    (started         : DateTimeOffset)
+    (target          : string)
+    (reason          : string)
+    (fallbackUsed    : bool)
     : DecisionLog =
     { schema_version           = 1
       correlation_id           = correlationId
@@ -109,7 +111,7 @@ let private buildDecisionLog
       target                   = target
       latency_ms               = (DateTimeOffset.UtcNow - started).TotalMilliseconds
       fallback_used            = fallbackUsed
-      model_version            = regn.ModelVersion
+      model_version            = versionProvider.CurrentVersion
       task_type                = req.Task
       timestamp                = DateTimeOffset.UtcNow }
 
@@ -137,11 +139,12 @@ let private buildDecisionLog
 /// dispatch requirement: editing appsettings.json + restarting rebuilds this
 /// singleton, changing runtime dispatch without recompile.
 let handler
-    (routingConfig  : RoutingConfig)
-    (regn           : RoutingAlgorithmRegistration)
-    (decisionLogger : IDecisionLogger)
-    (upstream       : IUpstreamClient)
-    (ctx            : HttpContext) : Task =
+    (routingConfig   : RoutingConfig)
+    (regn            : RoutingAlgorithmRegistration)
+    (versionProvider : IModelVersionProvider)
+    (decisionLogger  : IDecisionLogger)
+    (upstream        : IUpstreamClient)
+    (ctx             : HttpContext) : Task =
     task {
         // Capture start time and correlation ID at the very top of the handler.
         // correlationId fallback is defensive — if CorrelationMiddleware is somehow
@@ -171,7 +174,7 @@ let handler
                     {| error = {| message = "request body is required"
                                   ``type`` = "invalid_request_error" |} |},
                     jsonOptions, ctx.RequestAborted)
-            decisionLogger.Log(buildDecisionLog emptyReq regn correlationId started "unknown" "error:null_body" false)
+            decisionLogger.Log(buildDecisionLog emptyReq regn versionProvider correlationId started "unknown" "error:null_body" false)
         else
 
         let req = mapWireToRequest wireBody
@@ -187,7 +190,7 @@ let handler
                     {| error = {| message = $"unknown task: {raw}"
                                   ``type`` = "invalid_request_error" |} |},
                     jsonOptions, ctx.RequestAborted)
-            decisionLogger.Log(buildDecisionLog req regn correlationId started "unknown" (sprintf "error:unsupported_task:%s" raw) false)
+            decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started "unknown" (sprintf "error:unsupported_task:%s" raw) false)
 
         | Error e ->
             ctx.Response.StatusCode <- 400
@@ -195,7 +198,7 @@ let handler
                     {| error = {| message = string e
                                   ``type`` = "invalid_request_error" |} |},
                     jsonOptions, ctx.RequestAborted)
-            decisionLogger.Log(buildDecisionLog req regn correlationId started "unknown" (sprintf "error:%A" e) false)
+            decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started "unknown" (sprintf "error:%A" e) false)
 
         | Ok decision ->
 
@@ -271,7 +274,7 @@ let handler
                         if streamError
                         then formatReason decision.Reason + ";stream_error"
                         else formatReason decision.Reason
-                    decisionLogger.Log(buildDecisionLog req regn correlationId started (sprintf "%A" decision.Target) reason decision.IsFallback)
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (sprintf "%A" decision.Target) reason decision.IsFallback)
 
                 with
                 | :? OperationCanceledException ->
@@ -279,11 +282,11 @@ let handler
                     // No more writes possible — log and dispose.
                     Log.Information("StreamAsync: client disconnected mid-stream for {Target}", decision.Target)
                     do! enumerator.DisposeAsync()
-                    decisionLogger.Log(buildDecisionLog req regn correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";cancelled") decision.IsFallback)
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";cancelled") decision.IsFallback)
                 | ex ->
                     Log.Error(ex, "StreamAsync: unexpected error writing to response for {Target}", decision.Target)
                     do! enumerator.DisposeAsync()
-                    decisionLogger.Log(buildDecisionLog req regn correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";stream_error") decision.IsFallback)
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";stream_error") decision.IsFallback)
 
             else
                 // ── Non-streaming branch (unchanged from Phase 1) ────────────────────
@@ -297,7 +300,7 @@ let handler
                 | Ok body ->
                     ctx.Response.ContentType <- "application/json"
                     do! ctx.Response.WriteAsync(body, ctx.RequestAborted)
-                    decisionLogger.Log(buildDecisionLog req regn correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason) decision.IsFallback)
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason) decision.IsFallback)
 
                 | Error e ->
                     ctx.Response.StatusCode <- 502
@@ -305,7 +308,7 @@ let handler
                             {| error = {| message = string e
                                           ``type`` = "upstream_error" |} |},
                             jsonOptions, ctx.RequestAborted)
-                    decisionLogger.Log(buildDecisionLog req regn correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";upstream_error") decision.IsFallback)
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";upstream_error") decision.IsFallback)
     }
 
 // ── Endpoint registration ────────────────────────────────────────────────────
@@ -318,8 +321,9 @@ let handler
 /// restarting changes the runtime routing behavior.
 let mapEndpoints (app: WebApplication) =
     app.MapPost("/v1/chat/completions", Func<HttpContext, Task>(fun ctx ->
-        let routingConfig   = ctx.RequestServices.GetRequiredService<RoutingConfig>()
-        let regn            = ctx.RequestServices.GetRequiredService<RoutingAlgorithmRegistration>()
-        let decisionLogger  = ctx.RequestServices.GetRequiredService<IDecisionLogger>()
-        let upstream        = ctx.RequestServices.GetRequiredService<IUpstreamClient>()
-        handler routingConfig regn decisionLogger upstream ctx)) |> ignore
+        let routingConfig    = ctx.RequestServices.GetRequiredService<RoutingConfig>()
+        let regn             = ctx.RequestServices.GetRequiredService<RoutingAlgorithmRegistration>()
+        let versionProvider  = ctx.RequestServices.GetRequiredService<IModelVersionProvider>()
+        let decisionLogger   = ctx.RequestServices.GetRequiredService<IDecisionLogger>()
+        let upstream         = ctx.RequestServices.GetRequiredService<IUpstreamClient>()
+        handler routingConfig regn versionProvider decisionLogger upstream ctx)) |> ignore

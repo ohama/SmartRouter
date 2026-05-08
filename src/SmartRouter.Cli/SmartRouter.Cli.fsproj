@@ -26,6 +26,7 @@
     <Compile Include="Adapters/Retrainer.fs" />
     <Compile Include="Adapters/DatasetMerger.fs" />
     <Compile Include="Adapters/Validator.fs" />
+    <Compile Include="Adapters/ModelVersionProvider.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />
     <Compile Include="Endpoints/Stats.fs" />
     <Compile Include="CompositionRoot.fs" />
