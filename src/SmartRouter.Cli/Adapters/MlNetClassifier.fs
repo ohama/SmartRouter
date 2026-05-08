@@ -20,15 +20,15 @@ type RoutePrediction =
       Score       : float32
       Probability : float32 }
 
-/// IClassifier wrapper around PredictionEnginePool.
-/// Pool is singleton (registered via AddPredictionEnginePool); this adapter
-/// is also singleton; both share lifetime so watchForChanges hot-reload (Phase 8) works.
-type MlNetClassifier(pool: PredictionEnginePool<RouteInput, RoutePrediction>) =
+/// IClassifier wrapper around PredictionEnginePool with a configurable modelName.
+/// Phase 6 wired this with a hardcoded "router". Phase 9 makes it parameterizable so
+/// the same wrapper can serve baseline and canary registrations from the same pool.
+type MlNetClassifier(pool: PredictionEnginePool<RouteInput, RoutePrediction>, modelName: string) =
     interface IClassifier with
         member _.PredictAsync(embedding: float32[], _ct: CancellationToken) : Task<ClassifierPrediction> =
             task {
                 let input = { Features = embedding; Label = false }
-                let pred  = pool.Predict(modelName = "router", example = input)
+                let pred  = pool.Predict(modelName = modelName, example = input)
                 return
                     { Score          = pred.Probability
                       PredictedLabel = pred.Predicted }

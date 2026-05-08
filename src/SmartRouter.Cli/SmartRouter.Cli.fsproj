@@ -28,6 +28,12 @@
     <Compile Include="Adapters/Validator.fs" />
     <Compile Include="Adapters/ModelVersionProvider.fs" />
     <Compile Include="Adapters/RetrainingService.fs" />
+    <!-- Phase 9 — Canary deployment (Task 1 — leaf adapters + Gate) -->
+    <Compile Include="Adapters/CanaryTargetingAccessor.fs" />
+    <Compile Include="Adapters/CanaryState.fs" />
+    <Compile Include="Adapters/CanaryMetrics.fs" />
+    <Compile Include="Adapters/RetrainLock.fs" />
+    <Compile Include="Adapters/CanaryGate.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />
     <Compile Include="Endpoints/Stats.fs" />
     <Compile Include="CompositionRoot.fs" />
