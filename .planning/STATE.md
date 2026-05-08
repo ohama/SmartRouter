@@ -10,12 +10,12 @@ See: .planning/PROJECT.md (updated 2026-05-07)
 ## Current Position
 
 Phase: 3 of 6 (122B Concurrency Gate) — In progress
-Plan: 1 of 3 in current phase — COMPLETE ✓
-Status: Plan 03-01 complete — IUpstreamClient port-shape refactored; QueueDispatcher live in DI; 30/30 tests pass
-Last activity: 2026-05-08 — Completed 03-01-QUEUE-DISPATCHER-PLAN.md
-Next: Plan 03-02 — QueueTests.fs + /stats endpoint
+Plan: 2 of 3 in current phase — COMPLETE ✓
+Status: Plan 03-02 complete — GET /stats endpoint live; 9 QueueTests pass (39 total); all PITFALL mitigations proven
+Last activity: 2026-05-08 — Completed 03-02-STATS-AND-QUEUE-TESTS-PLAN.md
+Next: Plan 03-03 — Load tests (TEST-06, deferred from 03-02)
 
-Progress: [██████░░░░] ~35% (6 of ~17 plans estimated)
+Progress: [███████░░░] ~41% (7 of ~17 plans estimated)
 
 ## Performance Metrics
 
@@ -30,11 +30,11 @@ Progress: [██████░░░░] ~35% (6 of ~17 plans estimated)
 |-------|-------|-------|----------|
 | 01-foundation | 3/3 | ~21 min | 7 min |
 | 02-sse-streaming-pass-through | 2/2 | ~24 min | 12 min |
-| 03-122b-concurrency-gate | 1/3 | ~15 min | 15 min |
+| 03-122b-concurrency-gate | 2/3 | ~50 min | 25 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-03 (13 min), 02-01 (18 min), 02-02 (6 min), 03-01 (15 min)
-- Trend: 03-01 was the largest single plan (2 tasks, 8 files); port-shape refactor + atomic concurrency cluster + DI swap in one plan
+- Last 5 plans: 02-01 (18 min), 02-02 (6 min), 03-01 (15 min), 03-02 (~35 min)
+- Trend: 03-02 was large due to 9 test cases with complex concurrency semantics and 3 test design bugs auto-fixed
 
 *Updated after each plan completion*
 
@@ -69,6 +69,9 @@ Recent decisions affecting current work:
 - 03-01: Sub-pattern A: dispatcher acquires sem122b BEFORE signalling TCS — individual requests park on tcs.Task, never on sem.WaitAsync (PITFALL-9 mitigation)
 - 03-01: Linked CTS created AFTER enqueue122b returns — timeout starts at slot grant, queue wait never burns timeout budget (PITFALL-11 mitigation)
 - 03-01: startTestRouter requires Queue section in AddInMemoryCollection — QueueDispatcherOptions.MaxConcurrent122B defaults to 0 which the QueueDispatcher constructor rejects
+- 03-02: StatsWire is a separate private record with snake_case fields (not StatsSnapshot) — F# records serialize as PascalCase by default; StatsWire fields are lowercase and emit correctly via jsonOptions
+- 03-02: QueueDepth is always transient in the dispatcher — dispatcher dequeues a ticket within microseconds of signal.Release() and blocks on sem.WaitAsync; QueueDepth=N assertions in polls race the dispatcher; use Active122B + SemaphoreAvailable + fake.CallCount as stable observables instead
+- 03-02: Test 3 PITFALL-10 proof uses LatencyFake not FakeUpstreamClient — gate-per-call would require knowing the correct drain order before the test runs (circular dependency); LatencyFake auto-completes and lets WhenAll observe the completion order vector
 
 ### Pending Todos
 
@@ -82,6 +85,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T10:02:46Z
-Stopped at: Completed 03-01-QUEUE-DISPATCHER-PLAN.md — QueueDispatcher live; 30/30 tests pass
+Last session: 2026-05-08T01:46:09Z
+Stopped at: Completed 03-02-STATS-AND-QUEUE-TESTS-PLAN.md — GET /stats live; 39/39 tests pass; all PITFALL mitigations proven
 Resume file: None
