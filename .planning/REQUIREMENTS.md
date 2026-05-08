@@ -105,11 +105,12 @@
 
 ### Embeddings + Classifier (Phase 6)
 
-- [ ] **EMBED-01**: `IEmbedder` port in Core (no NuGet deps); `BgeSmallEmbedder` adapter in Cli using `SmartComponents.LocalEmbeddings`; produces 384-dim L2-normalized vectors (NOT the spec's 128 placeholder)
-- [ ] **EMBED-02**: Same prompt produces the same vector across runs (determinism); verified by unit test on three fixed prompts
-- [ ] **CLS-01**: `IClassifier` port in Core; `MlNetClassifier` adapter in Cli loading via `Microsoft.Extensions.ML.PredictionEnginePool`; predicts a binary label + confidence given a 384-dim vector
-- [ ] **CLS-02**: First-run bootstrap — when `models/router.zip` is missing at startup, a dummy model with random weights is auto-generated; logged warning explains it's a placeholder; `applyML` does not throw on cold start
-- [ ] **CLS-03**: `applyML` produces decisions that diverge from `applyHeuristic` on at least one test prompt (proves real ML is wired, not a passthrough); verified by an a/b unit test
+- [ ] **EMBED-01**: `IEmbedder` port in Core (no NuGet deps); `BgeM3Embedder` adapter in Cli using `Microsoft.ML.OnnxRuntime` + SentencePiece tokenizer (XLM-R compatible); produces **1024-dim** L2-normalized vectors. **bge-m3 chosen over bge-small** because the operator's traffic mixes Korean+English; bge-small's tokenizer cannot handle Hangul (sub-`[UNK]` fallback), making Korean prompts route effectively at random per `~/projs/smart-router-distillation/docs/embedding-classifier-decision-deep-dive.md` §1.7.1. Skips the deep-dive's "measure-then-migrate" path because operator is confident Korean ratio ≥20%.
+- [ ] **EMBED-02**: Same prompt produces the same vector across runs (determinism); verified by unit test on three fixed prompts (one English, one Korean, one mixed)
+- [ ] **EMBED-03**: Embedding latency budget — single-prompt embedding completes in <100ms on Mac M-series with default execution provider; if exceeded, fall back to int8 quantized model OR add CoreML execution provider — verified by latency benchmark in tests
+- [ ] **CLS-01**: `IClassifier` port in Core; `MlNetClassifier` adapter in Cli loading via `Microsoft.Extensions.ML.PredictionEnginePool`; predicts a binary label + confidence given a 1024-dim vector
+- [ ] **CLS-02**: First-run bootstrap — when `models/router.zip` is missing at startup, a dummy model with random weights (1024-dim input) is auto-generated; logged warning explains it's a placeholder; `applyML` does not throw on cold start
+- [ ] **CLS-03**: `applyML` produces decisions that diverge from `applyHeuristic` on at least one test prompt — including at least one Korean prompt where bge-m3's multilingual semantics yield a different decision than the heuristic's keyword matcher would (proves bge-m3 is actually being used, not bge-small or random weights)
 
 ### Failure Detection + Teacher Labeling (Phase 7)
 
@@ -251,6 +252,7 @@ Deferred. Tracked but not in current roadmap.
 | LOG-04 | Phase 5 | Pending |
 | EMBED-01 | Phase 6 | Pending |
 | EMBED-02 | Phase 6 | Pending |
+| EMBED-03 | Phase 6 | Pending |
 | CLS-01 | Phase 6 | Pending |
 | CLS-02 | Phase 6 | Pending |
 | CLS-03 | Phase 6 | Pending |
@@ -269,11 +271,11 @@ Deferred. Tracked but not in current roadmap.
 | CANARY-03 | Phase 9 | Pending |
 
 **Coverage:**
-- v1 requirements: 82 total (56 original + 26 ML-arc additions)
-- Mapped to phases: 82 ✓
+- v1 requirements: 83 total (56 original + 27 ML-arc additions; +1 EMBED-03 for bge-m3 latency)
+- Mapped to phases: 83 ✓
 - Unmapped: 0
 - Complete: 44 (Phase 1 ✓ + Phase 2 ✓ + Phase 3 ✓ + TEST-01/TEST-02 retroactive)
-- Pending: 38 (26 ML arc + 12 deferred heuristic-cleanup)
+- Pending: 39 (27 ML arc + 12 deferred heuristic-cleanup)
 
 ---
 *Requirements defined: 2026-05-07*

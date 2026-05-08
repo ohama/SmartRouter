@@ -23,7 +23,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: 122B Concurrency Gate** ✓ — Complete atomic concurrency cluster (CONC-01..06 + REL-05); Graphify concurrent requests are safe when this ships
 - [ ] **Phase 4: ML Algorithm Seam** — Placeholder ML algorithm + config dispatch (`Routing.Algorithm: "heuristic" | "ml"`) + CLI `--routing-algorithm` override; heuristic stays default; existing tests stay green; same-shape ML test confirms dispatch
 - [ ] **Phase 5: Routing-Decision Logging** — Per-request structured JSONL log with routing reason, latency, model_version, fallback flag, correlation ID; thread-safe writer; absorbs OBS-01 and OBS-03 from old Phase 5 — this is Loop B's input
-- [ ] **Phase 6: Real ML Routing** — `SmartComponents.LocalEmbeddings` (bge-small) + ML.NET `LbfgsLogisticRegression` + replace placeholder; first model file (committed dummy or auto-generated on first run); both algorithms produce different decisions on the same input
+- [ ] **Phase 6: Real ML Routing** — `Microsoft.ML.OnnxRuntime` + bge-m3 (1024-dim, multilingual; chosen over bge-small for Korean+English mixed traffic) + ML.NET `LbfgsLogisticRegression` + replace placeholder; first model file auto-generated on first run; latency budget <100ms (with int8/CoreML fallback if exceeded)
 - [ ] **Phase 7: Failure Detection + Teacher Labeling** — Failure detector (fallback-used + error + short-response + low-confidence signals); teacher labeler (HTTP to 122B with timeout/retry/cost cap, `prompts/teacher_prompt.md`); hard-case dataset extraction
 - [ ] **Phase 8: Retraining Loop** — Dataset merger (old 70 + new 30 with class balance); ML.NET trainer; held-out validator with rollback gate; `BackgroundService` + `PeriodicTimer`; `PredictionEnginePool` + `watchForChanges:true` for atomic hot-reload; idempotency lock
 - [ ] **Phase 9: Canary Deployment** — `Microsoft.FeatureManagement` + `PercentageFilter` for 10/90 split; `model_version` cohort tagging in logs; comparison + rollout/rollback workflow
@@ -116,21 +116,23 @@ Plans:
 - [ ] 05-03: LoggingTests.fs — concurrency safety (100 concurrent), correlation ID propagation, schema completeness, graceful shutdown flush
 
 ### Phase 6: Real ML Routing
-**Goal**: Replace the placeholder `applyML` with a real classifier: `SmartComponents.LocalEmbeddings` (bge-small, 384-dim) + ML.NET `LbfgsLogisticRegression` loaded from a model file. Same-prompt comparison shows heuristic and ML producing different decisions on the same input. The first model file is auto-generated at startup if missing (dummy weights → ~50/50 routing) so the system bootstraps without a pre-trained model.
+**Goal**: Replace the placeholder `applyML` with a real classifier: bge-m3 (1024-dim, multilingual) via `Microsoft.ML.OnnxRuntime` + ML.NET `LbfgsLogisticRegression` loaded from a model file. Same-prompt comparison shows heuristic and ML producing different decisions on the same input — including a Korean prompt where bge-m3's tokenizer-aware multilingual semantics differ from the heuristic's English keyword matcher. The first model file is auto-generated at startup if missing (dummy 1024-dim weights → ~50/50 routing) so the system bootstraps without a pre-trained model.
 **Depends on**: Phase 5
-**Requirements**: EMBED-01, EMBED-02, CLS-01, CLS-02
+**Requirements**: EMBED-01, EMBED-02, EMBED-03, CLS-01, CLS-02, CLS-03
+**Why bge-m3 over bge-small (operator decision 2026-05-08)**: smart-router's operator mixes Korean+English in real traffic. bge-small (-en) tokenizer cannot handle Hangul (`[가-힣]`) — produces sub-`[UNK]` byte fallback, making Korean prompts route at random per smart-router-distillation `embedding-classifier-decision-deep-dive.md` §1.7.1. The doc's measure-then-migrate path is shortened because Korean traffic ≥ 20% threshold is operator-confirmed-in-advance. Cost: ~5x embedding latency (50-80ms vs 10-15ms on CPU) and 2.3GB model file (vs 130MB) — addressed via EMBED-03 latency budget with int8/CoreML fallback if needed.
 **Success Criteria** (what must be TRUE):
-  1. `IEmbedder` port in Core; `BgeSmallEmbedder` adapter in Cli using `SmartComponents.LocalEmbeddings`; produces 384-dim L2-normalized vectors; verified by unit test on three known prompts.
-  2. `IClassifier` port in Core; `MlNetClassifier` adapter in Cli loading `models/router.zip` via `PredictionEnginePool`; verified by unit test that loads a hand-built dummy model and predicts.
-  3. `applyML` is the real implementation: embed → classify → threshold → `RoutingDecision { Target; Priority; Reason = ML }`. Heuristic decision and ML decision diverge on at least one test prompt (verified by an a/b assertion).
-  4. First-run bootstrap: if `models/router.zip` is missing, a startup task creates a dummy model with random weights so `applyML` doesn't throw; logged warning explains the model is dummy.
+  1. `IEmbedder` port in Core; `BgeM3Embedder` adapter in Cli using `Microsoft.ML.OnnxRuntime` + SentencePiece tokenizer; produces 1024-dim L2-normalized vectors; verified by unit test on three prompts (English, Korean, mixed).
+  2. `IClassifier` port in Core; `MlNetClassifier` adapter in Cli loading `models/router.zip` via `PredictionEnginePool`; predicts on 1024-dim input; verified by unit test that loads a hand-built dummy model and predicts.
+  3. `applyML` is the real implementation: embed → classify → threshold → `RoutingDecision { Target; Priority; Reason = ML }`. Heuristic decision and ML decision diverge on at least one test prompt INCLUDING a Korean prompt where bge-m3's multilingual semantics differ from heuristic keyword matching (verified by a/b assertion).
+  4. First-run bootstrap: if `models/router.zip` is missing, a startup task creates a dummy model with random 1024-dim weights so `applyML` doesn't throw; logged warning explains the model is dummy.
   5. `model_version` in DecisionLog reflects the loaded model's filename hash (so Loop B's retraining is cohorted correctly).
+  6. Embedding latency on Mac M-series stays under 100ms per prompt with default ONNX execution provider; if benchmark exceeds, swap to int8 quantized bge-m3 OR add CoreML EP — measured by EMBED-03 verification test.
 **Plans**: TBD
 
 Plans:
-- [ ] 06-01: Add `SmartComponents.LocalEmbeddings` + `Microsoft.ML` + `Microsoft.Extensions.ML` NuGet pins; verify versions live; design `IEmbedder` and `IClassifier` ports
-- [ ] 06-02: Implement `BgeSmallEmbedder` and `MlNetClassifier` adapters; first-run dummy model generator; replace placeholder `applyML`
-- [ ] 06-03: Tests — embedding determinism, classifier load+predict, a/b decision divergence, dummy bootstrap, model_version tagging in DecisionLog
+- [ ] 06-01: ONNX export `BAAI/bge-m3` to `models/embed/` (offline `optimum-cli` step OR auto-download script); add `Microsoft.ML.OnnxRuntime` + tokenizer NuGet (research-time decision: `Microsoft.ML.Tokenizers` with SentencePiece OR `BERTTokenizers` adapted for XLM-R) + `Microsoft.ML` + `Microsoft.Extensions.ML` pins; verify versions live; design `IEmbedder` (1024-dim) and `IClassifier` ports
+- [ ] 06-02: Implement `BgeM3Embedder` (mean pooling + L2 normalize; warm-up on cold start) and `MlNetClassifier` adapters; first-run dummy 1024-dim model generator; replace placeholder `applyML`
+- [ ] 06-03: Tests — embedding determinism on 3 prompts (en/ko/mixed), classifier load+predict, a/b decision divergence including Korean prompt, dummy bootstrap, model_version tagging in DecisionLog, latency benchmark under 100ms threshold (EMBED-03)
 
 ### Phase 7: Failure Detection + Teacher Labeling
 **Goal**: Build the offline data pipeline that produces labeled training samples from production logs. Failure detector reads JSONL logs and emits hard cases (currently: `fallback_used=true` only — Phase 10 expands signals). Teacher labeler calls 122B (or Claude) per hard case and produces `(prompt, label)` pairs with timeout, retry, and a daily cost cap. Hard-case dataset is appended to `datasets/hard-cases.jsonl`. This phase produces no behavior change at request time — it's prep for Phase 8's retraining loop.
