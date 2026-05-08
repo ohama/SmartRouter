@@ -9,6 +9,9 @@
     <!-- Adapters (Infrastructure) — must precede Endpoints and Program -->
     <Compile Include="Adapters/Json.fs" />
     <Compile Include="Adapters/Logging.fs" />
+    <Compile Include="Adapters/DecisionLogger.fs" />
+    <Compile Include="Adapters/DecisionLogWriter.fs" />
+    <Compile Include="Adapters/CorrelationMiddleware.fs" />
     <Compile Include="Adapters/QwenUpstreamClient.fs" />
     <Compile Include="Adapters/QueueDispatcher.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />
