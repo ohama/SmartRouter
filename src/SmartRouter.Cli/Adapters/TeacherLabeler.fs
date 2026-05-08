@@ -37,9 +37,14 @@ type private CapCounter =
 let private capJsonOpts =
     // PropertyNamingPolicy = SnakeCaseLower so PascalCase F# fields write as
     // {"date":"...","count":42,"max":1000} on disk (matches CONTEXT.md schema).
+    // JsonFSharpConverter is REQUIRED: CapCounter is a private F# record type whose
+    // [<CLIMutable>]-generated parameterless constructor is not public, so STJ's default
+    // ObjectDefaultConverter cannot access it via reflection. JsonFSharpConverter uses
+    // Microsoft.FSharp.Reflection and handles private F# record types correctly.
     let o = JsonSerializerOptions(
                 WriteIndented        = false,
                 PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower)
+    o.Converters.Add(JsonFSharpConverter())
     o
 
 /// Read the counter for today (UTC). If the file is missing or stale, returns

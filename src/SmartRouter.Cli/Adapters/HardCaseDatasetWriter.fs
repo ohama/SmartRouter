@@ -165,7 +165,12 @@ type HardCaseDatasetWriter(options: HardCaseDatasetOptions) =
                 | false, _ -> more <- false
 
             // Dispose the StreamWriter cleanly (Pitfall P3 — no handle leak).
-            writer |> Option.iter (fun w -> try w.Flush() with _ -> (); w.Dispose())
+            // NOTE: F# parsing pitfall: `fun w -> try w.Flush() with _ -> (); w.Dispose()`
+            // would only call Dispose() in the exception arm (semicolon binds inside with-clause).
+            // Explicit multi-line form ensures Dispose() is always called regardless of Flush result.
+            writer |> Option.iter (fun w ->
+                try w.Flush() with _ -> ()
+                try w.Dispose() with _ -> ())
         }
 
     /// Signal end-of-stream so ExecuteAsync's drain phase runs.
