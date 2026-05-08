@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 8 — Retraining Loop (next: DatasetMerger + Retrainer + Validator + ModelRegistry + RetrainingService BackgroundService; depends on Phase 7 IFailureDetector/ITeacherLabeler/IHardCaseDatasetWriter + datasets/hard-cases.jsonl)
+**Current focus:** Phase 9 — Canary Routing (next: canary cohort tagging, A/B model comparison, rollback via router.zip.prev; depends on Phase 8 IModelVersionProvider singleton + models/router.zip.prev)
 
 ## Current Position
 
-Phase: 8 of 11 (Retraining Loop) — IN PROGRESS
-Plan: 2 of 3 in current phase — COMPLETE ✓
-Status: Phase 8 Plan 2 complete. ModelVersionProvider.fs (lock-guarded mutable IModelVersionProvider). RetrainingService.fs (BackgroundService, two-timer race via Task.WhenAll, SemaphoreSlim(1,1).Wait(0) skip gate, Lock 5 pipeline order, File.Copy .prev + File.Move candidate, cumulative training-set, versionProvider.Update, RunNowAsync test seam). ChatCompletions.fs: buildDecisionLog reads IModelVersionProvider.CurrentVersion per-request at all 8 exit points. CompositionRoot.fs: 5 new registrations (Configure<RetrainingOptions> + double-reg MVP + double-reg RetrainingService guarded on routingAlgoStr="ml"). appsettings.json: Retraining section (12 keys). Build: 0 errors, 0 warnings. Tests: 66 pass + 10 ignored (0 failed, baseline preserved).
-Last activity: 2026-05-08 — Phase 8 Plan 2 COMPLETE
+Phase: 8 of 11 (Retraining Loop) — COMPLETE ✓
+Plan: 3 of 3 in current phase — COMPLETE ✓
+Status: Phase 8 complete. 7 Expecto tests covering RETRAIN-01..06 added. FakeEmbedder (Task.Yield for concurrent semaphore test), ThrowingEmbedder, CapturingSink helpers. test7 runs as testCase (StartAsync + PeriodicTimer count-check integration, ~60-90s). Build: 0 errors, 0 warnings. Tests: 73 pass + 10 ignored, 0 failed (was 66 pass baseline). Canonical run: dotnet run -- --sequenced.
+Last activity: 2026-05-09 — Phase 8 Plan 3 COMPLETE
 
-Progress: [█████████████████░░░░░░] 25 of ~30 plans (phase 8 in progress; 2 of 3 plans complete)
+Progress: [██████████████████░░░░░] 26 of ~30 plans (phase 8 complete; phase 9 next)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 23 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing + 6 failure-detection)
+- Total plans completed: 26 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing + 6 failure-detection + 3 retraining-loop)
 - Average duration: ~7 min
-- Total execution time: ~115 min
+- Total execution time: ~132 min
 
 **By Phase:**
 
@@ -34,10 +34,11 @@ Progress: [█████████████████░░░░░░
 | 05-routing-decision-logging | 3/3 | ~19 min | 6 min |
 | 06-real-ml-routing | 3/3 | ~18 min | ~6 min |
 | 07-failure-detection-and-teacher-labeling | 6/6 | ~50 min | ~8 min |
+| 08-retraining-loop | 3/3 | ~32 min | ~11 min |
 
 **Recent Trend:**
-- Last 5 plans: 05-02 (~6 min), 05-03 (~5 min), 06-01 (~5 min), 06-02 (~8 min), 06-03 (~5 min)
-- Trend: Tests-only plans very fast (~5 min); Cli/integration plans take longer
+- Last 5 plans: 07-05 (~8 min), 07-06 (~10 min), 08-01 (~8 min), 08-02 (~7 min), 08-03 (~17 min)
+- Trend: Tests-only plans with ML.NET training take longer (~17 min); core implementation plans ~7-10 min
 
 *Updated after each plan completion*
 
@@ -142,6 +143,11 @@ Recent decisions affecting current work:
 - 08-02: runRetrain pipeline order: split FIRST → train on split.TrainSet only → evaluate baseline + candidate on split.TestSet (fair comparison; held-out genuinely held out — CONTEXT.md Lock 5)
 - 08-02: ExceptionDispatchInfo.Capture(oce).Throw() instead of reraise() for OperationCanceledException in task{} nested try/with — FS0413 prevents reraise() inside CE try/with handlers; ExceptionDispatchInfo preserves original stack trace
 - 08-02: Cumulative training-set persistence: Array.append oldEntries hardCaseEntries saved after each successful retrain (not just hardCaseEntries); first-retrain bootstrap: oldEntries=[||] → cumulative=hardCaseEntries (Lock 3)
+- 08-03: CapturingSink ILogEventSink pattern (mirror LoggingTests.fs from Phase 5) — installed before service construction; test4 asserts exactly 1 "starting retrain cycle" log + >=1 "skipping trigger" log to prove SemaphoreSlim skip semantics (CONTEXT.md Lock 7)
+- 08-03: test7_countTriggerFires uses StartAsync (NOT RunNowAsync) with IntervalMinutes=1 to exercise the count-check PeriodicTimer branch — satisfies ROADMAP "two integration tests" criterion for RETRAIN-02 alongside test1_runNowAsync
+- 08-03: FakeEmbedder requires Task.Yield() inside task{} — without it, runRetrain executes synchronously (Task.FromResult doesn't yield), both concurrent RunNowAsync calls acquire the semaphore sequentially; Task.Yield() forces genuine suspension so t1 holds semaphore while t2 finds it taken
+- 08-03: ExceptionDispatchInfo.Capture(oce).Throw() (from Plan 08-02) preserves OperationCanceledException through task{} await points — reraise() inside task{} nested try/with is invalid (F# FS0413); test5 force-throw isolation confirmed: cancellation during retrain propagates through BackgroundService loop so StopAsync works
+- 08-03: Canonical test run is dotnet run -- --sequenced (73 passed, 10 ignored, 0 failed); parallel mode shows pre-existing flakiness in QueueTests PITFALL-10 and HardCaseDatasetTests graceful-drain tests when run alongside CPU-heavy ML.NET training
 
 ### Pending Todos
 
@@ -155,6 +161,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T20:36:29Z
-Stopped at: Phase 8 Plan 2 COMPLETE — 08-02 (ModelVersionProvider+RetrainingService+ChatCompletions wiring+CompositionRoot DI); build clean; 66 pass + 10 ignored, 0 failed
+Last session: 2026-05-09T05:57:29Z
+Stopped at: Phase 8 Plan 3 COMPLETE — 08-03 (RetrainingTests.fs: 7 tests covering RETRAIN-01..06); build clean; 73 pass + 10 ignored, 0 failed (--sequenced canonical run)
 Resume file: None
