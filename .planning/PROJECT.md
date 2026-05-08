@@ -18,7 +18,12 @@ on a Mac and routes each request to the right one. It serves
 
 Both clients use the same OpenAI-compatible wire format. The router
 reconciles their needs through a single decision pipeline:
-explicit-task → heuristic fallback → 35B-aggressive default.
+explicit-model-override → explicit-task → **ML classifier (primary)**
+→ 35B-aggressive default. The hand-written heuristic ships in Phases
+1-3 and remains in the codebase as a **dormant emergency fallback**
+(soft-paused 2026-05-08; see Key Decisions). All forward development
+(Phases 6-9) targets the ML algorithm: bge-m3 int8 embeddings + ML.NET
+LR classifier + auto-retraining loop.
 
 ## Core Value
 
@@ -253,8 +258,8 @@ regression.
 | Retry policy + backend health detection in v1 (was v2 in pre-Graphify draft) | Required by graphify spec; backend health detection is also the input to fallback logic. | — Pending |
 | Reject Channels / TPL Dataflow for v1 | Priority queue + semaphore covers v1 needs without the abstraction tax. Reach for Dataflow only if v2 fan-out pipelines justify it. | ✓ Good |
 | **ML routing folded into v1** (was originally Out of Scope / v2). NEW Phases 4-9 ship the ML arc; old Phases 4 and 6 deferred to Phases 10-11. Old Phase 5 dissolved (OBS-01/03 → NEW Phase 5; TEST-01/02 retroactively Complete via Phases 1-3 tests). | Operator decision 2026-05-08 to fold the ML revisit forward after Phase 3 completion. The 3-layer integration strategy (code separation: `Heuristic.fs` + `ML.fs`; config selection: `Routing.Algorithm`; CLI override) keeps the heuristic baseline as the permanent fallback. Source: `~/projs/smart-router-distillation/docs/handoff-to-smart-router.md`. | — Pending |
-| **Heuristic stays forever** even after ML matures | Heuristic = baseline for A/B compare, emergency fallback when ML model file is missing/corrupt, debugging tool ("how would heuristic decide this?"). Removing it would make every ML failure user-visible. | — Pending |
+| **Heuristic SOFT-PAUSED 2026-05-08** (was: "stays forever as first-class baseline") | Operator decision: ML is the primary path going forward (Phases 6-9). Heuristic code stays in the codebase (`src/SmartRouter.Core/Heuristic.fs`, `Routing.Algorithm` dispatch, `--routing-algorithm` CLI flag, `check-routing-isolation.sh`) as a **dormant emergency fallback** — usable when ML model file is missing/corrupt, for debugging ("how would heuristic decide this?"), or for rollback. NOT actively developed; no new heuristic features; no Phase 9 canary heuristic-vs-ML A/B (Phase 9 compares ML model versions to each other instead). Snapshot preserved at git branch `archive/heuristic-baseline` and tag `v0.5-heuristic-baseline` (commit `a4cfce1`). When Phase 6 ships real ML, `appsettings.json` `Routing.Algorithm` flips default to `"ml"`. | — Pending |
 | **Embedding model: bge-m3 int8 quantized from Phase 6** (skipping bge-small MVP and FP32-default both) | Operator's traffic mixes Korean+English; bge-small (-en) cannot tokenize Hangul (deep-dive §1.7.1). Two-step decision: (1) bge-m3 over bge-small for multilingual; (2) int8 dynamic-quantized over FP32 from the start per deep-dive §1.7.7 row 4 (router latency-tight environment). File: 2.3GB → ~580MB. Latency: 50-80ms → 20-30ms p95 on M-series CPU. Accuracy regression from int8 typically <2%, which Phase 8 validation gate catches automatically. CoreML EP is the next-tier fallback if int8 still misses budget under load. | — Pending |
 
 ---
-*Last updated: 2026-05-08 after milestone reorganization (ML arc folded into v1) and embedding-model decision (bge-m3 from Phase 6 vs prior bge-small recommendation, driven by Korean+English mixed traffic).*
+*Last updated: 2026-05-08 after operator soft-paused heuristic development. ML (Phases 6-9, bge-m3 int8) is the primary path; heuristic remains in codebase as dormant fallback only. Snapshot at archive/heuristic-baseline + v0.5-heuristic-baseline tag.*

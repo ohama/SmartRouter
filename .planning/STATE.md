@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 6 — Deploy / launchd / README (Phase 5 complete)
+**Current focus:** Phase 6 — Real ML Routing (bge-m3 int8 + ML.NET LR; ML is primary path; heuristic soft-paused 2026-05-08)
 
 ## Current Position
 
@@ -47,7 +47,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
 - Roadmap: SSE streaming (Phase 2) and concurrency gate (Phase 3) are atomic units — must not be split
-- Roadmap (2026-05-08 reorganization): NEW Phases 4-9 ship the ML arc (handoff doc folded forward); old Phase 4 (Health/Fallback/graph_indexing-no-fallback) deferred to Phase 10; old Phase 6 (launchd/README) deferred to Phase 11; old Phase 5 (Observability+Tests) dissolved — OBS-01/03 absorbed into NEW Phase 5 (Decision Logging — Loop B's input), TEST-01/02 retroactively Complete via Phases 1-3 tests. Heuristic stays forever as baseline + emergency fallback.
+- Roadmap (2026-05-08 reorganization): NEW Phases 4-9 ship the ML arc (handoff doc folded forward); old Phase 4 (Health/Fallback/graph_indexing-no-fallback) deferred to Phase 10; old Phase 6 (launchd/README) deferred to Phase 11; old Phase 5 (Observability+Tests) dissolved — OBS-01/03 absorbed into NEW Phase 5 (Decision Logging — Loop B's input), TEST-01/02 retroactively Complete via Phases 1-3 tests.
+- **Heuristic SOFT-PAUSED (2026-05-08)**: ML is now the primary path. Heuristic code stays in `src/SmartRouter.Core/Heuristic.fs` as dormant emergency fallback (model-corrupt/missing scenario, debugging, rollback) but no new heuristic features. Phase 9 canary compares ML model versions to each other (no heuristic-vs-ML A/B). Phase 6 will flip `appsettings.json` `Routing.Algorithm` default from `"heuristic"` to `"ml"`. Snapshot at `archive/heuristic-baseline` branch + `v0.5-heuristic-baseline` tag (commit `a4cfce1`).
 - Roadmap: graph_indexing no-fallback rule ships in same phase as health probing — now Phase 10 (was Phase 4)
 - Roadmap: Phase 3 depends on Phase 1 only (not Phase 2); Phases 2 and 3 have no cross-dependency
 - ML arc design source: /Users/ohama/projs/smart-router-distillation/docs/handoff-to-smart-router.md — 3-layer separation (code: Heuristic.fs vs ML.fs no cross-imports; config: Routing.Algorithm key; CLI: --routing-algorithm override). Heuristic and ML must have same signature `RoutingConfig -> RouterRequest -> RoutingDecision`.
