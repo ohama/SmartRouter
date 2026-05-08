@@ -13,6 +13,9 @@
     <Compile Include="Adapters/DecisionLogWriter.fs" />
     <Compile Include="Adapters/CorrelationMiddleware.fs" />
     <Compile Include="Adapters/RoutingAlgorithm.fs" />
+    <Compile Include="Adapters/MlNetClassifier.fs" />          <!-- NEW: schema types come first -->
+    <Compile Include="Adapters/BgeM3Embedder.fs" />            <!-- NEW: depends on Core/MLPorts only -->
+    <Compile Include="Adapters/ModelBootstrapper.fs" />        <!-- NEW: depends on MlNetClassifier (RouteInput) -->
     <Compile Include="Adapters/QwenUpstreamClient.fs" />
     <Compile Include="Adapters/QueueDispatcher.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />
