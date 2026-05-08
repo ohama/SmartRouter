@@ -33,6 +33,7 @@ type RoutingReason =
     | ExplicitTask          of taskType: TaskType
     | Heuristic             of score: int
     | Default
+    | ML
 
 /// LLM wire message (same shape as blueCode; needed by IUpstreamClient port).
 type MessageRole = System | User | Assistant
@@ -82,3 +83,8 @@ type RoutingConfig =
     { ComplexityThreshold : int
       Keywords            : string list
       TaskTable           : Map<string, ModelId * Priority> }
+
+/// Function type for pluggable routing algorithms.
+/// Both Heuristic.applyHeuristic and ML.applyML conform to this shape.
+/// Returns RoutingDecision (NOT Result) — error paths owned by tryTaskTable upstream.
+type RoutingAlgorithm = RoutingConfig -> RouterRequest -> RoutingDecision
