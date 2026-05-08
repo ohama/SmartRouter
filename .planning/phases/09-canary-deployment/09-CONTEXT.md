@@ -212,21 +212,39 @@ type IModelVersionProvider =
 
 ## Lock 12 — Compile order in SmartRouter.Cli.fsproj
 
-New `<Compile>` entries inserted **AFTER** `Adapters/RetrainingService.fs` (Phase 8) and **BEFORE** `Endpoints/ChatCompletions.fs` (which consumes `ICanaryGate`):
+Phase 9 adds **8 new `<Compile>` entries total** to `src/SmartRouter.Cli/SmartRouter.Cli.fsproj`: 7 in the `Adapters/` cluster and 1 in the `Endpoints/` cluster.
+
+**Adapters/ cluster — 7 entries.** Inserted AFTER `Adapters/RetrainingService.fs` (Phase 8 line) and BEFORE the Endpoints/ cluster:
 
 ```xml
-<!-- Phase 9 — Canary deployment -->
+<!-- Phase 9 — Canary deployment (Adapters) -->
 <Compile Include="Adapters/CanaryTargetingAccessor.fs" />
 <Compile Include="Adapters/CanaryState.fs" />
-<Compile Include="Adapters/CanaryGate.fs" />
 <Compile Include="Adapters/CanaryMetrics.fs" />
-<Compile Include="Adapters/CanaryWatchdog.fs" />
 <Compile Include="Adapters/RetrainLock.fs" />
+<Compile Include="Adapters/CanaryGate.fs" />
+<Compile Include="Adapters/CanaryWatchdog.fs" />
 <Compile Include="Adapters/CanaryService.fs" />
-<Compile Include="Endpoints/Canary.fs" />
 ```
 
-Order rationale: TargetingAccessor and State are leaves (no inter-deps among Canary files); Gate depends on State; Metrics is a leaf; Watchdog depends on Metrics + State + RetrainLock; CanaryService depends on State + RetrainLock + ModelVersionProvider; Canary endpoint depends on CanaryService.
+**Endpoints/ cluster — 1 entry.** Inserted AFTER `Endpoints/Stats.fs` (mirrors the natural reading order GET /stats → GET /canary; the F# compile-order requirement only forces "any file that opens Canary or its types comes after Canary.fs". `ChatCompletions.fs` does not open `Canary` (the `/canary` endpoint module is independent of the chat-completions handler), so `Endpoints/Canary.fs` can live anywhere in the Endpoints/ cluster without breaking compilation):
+
+```xml
+<Compile Include="Endpoints/ChatCompletions.fs" />
+<Compile Include="Endpoints/Stats.fs" />
+<Compile Include="Endpoints/Canary.fs" />        <!-- NEW Phase 9 -->
+```
+
+**Total grep verification:**
+
+```bash
+grep -cE 'Compile Include="(Adapters/(CanaryTargetingAccessor|CanaryState|CanaryMetrics|RetrainLock|CanaryGate|CanaryWatchdog|CanaryService)|Endpoints/Canary)\.fs"' src/SmartRouter.Cli/SmartRouter.Cli.fsproj
+# Expect: 8
+```
+
+**Order rationale within Adapters/ cluster:** `CanaryTargetingAccessor` and `CanaryState` are leaves (no inter-deps among Canary files); `CanaryMetrics` is a leaf; `RetrainLock` is a leaf; `CanaryGate` depends on `CanaryState`; `CanaryWatchdog` depends on `CanaryMetrics + CanaryState`; `CanaryService` depends on `CanaryState + RetrainLock + CanaryWatchdog (CanaryOptions type)`. So within the Adapters/ cluster: leaves first (TargetingAccessor, State, Metrics, RetrainLock), then Gate, then Watchdog, then Service.
+
+**`Endpoints/Canary.fs` placement (after Stats.fs):** Originally the planning narrative claimed all 8 Phase-9 entries lived "between RetrainingService.fs and ChatCompletions.fs", which was inconsistent with the natural Endpoints/ cluster grouping (the actual layout puts Canary.fs after Stats.fs). The constraint is total-count-of-8 plus the within-cluster dependency order — NOT a "between markers" range. Verifier should grep -c the 8 file names, not awk-range them.
 
 **RetrainLock.fs placement:** Could be earlier (Phase 8 area) since RetrainingService.fs would benefit from refactoring to use it — but for this phase, RetrainingService.fs is also modified to consume `IRetrainLock` (Lock 6), and Phase-9-introduced files come after RetrainingService.fs. Acceptable; the .fsproj diff is small.
 
