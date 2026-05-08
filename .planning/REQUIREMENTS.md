@@ -91,10 +91,10 @@
 
 ### ML Algorithm Seam (Phase 4)
 
-- [ ] **ML-01**: `RoutingAlgorithm` is a function-type alias `RoutingConfig -> RouterRequest -> RoutingDecision` in Core; both `Heuristic.applyHeuristic` and `ML.applyML` conform to the same shape
-- [ ] **ML-02**: `appsettings.json` `Routing.Algorithm` key (`"heuristic" | "ml"`) selects the active algorithm at startup; default is `"heuristic"` if absent
-- [ ] **ML-03**: CLI flag `--routing-algorithm=heuristic|ml` overrides the config value at startup; verified by start-twice integration test
-- [ ] **ML-04**: `Routing/Heuristic.fs` and `Routing/ML.fs` are separate modules with **zero cross-imports** — verified by CI grep that fails the build on any cross-module reference
+- [x] **ML-01**: `RoutingAlgorithm` is a function-type alias `RoutingConfig -> RouterRequest -> RoutingDecision` in Core; both `Heuristic.applyHeuristic` and `ML.applyML` conform to the same shape
+- [x] **ML-02**: `appsettings.json` `Routing.Algorithm` key (`"heuristic" | "ml"`) selects the active algorithm at startup; default is `"heuristic"` if absent
+- [x] **ML-03**: CLI flag `--routing-algorithm=heuristic|ml` overrides the config value at startup; verified by start-twice integration test
+- [x] **ML-04**: `Routing/Heuristic.fs` and `Routing/ML.fs` are separate modules with **zero cross-imports** — verified by CI grep that fails the build on any cross-module reference
 
 ### Decision Logging (Phase 5)
 
@@ -242,10 +242,10 @@ Deferred. Tracked but not in current roadmap.
 | TEST-05 | Phase 10 | Pending |
 | TEST-06 | Phase 3 | Complete |
 | TEST-07 | Phase 1 | Complete |
-| ML-01 | Phase 4 | Pending |
-| ML-02 | Phase 4 | Pending |
-| ML-03 | Phase 4 | Pending |
-| ML-04 | Phase 4 | Pending |
+| ML-01 | Phase 4 | Complete |
+| ML-02 | Phase 4 | Complete |
+| ML-03 | Phase 4 | Complete |
+| ML-04 | Phase 4 | Complete |
 | LOG-01 | Phase 5 | Pending |
 | LOG-02 | Phase 5 | Pending |
 | LOG-03 | Phase 5 | Pending |
@@ -274,9 +274,9 @@ Deferred. Tracked but not in current roadmap.
 - v1 requirements: 83 total (56 original + 27 ML-arc additions; +1 EMBED-03 for bge-m3 latency)
 - Mapped to phases: 83 ✓
 - Unmapped: 0
-- Complete: 44 (Phase 1 ✓ + Phase 2 ✓ + Phase 3 ✓ + TEST-01/TEST-02 retroactive)
-- Pending: 39 (27 ML arc + 12 deferred heuristic-cleanup)
+- Complete: 48 (Phase 1 ✓ + Phase 2 ✓ + Phase 3 ✓ + Phase 4 ✓ + TEST-01/TEST-02 retroactive)
+- Pending: 35 (23 ML arc remaining + 12 deferred heuristic-cleanup)
 
 ---
 *Requirements defined: 2026-05-07*
-*Last updated: 2026-05-08 after milestone reorganization — ML arc folded forward; old Phase 4/5/6 deferred and renumbered to 10/11; old Phase 5 dissolved (OBS-01/03 → NEW Phase 5; TEST-01/02 → retroactively Complete via Phases 1-3 tests)*
+*Last updated: 2026-05-08 after Phase 4 (ML Algorithm Seam) completion — 48 requirements verified Complete*

@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Foundation** ✓ — Project scaffold, Core domain types, routing pipeline, non-streaming HTTP adapter, appsettings wiring
 - [x] **Phase 2: SSE Streaming Pass-Through** ✓ — Complete atomic SSE correctness cluster (STRM-01..07); Hermes is unblocked when this ships
 - [x] **Phase 3: 122B Concurrency Gate** ✓ — Complete atomic concurrency cluster (CONC-01..06 + REL-05); Graphify concurrent requests are safe when this ships
-- [ ] **Phase 4: ML Algorithm Seam** — Placeholder ML algorithm + config dispatch (`Routing.Algorithm: "heuristic" | "ml"`) + CLI `--routing-algorithm` override; heuristic stays default; existing tests stay green; same-shape ML test confirms dispatch
+- [x] **Phase 4: ML Algorithm Seam** ✓ — Placeholder ML algorithm + config dispatch (`Routing.Algorithm: "heuristic" | "ml"`) + CLI `--routing-algorithm` override; heuristic stays default; existing tests stay green; same-shape ML test confirms dispatch
 - [ ] **Phase 5: Routing-Decision Logging** — Per-request structured JSONL log with routing reason, latency, model_version, fallback flag, correlation ID; thread-safe writer; absorbs OBS-01 and OBS-03 from old Phase 5 — this is Loop B's input
 - [ ] **Phase 6: Real ML Routing** — `Microsoft.ML.OnnxRuntime` + bge-m3 (1024-dim, multilingual; chosen over bge-small for Korean+English mixed traffic) + ML.NET `LbfgsLogisticRegression` + replace placeholder; first model file auto-generated on first run; latency budget <100ms (with int8/CoreML fallback if exceeded)
 - [ ] **Phase 7: Failure Detection + Teacher Labeling** — Failure detector (fallback-used + error + short-response + low-confidence signals); teacher labeler (HTTP to 122B with timeout/retry/cost cap, `prompts/teacher_prompt.md`); hard-case dataset extraction
@@ -95,9 +95,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 04-01-CORE-REFACTOR-PLAN.md — Refactor Routing.fs into flat siblings Heuristic.fs + ML.fs; add `RoutingAlgorithm` alias + `| ML` DU case in Domain.fs; update routeRequest signature; migrate RoutingTests callsites; add scripts/check-routing-isolation.sh
-- [ ] 04-02-CONFIG-AND-CLI-PLAN.md — appsettings.json `Routing.Algorithm` key + CompositionRoot dispatch singleton + ChatCompletions DI resolution + Program.fs `--routing-algorithm` CLI flag (AddInMemoryCollection BEFORE configureServices)
-- [ ] 04-03-ML-ROUTING-TESTS-PLAN.md — New MLRoutingTests.fs (placeholder behavior + routeRequest dispatch + config dispatch + CLI override); wire into .fsproj + rootTests list; final check-routing-isolation.sh verification
+- [x] 04-01-CORE-REFACTOR-PLAN.md ✓ — Refactor Routing.fs into flat siblings Heuristic.fs + ML.fs; add `RoutingAlgorithm` alias + `| ML` DU case in Domain.fs; update routeRequest signature; migrate RoutingTests callsites; add scripts/check-routing-isolation.sh
+- [x] 04-02-CONFIG-AND-CLI-PLAN.md ✓ — appsettings.json `Routing.Algorithm` key + CompositionRoot dispatch singleton + ChatCompletions DI resolution + Program.fs `--routing-algorithm` CLI flag (AddInMemoryCollection BEFORE configureServices)
+- [x] 04-03-ML-ROUTING-TESTS-PLAN.md ✓ — New MLRoutingTests.fs with 5 testSequenced tests (placeholder behavior + routeRequest dispatch + config dispatch + CLI override); wire into .fsproj + rootTests list; appsettings.json bin-copied via fsproj for Tests 4+5
 
 ### Phase 5: Routing-Decision Logging
 **Goal**: Every routing decision (whether heuristic or ML) emits a structured JSONL log line with all the fields Loop B's retrainer needs: prompt hash, request features, routing reason, target model, latency, fallback flag, model_version, correlation ID. The writer is thread-safe (Serilog `Channel`-backed, NOT `File.AppendAllText`). This phase delivers OBS-01 and OBS-03 (absorbed from old Phase 5) plus the persistence destination for ML retraining.
@@ -230,7 +230,7 @@ Phases execute in numeric order: 1 → 2 → 3 → **(ML arc)** 4 → 5 → 6 �
 | 1. Foundation | 3/3 | ✓ Complete | 2026-05-07 |
 | 2. SSE Streaming Pass-Through | 2/2 | ✓ Complete | 2026-05-08 |
 | 3. 122B Concurrency Gate | 3/3 | ✓ Complete | 2026-05-08 |
-| 4. ML Algorithm Seam | 0/3 | Not started | - |
+| 4. ML Algorithm Seam | 3/3 | ✓ Complete | 2026-05-08 |
 | 5. Routing-Decision Logging | 0/3 | Not started | - |
 | 6. Real ML Routing | 0/3 | Not started | - |
 | 7. Failure Detection + Teacher Labeling | 0/3 | Not started | - |
