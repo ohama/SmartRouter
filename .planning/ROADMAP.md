@@ -92,12 +92,12 @@ Plans:
   3. CLI flag `--routing-algorithm=ml` overrides the config-set `"heuristic"` (verified by a startup-test that boots both ways and asserts the registered function).
   4. `SmartRouter.Core/Routing/Heuristic.fs` and `SmartRouter.Core/Routing/ML.fs` are separate modules with **zero cross-imports** — verified by grep.
   5. Default behavior is unchanged: `Routing.Algorithm` defaults to `"heuristic"` if absent from config; old behavior preserved bit-for-bit.
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: Refactor Routing.fs into Routing/{Heuristic.fs, ML.fs}; introduce `RoutingAlgorithm` function-type alias; change `routeRequest` signature to take algorithm parameter; update all 39 existing test callsites to pass Heuristic explicitly
-- [ ] 04-02: Wire `appsettings.json` `Routing.Algorithm` key + `Routing.ML` skeleton section; CompositionRoot dispatch (`"heuristic" -> Heuristic.applyHeuristic | "ml" -> ML.applyML`); CLI override via Program.fs args parsing
-- [ ] 04-03: Tests — placeholder ML probe-call test + algorithm-dispatch test + CLI-override test; verify cross-import grep returns empty
+- [ ] 04-01-CORE-REFACTOR-PLAN.md — Refactor Routing.fs into flat siblings Heuristic.fs + ML.fs; add `RoutingAlgorithm` alias + `| ML` DU case in Domain.fs; update routeRequest signature; migrate RoutingTests callsites; add scripts/check-routing-isolation.sh
+- [ ] 04-02-CONFIG-AND-CLI-PLAN.md — appsettings.json `Routing.Algorithm` key + CompositionRoot dispatch singleton + ChatCompletions DI resolution + Program.fs `--routing-algorithm` CLI flag (AddInMemoryCollection BEFORE configureServices)
+- [ ] 04-03-ML-ROUTING-TESTS-PLAN.md — New MLRoutingTests.fs (placeholder behavior + routeRequest dispatch + config dispatch + CLI override); wire into .fsproj + rootTests list; final check-routing-isolation.sh verification
 
 ### Phase 5: Routing-Decision Logging
 **Goal**: Every routing decision (whether heuristic or ML) emits a structured JSONL log line with all the fields Loop B's retrainer needs: prompt hash, request features, routing reason, target model, latency, fallback flag, model_version, correlation ID. The writer is thread-safe (Serilog `Channel`-backed, NOT `File.AppendAllText`). This phase delivers OBS-01 and OBS-03 (absorbed from old Phase 5) plus the persistence destination for ML retraining.
