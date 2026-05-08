@@ -75,3 +75,15 @@ type IHardCaseDatasetWriter =
     abstract member AppendAsync :
         entry: HardCaseEntry * ct: CancellationToken
         -> Task<unit>
+
+/// Hot-updatable model version. Phase 8 RetrainingService updates this after each
+/// successful retrain so DecisionLog.model_version reflects the live model without
+/// host restart. Cli adapter (ModelVersionProvider.fs) holds the mutable string field.
+///
+/// Why a port: ARCH-01 (Core BCL-only). The mutable state lives in Cli; Core only
+/// names the contract. ChatCompletions.fs resolves this per-request and feeds
+/// DecisionLog.model_version. RoutingAlgorithmRegistration.ModelVersion remains for
+/// backward-compat at registration time but is no longer the load-bearing source.
+type IModelVersionProvider =
+    abstract member CurrentVersion : string with get
+    abstract member Update         : newVersion: string -> unit
