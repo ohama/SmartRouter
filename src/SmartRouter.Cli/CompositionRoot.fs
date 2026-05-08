@@ -27,6 +27,8 @@ open SmartRouter.Core.RetrainingPorts
 open SmartRouter.Cli.Adapters.FailureDetector
 open SmartRouter.Cli.Adapters.TeacherLabeler
 open SmartRouter.Cli.Adapters.HardCaseDatasetWriter
+open SmartRouter.Cli.Adapters.ModelVersionProvider
+open SmartRouter.Cli.Adapters.RetrainingService
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -400,5 +402,71 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
     services.AddHostedService<HardCaseDatasetWriter>(fun sp ->
         sp.GetRequiredService<HardCaseDatasetWriter>())
     |> ignore
+
+    // ── Phase 8: Retraining loop ──────────────────────────────────────────────
+    services.Configure<RetrainingOptions>(config.GetSection("Retraining")) |> ignore
+
+    // IModelVersionProvider — double-registration (concrete + interface alias).
+    // RetrainingService updates the concrete; ChatCompletions reads the interface.
+    // Same instance for both roles (DO NOT use two separate factory lambdas —
+    // that creates two instances and the Update call from RetrainingService would
+    // mutate the concrete one while ChatCompletions reads the alias one, so
+    // DecisionLog never picks up the new model_version).
+    // Mirrors HardCaseDatasetWriter pattern (lines above), minus the AddHostedService
+    // leg since ModelVersionProvider is not a BackgroundService.
+    //
+    // Initial value matches what RoutingAlgorithmRegistration computed for model_version:
+    // "ml-{8hexchars}" in ML mode; "heuristic-v1" in heuristic mode.
+    // After each successful retrain, RetrainingService.Update flips this value;
+    // the next ChatCompletions request emits the new model_version.
+    services.AddSingleton<ModelVersionProvider>(fun sp ->
+        let routingOpts =
+            sp.GetRequiredService<IOptions<RoutingOptions>>().Value
+        let initial =
+            // Heuristic mode has no model file — use the static "heuristic-v1" string.
+            // ML mode: load router.zip and compute SHA prefix (matches RoutingAlgorithmRegistration).
+            match routingOpts.Algorithm with
+            | "ml" when not (obj.ReferenceEquals(routingOpts.ML, null)) ->
+                sprintf "ml-%s" (computeModelVersion routingOpts.ML.ModelPath)
+            | _ ->
+                "heuristic-v1"
+        ModelVersionProvider(initial))
+    |> ignore
+
+    services.AddSingleton<IModelVersionProvider>(fun sp ->
+        sp.GetRequiredService<ModelVersionProvider>() :> IModelVersionProvider)
+    |> ignore
+
+    // RetrainingService — double-registration pattern (concrete AddSingleton + AddHostedService factory).
+    // Guarded on routingAlgoStr = "ml" because the constructor requires IEmbedder (only registered
+    // in ML mode above). Heuristic mode needs no retraining.
+    // No IInterface alias since RetrainingService has no interface consumer — only IHostedService
+    // machinery and the test-only RunNowAsync seam consume it directly.
+    if routingAlgoStr = "ml" then
+        services.AddSingleton<RetrainingService>(fun sp ->
+            let opts = sp.GetRequiredService<IOptions<RetrainingOptions>>().Value
+            // Defensive defaults — any missing/zero key falls back to CONTEXT.md Lock 6 values.
+            let normalized =
+                { IntervalMinutes           = if opts.IntervalMinutes           <= 0    then 60    else opts.IntervalMinutes
+                  HardCaseCountTrigger      = if opts.HardCaseCountTrigger      <= 0    then 500   else opts.HardCaseCountTrigger
+                  CountCheckIntervalMinutes = if opts.CountCheckIntervalMinutes <= 0    then 5     else opts.CountCheckIntervalMinutes
+                  HardCasePath              = if String.IsNullOrWhiteSpace(opts.HardCasePath)      then "datasets/hard-cases.jsonl"        else opts.HardCasePath
+                  TrainingSetPath           = if String.IsNullOrWhiteSpace(opts.TrainingSetPath)   then "datasets/training-set.jsonl"      else opts.TrainingSetPath
+                  StatePath                 = if String.IsNullOrWhiteSpace(opts.StatePath)         then "datasets/.last-retrain.json"      else opts.StatePath
+                  ModelPath                 = if String.IsNullOrWhiteSpace(opts.ModelPath)         then "models/router.zip"               else opts.ModelPath
+                  PreviousModelPath         = if String.IsNullOrWhiteSpace(opts.PreviousModelPath) then "models/router.zip.prev"          else opts.PreviousModelPath
+                  RejectionLogPath          = if String.IsNullOrWhiteSpace(opts.RejectionLogPath)  then "logs/retraining-rejections.jsonl" else opts.RejectionLogPath
+                  HeldOutFraction           = if opts.HeldOutFraction           <= 0.0  then 0.2   else opts.HeldOutFraction
+                  HeldOutRandomSeed         = if opts.HeldOutRandomSeed         <= 0    then 42    else opts.HeldOutRandomSeed
+                  L2Regularization          = if opts.L2Regularization          <= 0.0f then 0.1f  else opts.L2Regularization }
+            new RetrainingService(
+                normalized,
+                sp.GetRequiredService<IEmbedder>(),
+                sp.GetRequiredService<IModelVersionProvider>()))
+        |> ignore
+
+        services.AddHostedService<RetrainingService>(fun sp ->
+            sp.GetRequiredService<RetrainingService>())
+        |> ignore
 
     services
