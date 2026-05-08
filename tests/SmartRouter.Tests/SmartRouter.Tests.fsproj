@@ -8,7 +8,13 @@
     <Compile Include="StreamingTests.fs" />
     <Compile Include="QueueTests.fs" />
     <Compile Include="LoadTests.fs" />
+    <Compile Include="MLRoutingTests.fs" />
     <Compile Include="RouterTests.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\src\SmartRouter.Cli\appsettings.json" Link="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Expecto" Version="10.2.1" />
