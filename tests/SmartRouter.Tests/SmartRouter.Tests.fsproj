@@ -12,6 +12,10 @@
     <Compile Include="MLEmbeddingTests.fs" />
     <Compile Include="MLClassifierTests.fs" />
     <Compile Include="LoggingTests.fs" />
+    <!-- Phase 7 -->
+    <Compile Include="FailureDetectorTests.fs" />
+    <Compile Include="TeacherLabelerTests.fs" />
+    <Compile Include="HardCaseDatasetTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>

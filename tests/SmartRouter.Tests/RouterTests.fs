@@ -21,6 +21,9 @@ let rootTests : Test list =
         SmartRouter.Tests.MLEmbeddingTests.tests
         SmartRouter.Tests.MLClassifierTests.tests
         SmartRouter.Tests.LoggingTests.tests
+        SmartRouter.Tests.FailureDetectorTests.tests   // Phase 7
+        SmartRouter.Tests.TeacherLabelerTests.tests    // Phase 7
+        SmartRouter.Tests.HardCaseDatasetTests.tests   // Phase 7
     ]
 
 [<EntryPoint>]
