@@ -11,6 +11,7 @@ open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
 open SmartRouter.Core.Routing
 open SmartRouter.Cli.Adapters.QwenUpstreamClient
+open SmartRouter.Cli.Adapters.QueueDispatcher
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -136,12 +137,31 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
         buildRoutingConfig opts)
         |> ignore
 
-    // IUpstreamClient as singleton (ARCH-06: stateless service; lazy probes are process-lifetime)
-    services.AddSingleton<IUpstreamClient>(fun sp ->
+    // Bind Queue section to QueueDispatcherOptions
+    services.Configure<QueueDispatcherOptions>(config.GetSection("Queue")) |> ignore
+
+    // Register the concrete HTTP client as a named singleton (not as IUpstreamClient —
+    // that is now the dispatcher's job). QueueDispatcher resolves this by concrete type.
+    services.AddSingleton<QwenUpstreamClient>(fun sp ->
         QwenUpstreamClient(
             sp.GetRequiredService<IHttpClientFactory>(),
-            sp.GetRequiredService<IOptions<UpstreamOptions>>())
-        :> IUpstreamClient)
+            sp.GetRequiredService<IOptions<UpstreamOptions>>()))
+        |> ignore
+
+    // QueueDispatcher wraps QwenUpstreamClient — registered as concrete singleton plus
+    // two interface registrations (IUpstreamClient for the endpoint; IStatsProvider for /stats).
+    services.AddSingleton<QueueDispatcher>(fun sp ->
+        QueueDispatcher(
+            sp.GetRequiredService<QwenUpstreamClient>() :> IUpstreamClient,
+            sp.GetRequiredService<IOptions<QueueDispatcherOptions>>().Value))
+        |> ignore
+
+    services.AddSingleton<IUpstreamClient>(fun sp ->
+        sp.GetRequiredService<QueueDispatcher>() :> IUpstreamClient)
+        |> ignore
+
+    services.AddSingleton<IStatsProvider>(fun sp ->
+        sp.GetRequiredService<QueueDispatcher>() :> IStatsProvider)
         |> ignore
 
     services

@@ -10,6 +10,7 @@
     <Compile Include="Adapters/Json.fs" />
     <Compile Include="Adapters/Logging.fs" />
     <Compile Include="Adapters/QwenUpstreamClient.fs" />
+    <Compile Include="Adapters/QueueDispatcher.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />
     <Compile Include="CompositionRoot.fs" />
     <Compile Include="Program.fs" />

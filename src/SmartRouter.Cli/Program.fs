@@ -5,6 +5,7 @@ open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Options
 open Serilog
 open SmartRouter.Cli.Adapters
+open SmartRouter.Cli.Adapters.QueueDispatcher
 open SmartRouter.Cli.CompositionRoot
 open SmartRouter.Cli.Endpoints
 
@@ -30,6 +31,14 @@ let main args =
             // Validate routing config now that DI container is built (fails fast on typos)
             let routingOpts = app.Services.GetRequiredService<IOptions<RoutingOptions>>().Value
             CompositionRoot.validateConfig routingOpts
+
+            // Validate queue options — MaxConcurrent122B must be 1 in v1 (correctness invariant).
+            // QueueDispatcher constructor also throws, but this gives a friendlier startup message.
+            let queueOpts = app.Services.GetRequiredService<IOptions<QueueDispatcherOptions>>().Value
+            if queueOpts.MaxConcurrent122B <> 1 then
+                failwithf
+                    "appsettings.json Queue.MaxConcurrent122B must be 1 in v1 (correctness invariant); got %d"
+                    queueOpts.MaxConcurrent122B
 
             // Serilog request logging middleware
             app.UseSerilogRequestLogging() |> ignore

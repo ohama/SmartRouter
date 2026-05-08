@@ -141,6 +141,10 @@ let startTestRouter (fakePort: int) : Task<WebApplication * int> =
                 KeyValuePair("Routing:ModelAliases:qwen35b",   "Qwen35B")
                 KeyValuePair("Routing:ModelAliases:qwen-122b", "Qwen122B")
                 KeyValuePair("Routing:ModelAliases:qwen122b",  "Qwen122B")
+                // Queue section — required for QueueDispatcherOptions (MaxConcurrent122B must be 1)
+                KeyValuePair("Queue:FairnessK",                "10")
+                KeyValuePair("Queue:MaxConcurrent122B",        "1")
+                KeyValuePair("Queue:PerRequestTimeoutSeconds", "300")
             ])
         |> ignore
 
