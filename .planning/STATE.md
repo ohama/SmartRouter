@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 6 — Real ML Routing (bge-m3 int8 + ML.NET LR; ML is primary path; heuristic soft-paused 2026-05-08)
+**Current focus:** Phase 7 — Failure Detector (next: model health probing; depends on Phase 6 model_version + DI wiring)
 
 ## Current Position
 
-Phase: 6 of 11 (Real ML Routing) — In progress
-Plan: 2 of 3 in current phase — COMPLETE ✓
-Status: Phase 6 plan 2 complete. BgeM3Embedder + MlNetClassifier + ModelBootstrapper adapters wired. CompositionRoot ml-branch: ensureEmbeddingFilesPresent → ensureDummyModel → AddPredictionEnginePool → IEmbedder → IClassifier → makeApplyML. Legacy applyML removed. model_version = ml-{8hexchars}. Routing.Algorithm default flipped to "ml". 47/47 tests pass + 4 ignored (0 warnings).
-Last activity: 2026-05-08 — Completed 06-02-CLI-ADAPTERS-AND-DI-PLAN.md
+Phase: 6 of 11 (Real ML Routing) — COMPLETE ✓
+Plan: 3 of 3 in current phase — COMPLETE ✓
+Status: Phase 6 complete. All 6 REQ-IDs (EMBED-01/02/03, CLS-01/02/03) covered by test suite. MLEmbeddingTests.fs + MLClassifierTests.fs shipped. MLRoutingTests +2 Phase 6 tests (model_version hash format + DI smoke). 50 pass + 10 ignored when model files absent (0 failures). CLS-03 cosine + EMBED-03 latency pending model download.
+Last activity: 2026-05-08 — Completed 06-03-ML-TESTS-PLAN.md
 
-Progress: [████████░░░░░░░░░░░░░░░] 16 of ~30 plans (phase 6 in progress)
+Progress: [█████████░░░░░░░░░░░░░░] 17 of ~30 plans (phase 6 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 1 real-ml-routing)
+- Total plans completed: 17 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing)
 - Average duration: ~7 min
-- Total execution time: ~60 min
+- Total execution time: ~65 min
 
 **By Phase:**
 
@@ -32,11 +32,11 @@ Progress: [████████░░░░░░░░░░░░░░░
 | 03-122b-concurrency-gate | 3/3 | ~53 min | 18 min |
 | 04-ml-algorithm-seam | 3/3 | ~21 min | 7 min |
 | 05-routing-decision-logging | 3/3 | ~19 min | 6 min |
-| 06-real-ml-routing | 2/3 | ~13 min | ~7 min |
+| 06-real-ml-routing | 3/3 | ~18 min | ~6 min |
 
 **Recent Trend:**
-- Last 5 plans: 05-01 (~8 min), 05-02 (~6 min), 05-03 (~5 min), 06-01 (~5 min)
-- Trend: Core-only plans very fast (~5 min); Cli/integration plans take longer
+- Last 5 plans: 05-02 (~6 min), 05-03 (~5 min), 06-01 (~5 min), 06-02 (~8 min), 06-03 (~5 min)
+- Trend: Tests-only plans very fast (~5 min); Cli/integration plans take longer
 
 *Updated after each plan completion*
 
@@ -104,6 +104,9 @@ Recent decisions affecting current work:
 - 06-02: SentencePieceTokenizer.Create uses `addBeginningOfSentence` (not `addBeginOfSentence`); EncodeToIds maxTokenCount overload requires ref out-params (normalizedText, charsConsumed); DenseTensor.Buffer.ToArray() not Tensor.ToArray() (Buffer is on DenseTensor subclass, not abstract Tensor<T>); SentencePieceTokenizer has no IDisposable in 2.0.0
 - 06-02: Task 3 (remove applyML) and Task 4 (rewrite tests) committed together atomically — removing applyML immediately breaks MLRoutingTests.fs build
 - 06-02: Routing.Algorithm default flipped to "ml"; StreamingTests + LoggingTests unaffected (both override to "heuristic" explicitly); MLRoutingTests Tests 4+5 gated with mlTestCase (ptestCase when models/embed/* absent)
+- 06-03: Expect.isNotNull on F# interfaces requires box cast (Expect.isNotNull (box iface)) — F# interfaces are non-nullable in .NET 10; plain isNotNull fails with FS0001
+- 06-03: mlTestCase (ptestCase-based) for tests that directly construct BgeM3Embedder; skiptest (runtime guard) for tests calling configureServices — DI throws at registration time when files absent, not at assertion time
+- 06-03: CLS-03 cosine threshold calibration policy — default > 0.7; if bge-m3 measures 0.6-0.7 on test pairs, lower to > 0.6 and document measured values (per 06-CONTEXT.md); not yet measured (model files absent on executor)
 
 ### Pending Todos
 
@@ -117,6 +120,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T07:56:47Z
-Stopped at: Completed 06-02-CLI-ADAPTERS-AND-DI-PLAN.md — Phase 6 plan 2 of 3 complete; BgeM3Embedder + MlNetClassifier + ModelBootstrapper adapters; CompositionRoot ml-branch wired; legacy applyML removed; model_version = ml-{8hexchars}; Algorithm default = "ml"; 47/47 tests pass + 4 ignored (0 warnings)
+Last session: 2026-05-08T08:05:46Z
+Stopped at: Completed 06-03-ML-TESTS-PLAN.md — Phase 6 COMPLETE (3/3 plans done); MLEmbeddingTests.fs + MLClassifierTests.fs + MLRoutingTests +2 Phase 6 tests; all 6 REQ-IDs covered; 50 pass + 10 ignored (0 failures) without model files
 Resume file: None
