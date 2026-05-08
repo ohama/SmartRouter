@@ -9,19 +9,19 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 
 ## Current Position
 
-Phase: 4 of 11 (ML Algorithm Seam) — COMPLETE ✓
-Plan: 3 of 3 in current phase — COMPLETE ✓
-Status: Phase 4 complete. All 4 ML criteria verified: RoutingAlgorithm alias (ML-01), ML.applyML placeholder + DI dispatch (ML-02), CLI override (ML-03), isolation enforcement (ML-04). 44/44 tests pass (0 warnings). Ready for Phase 5.
-Last activity: 2026-05-08 — Completed 04-03-ML-ROUTING-TESTS-PLAN.md
+Phase: 5 of 11 (Routing Decision Logging) — In progress
+Plan: 1 of 3 in current phase — COMPLETE ✓
+Status: Phase 5 plan 1 complete. Decision-log infrastructure landed: 12-field DecisionLog record, Channel BackgroundService writer, correlationMiddleware FIRST in pipeline, DI registrations. 44/44 tests pass (0 warnings). Ready for 05-02 endpoint wiring.
+Last activity: 2026-05-08 — Completed 05-01-DECISION-LOG-INFRA-PLAN.md
 
-Progress: [████░░░░░░░░░░░░░░░░░░░] 11 of ~30 plans (phase 4 done; phase 5+ ahead)
+Progress: [█████░░░░░░░░░░░░░░░░░░] 12 of ~30 plans (phase 5 plan 1 done)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 11 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam)
+- Total plans completed: 12 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 1 decision-logging)
 - Average duration: ~7 min
-- Total execution time: ~42 min
+- Total execution time: ~50 min
 
 **By Phase:**
 
@@ -31,10 +31,11 @@ Progress: [████░░░░░░░░░░░░░░░░░░░
 | 02-sse-streaming-pass-through | 2/2 | ~24 min | 12 min |
 | 03-122b-concurrency-gate | 3/3 | ~53 min | 18 min |
 | 04-ml-algorithm-seam | 3/3 | ~21 min | 7 min |
+| 05-routing-decision-logging | 1/3 | ~8 min | 8 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-03 (~3 min), 04-01 (~3 min), 04-02 (~15 min), 04-03 (~3 min)
-- Trend: Cli/integration plans take longer (~15 min); Core + test-only plans very fast (~3 min)
+- Last 5 plans: 04-01 (~3 min), 04-02 (~15 min), 04-03 (~3 min), 05-01 (~8 min)
+- Trend: Cli/integration plans take longer; Core + test-only plans very fast (~3 min)
 
 *Updated after each plan completion*
 
@@ -82,6 +83,11 @@ Recent decisions affecting current work:
 - 04-02: Func<IServiceProvider, RoutingAlgorithm> explicit cast required for AddSingleton<T> when T is an F# function-type alias — without the Func wrapper, F# currying causes DI overload resolver to reject the factory lambda (inferred as 4-arg rather than Func<IServiceProvider, RoutingAlgorithm>)
 - 04-02: open Microsoft.Extensions.Configuration required in Program.fs for both IConfigurationBuilder cast and AddInMemoryCollection extension method (was missing)
 - 04-02: RoutingTests.fs 04-01 latent bug fixed — after open SmartRouter.Core.Heuristic, correct is applyHeuristic not Heuristic.applyHeuristic; Heuristic is not a sub-module; tests were cached from --no-build in 04-01
+- 05-01: ChannelClosedException must be caught alongside OperationCanceledException in BackgroundService consumer loop — StopAsync calls TryComplete() which closes the channel before stoppingToken is cancelled; both exceptions are valid graceful-shutdown signals
+- 05-01: DI triple-registration pattern: AddSingleton<Concrete>, AddSingleton<IInterface>(sp -> GetRequiredService<Concrete>()), AddHostedService<Concrete>(sp -> ...) — single instance for all three roles; do NOT use three separate AddSingleton<DecisionLogWriter>
+- 05-01: app.Use requires explicit Func<HttpContext, RequestDelegate, Task> cast for F# lambda — without it the compiler infers incorrect arity
+- 05-01: new DecisionLogWriter(...) required — BackgroundService implements IDisposable; F# FS0760 enforces new Type(...) syntax when used as a value (not a constructor call in a let binding)
+- 05-01: JsonFSharpConverter() accessed via open System.Text.Json.Serialization (not FSharp.SystemTextJson prefix) — consistent with existing Json.fs pattern
 
 ### Pending Todos
 
@@ -95,6 +101,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T04:41:11Z
-Stopped at: Completed 04-03-ML-ROUTING-TESTS-PLAN.md — Phase 4 complete; 44/44 tests pass (0 warnings); ML-01..04 all verified; check-routing-isolation.sh + check-no-async.sh both exit 0
+Last session: 2026-05-08T06:04:59Z
+Stopped at: Completed 05-01-DECISION-LOG-INFRA-PLAN.md — Phase 5 plan 1 complete; 44/44 tests pass (0 warnings); check-no-async.sh + check-routing-isolation.sh both exit 0; correlationMiddleware FIRST in pipeline; DecisionLogWriter BackgroundService wired
 Resume file: None
