@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 7 — Failure Detector (next: model health probing; depends on Phase 6 model_version + DI wiring)
+**Current focus:** Phase 8 — Retraining Loop (next: DatasetMerger + Retrainer + Validator + ModelRegistry + RetrainingService BackgroundService; depends on Phase 7 IFailureDetector/ITeacherLabeler/IHardCaseDatasetWriter + datasets/hard-cases.jsonl)
 
 ## Current Position
 
-Phase: 7 of 11 (Failure Detection + Teacher Labeling) — In progress
-Plan: 1 of 6 in current phase — COMPLETE ✓
-Status: Phase 7 Plan 1 complete. Core/RetrainingPorts.fs (BCL-only: IFailureDetector/ITeacherLabeler/IHardCaseDatasetWriter + 4 supporting types). Three Cli adapter stubs (FailureDetector.fs, TeacherLabeler.fs, HardCaseDatasetWriter.fs) with NotImplementedException bodies. Both .fsproj files updated. Build: 0 errors, 0 warnings. Tests: 50 pass + 10 ignored (Phase 6 baseline unchanged). Wave 2 plans (07-02/03/04) unblocked for parallel execution.
-Last activity: 2026-05-08 — Completed 07-01-FOUNDATION-PLAN.md
+Phase: 7 of 11 (Failure Detection + Teacher Labeling) — COMPLETE ✓
+Plan: 6 of 6 in current phase — COMPLETE ✓
+Status: Phase 7 complete. All 4 FAIL REQ-IDs verified by 16 new tests + verifier scored 30/30 must-haves. Core/RetrainingPorts.fs (BCL-only: 3 interfaces + 4 types). Cli adapters real-impl: FailureDetector (JSONL reader + fallback_used filter), TeacherLabeler (named "teacher" HttpClient + persistent UTC daily cost cap + ROUTE_ parser), HardCaseDatasetWriter (Channel + BackgroundService + dedupe HashSet). CompositionRoot triple-reg + AddResilienceHandler (5xx/transient retry, no 4xx). Program.fs --retrain handler. prompts/teacher-prompt.md + scripts/seed-hard-cases.fsx + .gitignore datasets/. Build: 0 errors, 0 warnings. Tests: 66 pass + 10 ignored (0 failed).
+Last activity: 2026-05-08 — Phase 7 verified passed (30/30 must-haves)
 
-Progress: [█████████░░░░░░░░░░░░░░] 18 of ~36 plans (phase 7 in progress — 1/6 done)
+Progress: [██████████████░░░░░░░░░] 23 of ~30 plans (phase 7 complete; phase 8 not started)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 17 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing)
+- Total plans completed: 23 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing + 6 failure-detection)
 - Average duration: ~7 min
-- Total execution time: ~65 min
+- Total execution time: ~115 min
 
 **By Phase:**
 
@@ -33,6 +33,7 @@ Progress: [█████████░░░░░░░░░░░░░░
 | 04-ml-algorithm-seam | 3/3 | ~21 min | 7 min |
 | 05-routing-decision-logging | 3/3 | ~19 min | 6 min |
 | 06-real-ml-routing | 3/3 | ~18 min | ~6 min |
+| 07-failure-detection-and-teacher-labeling | 6/6 | ~50 min | ~8 min |
 
 **Recent Trend:**
 - Last 5 plans: 05-02 (~6 min), 05-03 (~5 min), 06-01 (~5 min), 06-02 (~8 min), 06-03 (~5 min)
@@ -111,6 +112,22 @@ Recent decisions affecting current work:
 - 07-01: HardCaseDatasetWriter inherits BackgroundService at stub stage so Plan 07-05 AddHostedService<HardCaseDatasetWriter> DI registration requires no signature change
 - 07-01: TeacherLabelerOptions [CLIMutable] record declared in stub file; Plan 07-03 replaces LabelAsync body only; constructor signature final: (httpFactory: IHttpClientFactory, options: TeacherLabelerOptions)
 - 07-01: Wave 1 stub pattern: constructor signatures are final at plan 01; Wave 2 plans (07-02/03/04) replace method bodies exclusively — no .fsproj write conflicts in parallel execution
+- 07-02: jsonOpts uses SnakeCaseLower + JsonFSharpConverter (mirrors DecisionLogWriter) for correct JSONL round-trip when reading DecisionLog records — bare STJ rejects F# records
+- 07-02: PromptText = None set explicitly in HardCase output per LOG-01 privacy decision; Phase 8 BackgroundService and seed script fill prompt text downstream via inline path
+- 07-03: Pitfall 5 enforced — TeacherLabeler uses IHttpClientFactory.CreateClient("teacher"); never IUpstreamClient/QueueDispatcher (would starve real 122B inference traffic of its SemaphoreSlim(1) slot)
+- 07-03: Persistent daily cap counter rotates by UTC date (file path datasets/teacher-cap-YYYY-MM-DD.json); counter incremented BEFORE HTTP call so cap-hit returns Skipped without contacting upstream; counter survives router restarts
+- 07-03: ROUTE_122B wins over ROUTE_35B when both sentinels appear in teacher response — safety bias for ambiguous teachers
+- 07-04: BoundedChannelFullMode.Wait (NOT DropWrite) — losing training data is unacceptable; producers tolerate back-pressure (writes infrequent — one per labeled hard case)
+- 07-04: Dedupe via HashSet<string> keyed on $"{CorrelationId}|{PromptHash}", seeded from existing JSONL file at first ExecuteAsync iteration; misses logged Debug and dropped silently
+- 07-04: F# parsing trap fix — `try X with _ -> (); Y` only runs Y in the exception arm (semicolon binds inside with-clause); split into two explicit statements when both X and Y must always execute
+- 07-05: --retrain detection runs BEFORE WebApplication.CreateBuilder; uses a separate minimal Host with the same configureServices, resolves the 3 ports, runs the offline pipeline, exits 0; never starts Kestrel
+- 07-05: configureServices ML init guarded on Routing.Algorithm == "ml" so --retrain works without bge-m3 model files; --retrain host injects "heuristic" override
+- 07-05: AddResilienceHandler ShouldHandle predicate explicitly excludes 4xx — retrying on 4xx wastes cost cap budget on a non-recoverable failure
+- 07-05: HardCaseDatasetWriter triple-registration mirrors DecisionLogWriter (concrete + IInterface alias + AddHostedService<concrete>); single instance, three roles
+- 07-05: scripts/seed-hard-cases.fsx writes module-level entries inside a function (FS0524 forbids `use` at .fsx top level); StreamWriter uses UTF8Encoding(false) to avoid BOM in JSONL output
+- 07-06: AddHttpClient F# lambda overload trap — services.AddHttpClient(name, fun c -> ...) does not bind reliably; use services.AddHttpClient(name).ConfigureHttpClient(...) chain
+- 07-06: Private F# [<CLIMutable>] record requires JsonFSharpConverter for STJ; default ObjectDefaultConverter cannot access private parameterless ctor
+- 07-06: Drain test pattern — Thread.Yield() between AppendAsync calls and StopAsync exercises both the steady-state and drain paths in BackgroundService
 
 ### Pending Todos
 
@@ -124,6 +141,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T12:21:56Z
-Stopped at: Completed 07-01-FOUNDATION-PLAN.md — Phase 7 Plan 1/6 done; Core/RetrainingPorts.fs + 3 Cli adapter stubs; build clean; 50 pass + 10 ignored baseline
+Last session: 2026-05-08T22:03:53Z
+Stopped at: Phase 7 COMPLETE — 6/6 plans + verifier 30/30 must-haves passed; FAIL-01..FAIL-04 marked Complete in REQUIREMENTS.md; build clean; 66 pass + 10 ignored, 0 failed
 Resume file: None

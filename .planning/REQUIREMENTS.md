@@ -114,10 +114,10 @@
 
 ### Failure Detection + Teacher Labeling (Phase 7)
 
-- [ ] **FAIL-01**: `FailureDetector` reads `decisions/*.jsonl`, filters records where `fallback_used=true`, returns the hard-case set; verified by unit test on a fixture file
-- [ ] **FAIL-02**: `TeacherLabeler` calls 122B with the prompt template from `~/projs/smart-router-distillation/prompts/teacher_prompt.md`, parses the response into `(prompt, label)`, enforces 30s timeout per call + 3x retry on transient failure
-- [ ] **FAIL-03**: Daily cost cap (configurable; default 1000 calls/day) — calls beyond the cap are skipped with a logged warning; verified by a test that exercises the limit
-- [ ] **FAIL-04**: Hard-case dataset persists to `datasets/hard-cases.jsonl` append-only with a single-writer file lock; 10 concurrent runs produce a corruption-free file (line count == sum of inputs)
+- [x] **FAIL-01**: `FailureDetector` reads `decisions/*.jsonl`, filters records where `fallback_used=true`, returns the hard-case set; verified by unit test on a fixture file
+- [x] **FAIL-02**: `TeacherLabeler` calls 122B with the prompt template from `~/projs/smart-router-distillation/prompts/teacher_prompt.md`, parses the response into `(prompt, label)`, enforces 30s timeout per call + 3x retry on transient failure
+- [x] **FAIL-03**: Daily cost cap (configurable; default 1000 calls/day) — calls beyond the cap are skipped with a logged warning; verified by a test that exercises the limit
+- [x] **FAIL-04**: Hard-case dataset persists to `datasets/hard-cases.jsonl` append-only with a single-writer file lock; 10 concurrent runs produce a corruption-free file (line count == sum of inputs)
 
 ### Retraining Loop (Phase 8)
 
@@ -256,10 +256,10 @@ Deferred. Tracked but not in current roadmap.
 | CLS-01 | Phase 6 | Complete |
 | CLS-02 | Phase 6 | Complete |
 | CLS-03 | Phase 6 | Complete |
-| FAIL-01 | Phase 7 | Pending |
-| FAIL-02 | Phase 7 | Pending |
-| FAIL-03 | Phase 7 | Pending |
-| FAIL-04 | Phase 7 | Pending |
+| FAIL-01 | Phase 7 | Complete |
+| FAIL-02 | Phase 7 | Complete |
+| FAIL-03 | Phase 7 | Complete |
+| FAIL-04 | Phase 7 | Complete |
 | RETRAIN-01 | Phase 8 | Pending |
 | RETRAIN-02 | Phase 8 | Pending |
 | RETRAIN-03 | Phase 8 | Pending |

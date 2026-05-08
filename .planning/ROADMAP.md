@@ -24,7 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: ML Algorithm Seam** ✓ — Placeholder ML algorithm + config dispatch (`Routing.Algorithm: "heuristic" | "ml"`) + CLI `--routing-algorithm` override; heuristic stays default *until Phase 6 ships real ML* (then flips to "ml"); existing tests stay green; same-shape ML test confirms dispatch. **Heuristic soft-paused 2026-05-08; ML is primary path going forward.**
 - [x] **Phase 5: Routing-Decision Logging** ✓ — Per-request structured JSONL log with routing reason, latency, model_version, fallback flag, correlation ID; thread-safe writer; absorbs OBS-01 and OBS-03 from old Phase 5 — this is Loop B's input
 - [x] **Phase 6: Real ML Routing** ✓ — `Microsoft.ML.OnnxRuntime` + bge-m3 **int8 dynamic-quantized** (~580MB, 1024-dim, multilingual; chosen over bge-small for Korean+English mixed traffic; quantized from start per §1.7.7 row 4) + ML.NET `LbfgsLogisticRegression` + replace placeholder; first model file auto-generated on first run; latency budget <50ms p95 (CoreML EP fallback if exceeded under load)
-- [ ] **Phase 7: Failure Detection + Teacher Labeling** — Failure detector (fallback-used + error + short-response + low-confidence signals); teacher labeler (HTTP to 122B with timeout/retry/cost cap, `prompts/teacher_prompt.md`); hard-case dataset extraction
+- [x] **Phase 7: Failure Detection + Teacher Labeling** ✓ — Failure detector (fallback-used signal — Phase 10 expands); teacher labeler (named "teacher" HttpClient + AddResilienceHandler + persistent daily cost cap + ROUTE_35B/ROUTE_122B parser); hard-case dataset writer (Channel + BackgroundService + dedupe HashSet); --retrain CLI handler; 16 new tests (66 total + 10 ignored)
 - [ ] **Phase 8: Retraining Loop** — Dataset merger (old 70 + new 30 with class balance); ML.NET trainer; held-out validator with rollback gate; `BackgroundService` + `PeriodicTimer`; `PredictionEnginePool` + `watchForChanges:true` for atomic hot-reload; idempotency lock
 - [ ] **Phase 9: Canary Deployment** — `Microsoft.FeatureManagement` + `PercentageFilter` for 10/90 split; `model_version` cohort tagging in logs; comparison + rollout/rollback workflow
 - [ ] **Phase 10: Health + Fallback + graph_indexing No-Fallback** — (was old Phase 4) Health probing, retry policy, fallback routing, and the graph_indexing-must-fail correctness unit
@@ -146,12 +146,12 @@ Plans:
 **Plans**: 6 plans
 
 Plans:
-- [ ] 07-01-FOUNDATION-PLAN.md — Core RetrainingPorts.fs + 3 Cli adapter stubs + .fsproj wiring (unblocks Wave 2 parallel adapter implementations)
-- [ ] 07-02-FAILURE-DETECTOR-PLAN.md — FailureDetector real impl (JSONL reader + fallback_used filter + empty-result Information log)
-- [ ] 07-03-TEACHER-LABELER-PLAN.md — TeacherLabeler real impl (named HttpClient + prompt template loader + persistent daily cost cap + ROUTE_35B/ROUTE_122B parser)
-- [ ] 07-04-DATASET-WRITER-PLAN.md — HardCaseDatasetWriter real impl (Channel + BackgroundService + Wait-on-overflow + dedupe HashSet)
-- [ ] 07-05-CLI-WIRING-PLAN.md — CompositionRoot DI registrations + named "teacher" HttpClient with retry handler + Program.fs --retrain CLI handler + appsettings.json + prompts/teacher-prompt.md + scripts/seed-hard-cases.fsx + .gitignore datasets/
-- [ ] 07-06-TESTS-PLAN.md — 3 test files (FailureDetectorTests + TeacherLabelerTests + HardCaseDatasetTests; 15+ tests total) + Tests.fsproj + RouterTests.rootTests
+- [x] 07-01-FOUNDATION-PLAN.md ✓ — Core RetrainingPorts.fs (BCL-only: 3 interfaces + 4 supporting types) + 3 Cli adapter stubs + .fsproj wiring (unblocks Wave 2 parallel)
+- [x] 07-02-FAILURE-DETECTOR-PLAN.md ✓ — FailureDetector real impl (JSONL reader + fallback_used filter + empty-result Information log; malformed-line tolerant)
+- [x] 07-03-TEACHER-LABELER-PLAN.md ✓ — TeacherLabeler real impl (named HttpClient bypass per Pitfall 5 + prompt template loader with double-checked-lock cache + persistent UTC daily cost cap + ROUTE_35B/ROUTE_122B parser; ROUTE_122B wins on collision)
+- [x] 07-04-DATASET-WRITER-PLAN.md ✓ — HardCaseDatasetWriter real impl (Channel + BackgroundService mirror of DecisionLogWriter + BoundedChannelFullMode.Wait + (CorrelationId,PromptHash) HashSet dedupe seeded from existing JSONL)
+- [x] 07-05-CLI-WIRING-PLAN.md ✓ — CompositionRoot DI triple-registration + named "teacher" HttpClient with AddResilienceHandler (5xx/transient retry, no 4xx) + Program.fs --retrain handler (offline pipeline before host startup) + appsettings.json + prompts/teacher-prompt.md + scripts/seed-hard-cases.fsx + .gitignore datasets/
+- [x] 07-06-TESTS-PLAN.md ✓ — 3 test files (FailureDetectorTests 6 + TeacherLabelerTests 6 with fake Kestrel + HardCaseDatasetTests 4 with explicit BackgroundService lifecycle = 16 new tests) + Tests.fsproj wiring + RouterTests.rootTests; flushed two real adapter bugs (CapCounter STJ + Flush/Dispose F# parsing trap)
 
 ### Phase 8: Retraining Loop
 **Goal**: Loop B is real. A `BackgroundService` periodically (every hour, or when `hard-cases.jsonl` exceeds 500 entries) reads hard-case dataset + old training set, merges 70/30 with class balance, retrains the ML.NET LR classifier, validates against a held-out set, and writes the new model to `models/router.zip` only if validation passes. `PredictionEnginePool` with `watchForChanges:true` swaps the live classifier atomically; in-flight requests complete on the old model. A `Mutex` ensures only one retrain runs at a time. Failures in Loop B never affect Loop A — `try/with` isolation is mandatory.
@@ -236,7 +236,7 @@ Phases execute in numeric order: 1 → 2 → 3 → **(ML arc)** 4 → 5 → 6 �
 | 4. ML Algorithm Seam | 3/3 | ✓ Complete | 2026-05-08 |
 | 5. Routing-Decision Logging | 3/3 | ✓ Complete | 2026-05-08 |
 | 6. Real ML Routing | 3/3 | ✓ Complete | 2026-05-08 |
-| 7. Failure Detection + Teacher Labeling | 0/3 | Not started | - |
+| 7. Failure Detection + Teacher Labeling | 6/6 | ✓ Complete | 2026-05-08 |
 | 8. Retraining Loop | 0/3 | Not started | - |
 | 9. Canary Deployment | 0/3 | Not started | - |
 | 10. Health + Fallback + graph_indexing No-Fallback | 0/3 | Not started (was Phase 4) | - |
