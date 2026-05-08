@@ -9,20 +9,19 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 
 ## Current Position
 
-Phase: 3 of 11 (122B Concurrency Gate) — COMPLETE ✓
-Plan: 3 of 3 in current phase — COMPLETE ✓
-Status: Phase 3 verified Complete (39/39 tests + 2 opt-in). Roadmap reorganized 2026-05-08: NEW Phases 4-9 ship the ML arc (handoff doc folded forward); old Phase 4/6 deferred to Phases 10-11; old Phase 5 dissolved.
-Last activity: 2026-05-08 — Roadmap reorganization (ROADMAP/REQUIREMENTS/PROJECT updated; 26 new REQ-IDs added)
-Next: Phase 4 — ML Algorithm Seam (placeholder + config dispatch + CLI override)
+Phase: 4 of 11 (ML Algorithm Seam) — In progress
+Plan: 1 of 3 in current phase — COMPLETE ✓
+Status: Phase 4 Plan 1 complete. Core refactor done: Heuristic.fs + ML.fs created as flat siblings, routeRequest now 3-arg with RoutingAlgorithm seam, RoutingTests.fs migrated, check-routing-isolation.sh added. Cli callsite fix deferred to 04-02 (expected Wave 1 boundary).
+Last activity: 2026-05-08 — Completed 04-01-CORE-REFACTOR-PLAN.md
 
-Progress: [████░░░░░░░░░░░░░░░░░░░] 8 of ~30 plans (3 done; ~6 ML phases × ~3 plans + 2 deferred phases × ~3 plans = ~24 remaining)
+Progress: [████░░░░░░░░░░░░░░░░░░░] 9 of ~30 plans (4 done; ~5 remaining ML plans + 2 deferred phases × ~3 plans = ~21 remaining)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8 (3 foundation + 2 streaming + 3 concurrency-gate)
+- Total plans completed: 9 (3 foundation + 2 streaming + 3 concurrency-gate + 1 ml-seam)
 - Average duration: ~7 min
-- Total execution time: ~21 min
+- Total execution time: ~24 min
 
 **By Phase:**
 
@@ -31,10 +30,11 @@ Progress: [████░░░░░░░░░░░░░░░░░░░
 | 01-foundation | 3/3 | ~21 min | 7 min |
 | 02-sse-streaming-pass-through | 2/2 | ~24 min | 12 min |
 | 03-122b-concurrency-gate | 3/3 | ~53 min | 18 min |
+| 04-ml-algorithm-seam | 1/3 | ~3 min | 3 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-02 (6 min), 03-01 (15 min), 03-02 (~35 min), 03-03 (~3 min)
-- Trend: 03-03 was fast (single task, plan code nearly complete; 1 bug auto-fix)
+- Last 5 plans: 03-01 (15 min), 03-02 (~35 min), 03-03 (~3 min), 04-01 (~3 min)
+- Trend: Pure Core refactor plans are very fast (~3 min); Cli/integration plans take longer
 
 *Updated after each plan completion*
 
@@ -76,6 +76,9 @@ Recent decisions affecting current work:
 - 03-02: Test 3 PITFALL-10 proof uses LatencyFake not FakeUpstreamClient — gate-per-call would require knowing the correct drain order before the test runs (circular dependency); LatencyFake auto-completes and lets WhenAll observe the completion order vector
 - 03-03: LatencyFakeLoad re-declared private in LoadTests.fs (not imported from QueueTests) — avoids cross-module coupling; Task.Run lambda cast to :> Task to resolve FS0041 overload ambiguity for Task<Result<_,_>> return type
 - 03-03: ptestCaseAsync chosen over env-var gate — Expecto pending is idiomatic and tooling-friendly; default run reports "2 ignored" (not "0 run")
+- 04-01: RoutingAlgorithm alias lives in Domain.fs (upstream of both Heuristic.fs and ML.fs in compile order) — both algorithm modules compile before Routing.fs and need to satisfy the type
+- 04-01: Wave 1 boundary state — Tests project build fails because Cli (ChatCompletions.fs) still uses old 2-arg routeRequest; Cli callsite fix + full dotnet test 39/39 deferred to 04-02
+- 04-01: ML.fs comment mentioning Heuristic module name revised to avoid triggering CI isolation grep false positive (grep pattern without trailing dot matched comment text)
 
 ### Pending Todos
 
@@ -89,6 +92,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T01:52:40Z
-Stopped at: Completed 03-03-LOAD-TESTS-PLAN.md — Phase 3 complete; 39/39 pass, 2 ignored (load tests pending); TEST-06 satisfied
+Last session: 2026-05-08T04:27:30Z
+Stopped at: Completed 04-01-CORE-REFACTOR-PLAN.md — Wave 1 complete; Core builds 0 warnings; RoutingAlgorithm seam + Heuristic.fs/ML.fs + isolation script in place
 Resume file: None
