@@ -22,7 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: SSE Streaming Pass-Through** ✓ — Complete atomic SSE correctness cluster (STRM-01..07); Hermes is unblocked when this ships
 - [x] **Phase 3: 122B Concurrency Gate** ✓ — Complete atomic concurrency cluster (CONC-01..06 + REL-05); Graphify concurrent requests are safe when this ships
 - [x] **Phase 4: ML Algorithm Seam** ✓ — Placeholder ML algorithm + config dispatch (`Routing.Algorithm: "heuristic" | "ml"`) + CLI `--routing-algorithm` override; heuristic stays default; existing tests stay green; same-shape ML test confirms dispatch
-- [ ] **Phase 5: Routing-Decision Logging** — Per-request structured JSONL log with routing reason, latency, model_version, fallback flag, correlation ID; thread-safe writer; absorbs OBS-01 and OBS-03 from old Phase 5 — this is Loop B's input
+- [x] **Phase 5: Routing-Decision Logging** ✓ — Per-request structured JSONL log with routing reason, latency, model_version, fallback flag, correlation ID; thread-safe writer; absorbs OBS-01 and OBS-03 from old Phase 5 — this is Loop B's input
 - [ ] **Phase 6: Real ML Routing** — `Microsoft.ML.OnnxRuntime` + bge-m3 **int8 dynamic-quantized** (~580MB, 1024-dim, multilingual; chosen over bge-small for Korean+English mixed traffic; quantized from start per §1.7.7 row 4) + ML.NET `LbfgsLogisticRegression` + replace placeholder; first model file auto-generated on first run; latency budget <50ms p95 (CoreML EP fallback if exceeded under load)
 - [ ] **Phase 7: Failure Detection + Teacher Labeling** — Failure detector (fallback-used + error + short-response + low-confidence signals); teacher labeler (HTTP to 122B with timeout/retry/cost cap, `prompts/teacher_prompt.md`); hard-case dataset extraction
 - [ ] **Phase 8: Retraining Loop** — Dataset merger (old 70 + new 30 with class balance); ML.NET trainer; held-out validator with rollback gate; `BackgroundService` + `PeriodicTimer`; `PredictionEnginePool` + `watchForChanges:true` for atomic hot-reload; idempotency lock
@@ -111,9 +111,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 05-01-DECISION-LOG-INFRA-PLAN.md — DecisionLog record + 12-field schema, Channel<DecisionLog> + BackgroundService single-writer with daily UTC rotation, CorrelationMiddleware (HttpContext.Items + Serilog LogContext), DI wiring, .gitignore logs/
-- [ ] 05-02-ENDPOINT-WIRING-PLAN.md — RoutingAlgorithmRegistration record (Algorithm + Name + ModelVersion) replaces Phase-4's bare RoutingAlgorithm singleton; ChatCompletions handler emits DecisionLog at every exit point (UnsupportedTask 400, generic Error 400, Ok success, Ok streaming/non-streaming + cancellation)
-- [ ] 05-03-LOGGING-TESTS-PLAN.md — LoggingTests.fs with 4 testSequenced tests (schema completeness, 100-concurrent thread safety, correlation propagation Serilog↔JSONL, graceful shutdown drain); wire into fsproj + rootTests
+- [x] 05-01-DECISION-LOG-INFRA-PLAN.md ✓ — DecisionLog record + 12-field schema, Channel<DecisionLog> + BackgroundService single-writer with daily UTC rotation, CorrelationMiddleware (HttpContext.Items + Serilog LogContext), DI wiring, .gitignore logs/
+- [x] 05-02-ENDPOINT-WIRING-PLAN.md ✓ — Extract RoutingAlgorithmRegistration to Adapters/RoutingAlgorithm.fs (F# compile-order fix); ChatCompletions handler emits DecisionLog at 8 exit points; ALL SSE error event bodies include correlation_id field (LOG-04 third source)
+- [x] 05-03-LOGGING-TESTS-PLAN.md ✓ — LoggingTests.fs with 5 testSequenced tests (schema, 100-concurrent integrity, correlation across 3 sources via CapturingSink ILogEventSink, graceful drain, SSE-error correlation_id end-to-end) + StreamingTests.startTestRouter temp-dir hygiene
 
 ### Phase 6: Real ML Routing
 **Goal**: Replace the placeholder `applyML` with a real classifier: bge-m3 **int8 dynamic-quantized** (1024-dim, multilingual, ~580MB) via `Microsoft.ML.OnnxRuntime` + ML.NET `LbfgsLogisticRegression` loaded from a model file. Same-prompt comparison shows heuristic and ML producing different decisions on the same input — including a Korean prompt where bge-m3's tokenizer-aware multilingual semantics differ from the heuristic's English keyword matcher. The first model file is auto-generated at startup if missing (dummy 1024-dim weights → ~50/50 routing) so the system bootstraps without a pre-trained model.
@@ -231,7 +231,7 @@ Phases execute in numeric order: 1 → 2 → 3 → **(ML arc)** 4 → 5 → 6 �
 | 2. SSE Streaming Pass-Through | 2/2 | ✓ Complete | 2026-05-08 |
 | 3. 122B Concurrency Gate | 3/3 | ✓ Complete | 2026-05-08 |
 | 4. ML Algorithm Seam | 3/3 | ✓ Complete | 2026-05-08 |
-| 5. Routing-Decision Logging | 0/3 | Not started | - |
+| 5. Routing-Decision Logging | 3/3 | ✓ Complete | 2026-05-08 |
 | 6. Real ML Routing | 0/3 | Not started | - |
 | 7. Failure Detection + Teacher Labeling | 0/3 | Not started | - |
 | 8. Retraining Loop | 0/3 | Not started | - |

@@ -56,9 +56,9 @@
 
 ### Observability
 
-- [ ] **OBS-01**: Per-request structured log line (Serilog → stderr) includes: selected model, routing reason, latency, token count, backend status, queue wait time
+- [x] **OBS-01**: Per-request structured log line (Serilog → stderr) includes: selected model, routing reason, latency, token count, backend status, queue wait time
 - [x] **OBS-02**: Router maintains in-process counters/gauges feeding `/stats`: requests/sec, active requests, 122B queue depth, average latency, failure count, streaming duration
-- [ ] **OBS-03**: Each request gets a correlation id propagated through logs and SSE-error events
+- [x] **OBS-03**: Each request gets a correlation id propagated through logs and SSE-error events
 - [x] **OBS-04**: Logs go to stderr only; stdout is reserved for application output (matches blueCode stream-separation invariant)
 
 ### Architecture
@@ -98,10 +98,10 @@
 
 ### Decision Logging (Phase 5)
 
-- [ ] **LOG-01**: Each routing decision emits a JSONL line at `logs/decisions/YYYY-MM-DD.jsonl` (UTC date) with the full schema: `schema_version` (int, currently `1`), `correlation_id`, `prompt_hash` (SHA-256 of concatenated message contents), `prompt_korean_char_ratio` (float 0..1, count of Hangul chars in `[가-힣]` / total chars), `routing_algorithm` (heuristic|ml), `routing_reason`, `target` (Qwen35B|Qwen122B), `latency_ms`, `fallback_used` (bool), `model_version` (string), `task_type` (optional), `timestamp`
-- [ ] **LOG-02**: JSONL writer is thread-safe via single-writer `Channel<DecisionLog>` background pump — `File.AppendAllText` is explicitly forbidden (CI grep); 100 concurrent requests produce 100 valid JSON lines with no `IOException` or interleaved bytes
-- [ ] **LOG-03**: Daily file rotation creates a new dated file at midnight local time; writer flushes pending entries on graceful shutdown (`app.StopAsync`); no log loss on clean exit
-- [ ] **LOG-04**: Correlation ID is generated per request (middleware), propagated through Serilog stderr output AND the JSONL file, AND included in any SSE error event body — verified by a test that captures all three sources
+- [x] **LOG-01**: Each routing decision emits a JSONL line at `logs/decisions/YYYY-MM-DD.jsonl` (UTC date) with the full schema: `schema_version` (int, currently `1`), `correlation_id`, `prompt_hash` (SHA-256 of concatenated message contents), `prompt_korean_char_ratio` (float 0..1, count of Hangul chars in `[가-힣]` / total chars), `routing_algorithm` (heuristic|ml), `routing_reason`, `target` (Qwen35B|Qwen122B), `latency_ms`, `fallback_used` (bool), `model_version` (string), `task_type` (optional), `timestamp`
+- [x] **LOG-02**: JSONL writer is thread-safe via single-writer `Channel<DecisionLog>` background pump — `File.AppendAllText` is explicitly forbidden (CI grep); 100 concurrent requests produce 100 valid JSON lines with no `IOException` or interleaved bytes
+- [x] **LOG-03**: Daily file rotation creates a new dated file at midnight local time; writer flushes pending entries on graceful shutdown (`app.StopAsync`); no log loss on clean exit
+- [x] **LOG-04**: Correlation ID is generated per request (middleware), propagated through Serilog stderr output AND the JSONL file, AND included in any SSE error event body — verified by a test that captures all three sources
 
 ### Embeddings + Classifier (Phase 6)
 
@@ -219,9 +219,9 @@ Deferred. Tracked but not in current roadmap.
 | REL-03 | Phase 10 | Pending |
 | REL-04 | Phase 10 | Pending |
 | REL-05 | Phase 3 | Complete |
-| OBS-01 | Phase 5 | Pending |
+| OBS-01 | Phase 5 | Complete |
 | OBS-02 | Phase 3 | Complete |
-| OBS-03 | Phase 5 | Pending |
+| OBS-03 | Phase 5 | Complete |
 | OBS-04 | Phase 1 | Complete |
 | ARCH-01 | Phase 1 | Complete |
 | ARCH-02 | Phase 1 | Complete |
@@ -246,10 +246,10 @@ Deferred. Tracked but not in current roadmap.
 | ML-02 | Phase 4 | Complete |
 | ML-03 | Phase 4 | Complete |
 | ML-04 | Phase 4 | Complete |
-| LOG-01 | Phase 5 | Pending |
-| LOG-02 | Phase 5 | Pending |
-| LOG-03 | Phase 5 | Pending |
-| LOG-04 | Phase 5 | Pending |
+| LOG-01 | Phase 5 | Complete |
+| LOG-02 | Phase 5 | Complete |
+| LOG-03 | Phase 5 | Complete |
+| LOG-04 | Phase 5 | Complete |
 | EMBED-01 | Phase 6 | Pending |
 | EMBED-02 | Phase 6 | Pending |
 | EMBED-03 | Phase 6 | Pending |
@@ -274,9 +274,9 @@ Deferred. Tracked but not in current roadmap.
 - v1 requirements: 83 total (56 original + 27 ML-arc additions; +1 EMBED-03 for bge-m3 latency)
 - Mapped to phases: 83 ✓
 - Unmapped: 0
-- Complete: 48 (Phase 1 ✓ + Phase 2 ✓ + Phase 3 ✓ + Phase 4 ✓ + TEST-01/TEST-02 retroactive)
-- Pending: 35 (23 ML arc remaining + 12 deferred heuristic-cleanup)
+- Complete: 54 (Phases 1-5 ✓ + TEST-01/TEST-02 retroactive)
+- Pending: 29 (17 ML arc remaining: Phases 6-9 + 12 deferred heuristic-cleanup)
 
 ---
 *Requirements defined: 2026-05-07*
-*Last updated: 2026-05-08 after Phase 4 (ML Algorithm Seam) completion — 48 requirements verified Complete*
+*Last updated: 2026-05-08 after Phase 5 (Routing-Decision Logging) completion — 54 requirements verified Complete*
