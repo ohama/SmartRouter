@@ -176,4 +176,45 @@ let tests : Test =
             | ML -> ()
             | r -> failtestf "expected Reason = ML from CLI-overridden router, got %A" r
 
+        // ── Phase 6: model_version is hash-based, not the placeholder ────────────────
+        testCase "Phase 6: RoutingAlgorithmRegistration.ModelVersion = sprintf \"ml-%s\" (8 hex chars)" <| fun () ->
+            // Skip when embedding files are absent — DI-based test goes through the real ml-branch wiring
+            if not (System.IO.File.Exists "models/embed/bge-m3-int8.onnx"
+                    && System.IO.File.Exists "models/embed/sentencepiece.bpe.model") then
+                skiptest "embedding files missing — run scripts/download-models.sh"
+
+            let services = ServiceCollection()
+            let testConfig =
+                ConfigurationBuilder()
+                    .AddJsonFile("appsettings.json", optional = false)
+                    .AddInMemoryCollection(dict [ "Routing:Algorithm", "ml" ])
+                    .Build()
+            configureServices services testConfig |> ignore
+            use sp = services.BuildServiceProvider()
+            let reg = sp.GetRequiredService<SmartRouter.Cli.Adapters.RoutingAlgorithm.RoutingAlgorithmRegistration>()
+            Expect.equal reg.Name "ml" "Name = ml"
+            Expect.isTrue (reg.ModelVersion.StartsWith "ml-") (sprintf "starts with ml- (got %s)" reg.ModelVersion)
+            Expect.equal reg.ModelVersion.Length 11 "ml- + 8 hex chars = 11 chars total"
+            Expect.notEqual reg.ModelVersion "ml-v0-placeholder" "no longer the Phase 4 placeholder"
+
+        // ── Phase 6: DI smoke — IEmbedder + IClassifier resolve from ml-branch ───────
+        testCase "Phase 6: DI ml-branch resolves IEmbedder + IClassifier without throwing" <| fun () ->
+            if not (System.IO.File.Exists "models/embed/bge-m3-int8.onnx"
+                    && System.IO.File.Exists "models/embed/sentencepiece.bpe.model") then
+                skiptest "embedding files missing — run scripts/download-models.sh"
+
+            let services = ServiceCollection()
+            let testConfig =
+                ConfigurationBuilder()
+                    .AddJsonFile("appsettings.json", optional = false)
+                    .AddInMemoryCollection(dict [ "Routing:Algorithm", "ml" ])
+                    .Build()
+            configureServices services testConfig |> ignore
+            use sp = services.BuildServiceProvider()
+            let emb = sp.GetRequiredService<SmartRouter.Core.MLPorts.IEmbedder>()
+            let cls = sp.GetRequiredService<SmartRouter.Core.MLPorts.IClassifier>()
+            // GetRequiredService throws if not registered — reaching here proves both resolved
+            Expect.isNotNull (box emb) "IEmbedder resolves"
+            Expect.isNotNull (box cls) "IClassifier resolves"
+
     ]

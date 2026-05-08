@@ -10,6 +10,7 @@
     <Compile Include="LoadTests.fs" />
     <Compile Include="MLRoutingTests.fs" />
     <Compile Include="MLEmbeddingTests.fs" />
+    <Compile Include="MLClassifierTests.fs" />
     <Compile Include="LoggingTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
