@@ -16,6 +16,7 @@ open SmartRouter.Cli.Adapters.DatasetMerger
 open SmartRouter.Cli.Adapters.Retrainer
 open SmartRouter.Cli.Adapters.Validator
 open SmartRouter.Cli.Adapters.ModelBootstrapper   // computeModelVersion
+open SmartRouter.Cli.Adapters.RetrainLock
 
 // ── Options ──────────────────────────────────────────────────────────────────
 //
@@ -95,10 +96,9 @@ let private countJsonlLines (path: string) : int =
 type RetrainingService(
     options          : RetrainingOptions,
     embedder         : IEmbedder,
-    versionProvider  : IModelVersionProvider) =
+    versionProvider  : IModelVersionProvider,
+    retrainLock      : IRetrainLock) =                  // NEW Phase 9 (CONTEXT.md Lock 6)
     inherit BackgroundService()
-
-    let semaphore = new SemaphoreSlim(1, 1)
 
     // Embed all hard-case entries (off the hot path; cancellable).
     // ~25ms x N samples. Uses stoppingToken so a host shutdown mid-embedding aborts.
@@ -253,21 +253,22 @@ type RetrainingService(
     // via ExceptionDispatchInfo) so stoppingToken shutdown propagates to ExecuteAsync's
     // outer catch. `reraise()` is not valid inside task{} nested try/with (FS0413);
     // ExceptionDispatchInfo.Capture(...).Throw() preserves the original stack trace.
+    // Phase 9: IRetrainLock (shared with CanaryService.PromoteAsync) replaces the private
+    // SemaphoreSlim so both callers contend on the SAME lock (CONTEXT.md Lock 6).
     let tryRunRetrain (stoppingToken: CancellationToken) : Task<unit> =
         task {
-            if semaphore.Wait(0) then
-                try
-                    try
-                        do! runRetrain stoppingToken
-                    with
-                    | :? OperationCanceledException as oce ->
-                        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(oce).Throw()
-                    | ex ->
-                        Log.Error(ex, "RetrainingService: pipeline threw; model unchanged; will retry next tick")
-                finally
-                    semaphore.Release() |> ignore
-            else
+            match retrainLock.TryAcquire(0) with
+            | None ->
                 Log.Warning("RetrainingService: retrain already in progress; skipping trigger")
+            | Some lockHandle ->
+                use _ = lockHandle   // released on scope exit via IDisposable
+                try
+                    do! runRetrain stoppingToken
+                with
+                | :? OperationCanceledException as oce ->
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(oce).Throw()
+                | ex ->
+                    Log.Error(ex, "RetrainingService: pipeline threw; model unchanged; will retry next tick")
         }
 
     /// Test seam: Plan 08-03 RETRAIN-04 end-to-end test calls this directly to

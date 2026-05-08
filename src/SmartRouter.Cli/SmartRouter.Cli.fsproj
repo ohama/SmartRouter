@@ -34,8 +34,12 @@
     <Compile Include="Adapters/CanaryMetrics.fs" />
     <Compile Include="Adapters/RetrainLock.fs" />
     <Compile Include="Adapters/CanaryGate.fs" />
+    <!-- Phase 9 — Canary deployment (Task 2 — watcher adapters) -->
+    <Compile Include="Adapters/CanaryWatchdog.fs" />
+    <Compile Include="Adapters/CanaryService.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />
     <Compile Include="Endpoints/Stats.fs" />
+    <Compile Include="Endpoints/Canary.fs" />
     <Compile Include="CompositionRoot.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

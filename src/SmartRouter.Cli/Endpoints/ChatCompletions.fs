@@ -19,6 +19,7 @@ open SmartRouter.Cli.Adapters.Json
 open SmartRouter.Cli.Adapters.DecisionLogger
 open SmartRouter.Cli.Adapters.CorrelationMiddleware
 open SmartRouter.Cli.Adapters.RoutingAlgorithm
+open SmartRouter.Cli.Adapters.CanaryMetrics
 
 // ── Wire types ───────────────────────────────────────────────────────────────
 
@@ -124,6 +125,18 @@ let private buildDecisionLog
       task_type                = req.Task
       timestamp                = DateTimeOffset.UtcNow }
 
+// ── Canary metric helper ─────────────────────────────────────────────────────
+
+/// Compute (isCanary, isFallback) for the rolling-60s metric (Lock 15).
+/// Called AFTER the response is written so the metric reflects actual user-facing outcome.
+let private metricCohort (decision: RoutingDecision) (reason: string) : bool * bool =
+    let isCanary    = decision.ModelVersion.EndsWith("-canary", StringComparison.Ordinal)
+    let suffixFallback =
+        reason.EndsWith(";upstream_error", StringComparison.Ordinal)
+        || reason.EndsWith(";stream_error", StringComparison.Ordinal)
+    let isFallback  = decision.IsFallback || suffixFallback
+    isCanary, isFallback
+
 // ── Handler ──────────────────────────────────────────────────────────────────
 
 /// POST /v1/chat/completions handler.
@@ -152,6 +165,7 @@ let handler
     (regn            : RoutingAlgorithmRegistration)
     (versionProvider : IModelVersionProvider)
     (decisionLogger  : IDecisionLogger)
+    (metrics         : ICanaryMetrics)        // NEW Phase 9 — canary rolling metric
     (upstream        : IUpstreamClient)
     (ctx             : HttpContext) : Task =
     task {
@@ -285,6 +299,8 @@ let handler
                         then formatReason decision.Reason + ";stream_error"
                         else formatReason decision.Reason
                     decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) reason decision.IsFallback)
+                    let isCanary, isFb = metricCohort decision reason
+                    metrics.Record(isCanary, isFb)
 
                 with
                 | :? OperationCanceledException ->
@@ -292,11 +308,17 @@ let handler
                     // No more writes possible — log and dispose.
                     Log.Information("StreamAsync: client disconnected mid-stream for {Target}", decision.Target)
                     do! enumerator.DisposeAsync()
-                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) (formatReason decision.Reason + ";cancelled") decision.IsFallback)
+                    let cancelReason = formatReason decision.Reason + ";cancelled"
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) cancelReason decision.IsFallback)
+                    let isCanary, isFb = metricCohort decision cancelReason
+                    metrics.Record(isCanary, isFb)
                 | ex ->
                     Log.Error(ex, "StreamAsync: unexpected error writing to response for {Target}", decision.Target)
                     do! enumerator.DisposeAsync()
-                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) (formatReason decision.Reason + ";stream_error") decision.IsFallback)
+                    let errReason = formatReason decision.Reason + ";stream_error"
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) errReason decision.IsFallback)
+                    let isCanary, isFb = metricCohort decision errReason
+                    metrics.Record(isCanary, isFb)
 
             else
                 // ── Non-streaming branch (unchanged from Phase 1) ────────────────────
@@ -310,7 +332,10 @@ let handler
                 | Ok body ->
                     ctx.Response.ContentType <- "application/json"
                     do! ctx.Response.WriteAsync(body, ctx.RequestAborted)
-                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) (formatReason decision.Reason) decision.IsFallback)
+                    let okReason = formatReason decision.Reason
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) okReason decision.IsFallback)
+                    let isCanary, isFb = metricCohort decision okReason
+                    metrics.Record(isCanary, isFb)
 
                 | Error e ->
                     ctx.Response.StatusCode <- 502
@@ -318,7 +343,10 @@ let handler
                             {| error = {| message = string e
                                           ``type`` = "upstream_error" |} |},
                             jsonOptions, ctx.RequestAborted)
-                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) (formatReason decision.Reason + ";upstream_error") decision.IsFallback)
+                    let upstreamErrReason = formatReason decision.Reason + ";upstream_error"
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) upstreamErrReason decision.IsFallback)
+                    let isCanary, isFb = metricCohort decision upstreamErrReason
+                    metrics.Record(isCanary, isFb)
     }
 
 // ── Endpoint registration ────────────────────────────────────────────────────
@@ -335,5 +363,6 @@ let mapEndpoints (app: WebApplication) =
         let regn             = ctx.RequestServices.GetRequiredService<RoutingAlgorithmRegistration>()
         let versionProvider  = ctx.RequestServices.GetRequiredService<IModelVersionProvider>()
         let decisionLogger   = ctx.RequestServices.GetRequiredService<IDecisionLogger>()
+        let metrics          = ctx.RequestServices.GetRequiredService<ICanaryMetrics>()  // NEW Phase 9
         let upstream         = ctx.RequestServices.GetRequiredService<IUpstreamClient>()
-        handler routingConfig regn versionProvider decisionLogger upstream ctx)) |> ignore
+        handler routingConfig regn versionProvider decisionLogger metrics upstream ctx)) |> ignore
