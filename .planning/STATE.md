@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 4 — ML Algorithm Seam (placeholder + dispatch + CLI override)
+**Current focus:** Phase 5 — Decision Logging (Loop B's input)
 
 ## Current Position
 
-Phase: 4 of 11 (ML Algorithm Seam) — In progress
-Plan: 2 of 3 in current phase — COMPLETE ✓
-Status: Phase 4 Plan 2 complete. Routing.Algorithm config key + RoutingAlgorithm DI singleton + --routing-algorithm CLI flag wired end-to-end. Full-solution build green (0 warnings). 39/39 tests pass. 04-03 (algorithm tests) is unblocked.
-Last activity: 2026-05-08 — Completed 04-02-CONFIG-AND-CLI-PLAN.md
+Phase: 4 of 11 (ML Algorithm Seam) — COMPLETE ✓
+Plan: 3 of 3 in current phase — COMPLETE ✓
+Status: Phase 4 complete. All 4 ML criteria verified: RoutingAlgorithm alias (ML-01), ML.applyML placeholder + DI dispatch (ML-02), CLI override (ML-03), isolation enforcement (ML-04). 44/44 tests pass (0 warnings). Ready for Phase 5.
+Last activity: 2026-05-08 — Completed 04-03-ML-ROUTING-TESTS-PLAN.md
 
-Progress: [████░░░░░░░░░░░░░░░░░░░] 10 of ~30 plans (5 done; ~4 remaining ML plans + 2 deferred phases × ~3 plans = ~20 remaining)
+Progress: [████░░░░░░░░░░░░░░░░░░░] 11 of ~30 plans (phase 4 done; phase 5+ ahead)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 10 (3 foundation + 2 streaming + 3 concurrency-gate + 2 ml-seam)
-- Average duration: ~8 min
-- Total execution time: ~39 min
+- Total plans completed: 11 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam)
+- Average duration: ~7 min
+- Total execution time: ~42 min
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [████░░░░░░░░░░░░░░░░░░░
 | 01-foundation | 3/3 | ~21 min | 7 min |
 | 02-sse-streaming-pass-through | 2/2 | ~24 min | 12 min |
 | 03-122b-concurrency-gate | 3/3 | ~53 min | 18 min |
-| 04-ml-algorithm-seam | 2/3 | ~18 min | 9 min |
+| 04-ml-algorithm-seam | 3/3 | ~21 min | 7 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-02 (~35 min), 03-03 (~3 min), 04-01 (~3 min), 04-02 (~15 min)
-- Trend: Cli/integration plans take longer (~15 min); Core-only refactor plans very fast (~3 min)
+- Last 5 plans: 03-03 (~3 min), 04-01 (~3 min), 04-02 (~15 min), 04-03 (~3 min)
+- Trend: Cli/integration plans take longer (~15 min); Core + test-only plans very fast (~3 min)
 
 *Updated after each plan completion*
 
@@ -95,6 +95,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T13:45:00Z
-Stopped at: Completed 04-02-CONFIG-AND-CLI-PLAN.md — Wave 2 complete; full-solution builds 0 warnings; Routing.Algorithm config key + RoutingAlgorithm DI singleton + --routing-algorithm CLI flag wired; 39/39 tests pass
+Last session: 2026-05-08T04:41:11Z
+Stopped at: Completed 04-03-ML-ROUTING-TESTS-PLAN.md — Phase 4 complete; 44/44 tests pass (0 warnings); ML-01..04 all verified; check-routing-isolation.sh + check-no-async.sh both exit 0
 Resume file: None
