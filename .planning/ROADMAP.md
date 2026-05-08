@@ -104,7 +104,7 @@ Plans:
 **Depends on**: Phase 4
 **Requirements**: OBS-01, OBS-03, LOG-01, LOG-02, LOG-03, LOG-04
 **Success Criteria** (what must be TRUE):
-  1. After a request completes, `logs/decisions/YYYY-MM-DD.jsonl` contains exactly one line per request with: `correlation_id`, `prompt_hash`, `routing_algorithm` (heuristic|ml), `routing_reason` (ExplicitModelOverride|ExplicitTask|Heuristic|Default), `target` (Qwen35B|Qwen122B), `latency_ms`, `fallback_used` (bool, always false in this phase — flag set in Phase 10), `model_version` (string; "heuristic-v1" or e.g. "ml-v0-placeholder"), `task_type` (optional), `timestamp`.
+  1. After a request completes, `logs/decisions/YYYY-MM-DD.jsonl` (UTC date) contains exactly one line per request with: `schema_version` (int, =1), `correlation_id`, `prompt_hash` (SHA-256), `prompt_korean_char_ratio` (float 0..1), `routing_algorithm` (heuristic|ml), `routing_reason` (ExplicitModelOverride|ExplicitTask|Heuristic|Default|ML), `target` (Qwen35B|Qwen122B), `latency_ms`, `fallback_used` (bool, always false in this phase — flag set in Phase 10), `model_version` (string; "heuristic-v1" or e.g. "ml-v0-placeholder"), `task_type` (optional), `timestamp` (ISO 8601 UTC).
   2. Two concurrent identical requests both produce two valid JSON lines (no `IOException`, no interleaved bytes) — verified by a 100-concurrent-requests test that reads the file and counts valid JSON lines.
   3. The same correlation ID appears in stderr Serilog output and the JSONL file for the same request — verified by a test that captures both.
   4. JSONL writer flushes on shutdown (graceful `app.StopAsync`) — no in-flight log loss; verified by start/route/stop/read sequence.

@@ -98,7 +98,7 @@
 
 ### Decision Logging (Phase 5)
 
-- [ ] **LOG-01**: Each routing decision emits a JSONL line at `logs/decisions/YYYY-MM-DD.jsonl` with the full schema: `correlation_id`, `prompt_hash`, `routing_algorithm` (heuristic|ml), `routing_reason`, `target` (Qwen35B|Qwen122B), `latency_ms`, `fallback_used` (bool), `model_version` (string), `task_type` (optional), `timestamp`
+- [ ] **LOG-01**: Each routing decision emits a JSONL line at `logs/decisions/YYYY-MM-DD.jsonl` (UTC date) with the full schema: `schema_version` (int, currently `1`), `correlation_id`, `prompt_hash` (SHA-256 of concatenated message contents), `prompt_korean_char_ratio` (float 0..1, count of Hangul chars in `[가-힣]` / total chars), `routing_algorithm` (heuristic|ml), `routing_reason`, `target` (Qwen35B|Qwen122B), `latency_ms`, `fallback_used` (bool), `model_version` (string), `task_type` (optional), `timestamp`
 - [ ] **LOG-02**: JSONL writer is thread-safe via single-writer `Channel<DecisionLog>` background pump — `File.AppendAllText` is explicitly forbidden (CI grep); 100 concurrent requests produce 100 valid JSON lines with no `IOException` or interleaved bytes
 - [ ] **LOG-03**: Daily file rotation creates a new dated file at midnight local time; writer flushes pending entries on graceful shutdown (`app.StopAsync`); no log loss on clean exit
 - [ ] **LOG-04**: Correlation ID is generated per request (middleware), propagated through Serilog stderr output AND the JSONL file, AND included in any SSE error event body — verified by a test that captures all three sources
