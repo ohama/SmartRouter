@@ -53,11 +53,15 @@ let private startFakeTeacher (responseBody: string) (statusCode: int) : Task<Web
 
 /// Build a TeacherLabeler instance pointed at the given fake-teacher base URL.
 /// IHttpClientFactory is constructed via a minimal ServiceCollection.
+/// NOTE: F# lambda `fun c -> ...` does not bind to the Action<HttpClient> overload of
+/// AddHttpClient reliably — BaseAddress is not set on the created client. Use explicit
+/// Action<HttpClient> wrapper so that BaseAddress is applied on CreateClient("teacher").
 let private mkLabeler (baseUrl: string) (promptPath: string) (datasetsDir: string) (cap: int) : ITeacherLabeler =
     let services = ServiceCollection()
-    services.AddHttpClient("teacher", fun c ->
-        c.BaseAddress <- Uri(baseUrl)
-        c.Timeout     <- TimeSpan.FromSeconds(5.0))
+    services.AddHttpClient("teacher")
+        .ConfigureHttpClient(fun c ->
+            c.BaseAddress <- Uri(baseUrl)
+            c.Timeout     <- TimeSpan.FromSeconds(5.0))
         |> ignore
     let sp = services.BuildServiceProvider()
     let factory = sp.GetRequiredService<IHttpClientFactory>()

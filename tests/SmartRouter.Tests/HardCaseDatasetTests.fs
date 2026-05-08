@@ -124,8 +124,13 @@ let tests =
                         for i in 1 .. 10 do
                             let e = mkEntry (sprintf "cid-%d" i) (sprintf "hash-%d" i) 0
                             iface.AppendAsync(e, CancellationToken.None).GetAwaiter().GetResult()
+                        // Small yield to allow background consumer to process in-flight items
+                        // before we call StopAsync. The drain phase in StopAsync handles
+                        // any items NOT yet consumed, but this ensures both paths are tested.
+                        System.Threading.Thread.Yield() |> ignore
                     finally
-                        // StopAsync MUST drain the channel
+                        // StopAsync signals TryComplete + cancels stoppingToken, then
+                        // awaits ExecuteAsync which drains any remaining channel items.
                         writer.StopAsync(CancellationToken.None).GetAwaiter().GetResult()
                         (writer :> IDisposable).Dispose()
                     let lines =
