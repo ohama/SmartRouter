@@ -7,6 +7,7 @@
     <Compile Include="RoutingTests.fs" />
     <Compile Include="StreamingTests.fs" />
     <Compile Include="QueueTests.fs" />
+    <Compile Include="LoadTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
