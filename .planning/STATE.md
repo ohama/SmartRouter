@@ -2,20 +2,20 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-07)
+See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 4 — Health Probing + graph_indexing no-fallback rule (Phase 3 complete)
+**Current focus:** Phase 4 — ML Algorithm Seam (placeholder + dispatch + CLI override)
 
 ## Current Position
 
-Phase: 3 of 6 (122B Concurrency Gate) — COMPLETE ✓
+Phase: 3 of 11 (122B Concurrency Gate) — COMPLETE ✓
 Plan: 3 of 3 in current phase — COMPLETE ✓
-Status: Plan 03-03 complete — Load tests (TEST-06) shipped; 39 passed, 2 ignored (pending), 0 failed
-Last activity: 2026-05-08 — Completed 03-03-LOAD-TESTS-PLAN.md
-Next: Phase 4 — Health probing + graph_indexing no-fallback rule
+Status: Phase 3 verified Complete (39/39 tests + 2 opt-in). Roadmap reorganized 2026-05-08: NEW Phases 4-9 ship the ML arc (handoff doc folded forward); old Phase 4/6 deferred to Phases 10-11; old Phase 5 dissolved.
+Last activity: 2026-05-08 — Roadmap reorganization (ROADMAP/REQUIREMENTS/PROJECT updated; 26 new REQ-IDs added)
+Next: Phase 4 — ML Algorithm Seam (placeholder + config dispatch + CLI override)
 
-Progress: [████████░░] ~47% (8 of ~17 plans estimated)
+Progress: [████░░░░░░░░░░░░░░░░░░░] 8 of ~30 plans (3 done; ~6 ML phases × ~3 plans + 2 deferred phases × ~3 plans = ~24 remaining)
 
 ## Performance Metrics
 
@@ -46,8 +46,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
 - Roadmap: SSE streaming (Phase 2) and concurrency gate (Phase 3) are atomic units — must not be split
-- Roadmap: graph_indexing no-fallback rule ships in same phase as health probing (Phase 4)
+- Roadmap (2026-05-08 reorganization): NEW Phases 4-9 ship the ML arc (handoff doc folded forward); old Phase 4 (Health/Fallback/graph_indexing-no-fallback) deferred to Phase 10; old Phase 6 (launchd/README) deferred to Phase 11; old Phase 5 (Observability+Tests) dissolved — OBS-01/03 absorbed into NEW Phase 5 (Decision Logging — Loop B's input), TEST-01/02 retroactively Complete via Phases 1-3 tests. Heuristic stays forever as baseline + emergency fallback.
+- Roadmap: graph_indexing no-fallback rule ships in same phase as health probing — now Phase 10 (was Phase 4)
 - Roadmap: Phase 3 depends on Phase 1 only (not Phase 2); Phases 2 and 3 have no cross-dependency
+- ML arc design source: /Users/ohama/projs/smart-router-distillation/docs/handoff-to-smart-router.md — 3-layer separation (code: Heuristic.fs vs ML.fs no cross-imports; config: Routing.Algorithm key; CLI: --routing-algorithm override). Heuristic and ML must have same signature `RoutingConfig -> RouterRequest -> RoutingDecision`.
 - 01-01: `dotnet new slnx` unavailable in SDK 10.0.203 — SmartRouter.slnx written manually in XML (no functional difference)
 - 01-01: launchSettings.json has no applicationUrl — appsettings.json is single source of truth for Kestrel binding (OPS-04)
 - 01-02: RoutingConfig is a plain F# record in Core (no IOptions<T>); Cli constructs it from appsettings.json at composition time (ARCH-01)

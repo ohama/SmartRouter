@@ -1,6 +1,7 @@
 # Requirements: Smart Router
 
 **Defined:** 2026-05-07
+**Last restructured:** 2026-05-08 — Operator folded ML-routing arc forward (was originally PROJECT.md "Out of Scope" v2 work). Phases 4-9 now ship ML augmentation; original Phase 4 (Health/Fallback) and Phase 6 (Deploy/Docs) deferred to Phases 10-11. Old Phase 5 (Observability) dissolves: OBS-01/OBS-03 absorbed into NEW Phase 5 (Decision Logging — Loop B's input); TEST-01/TEST-02 retroactively marked Complete (covered by Phases 1-3 tests collectively).
 **Core Value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
 ## v1 Requirements
@@ -22,7 +23,7 @@
 - [x] **ROUT-03**: When neither override nor task is present, router applies heuristic fallback (prompt length, complex-keyword set, code-block detection, message count, total context size)
 - [x] **ROUT-04**: Heuristic biases toward 35B for ambiguous cases (latency-first default for Hermes path)
 - [x] **ROUT-05**: Routing rules are loaded from `appsettings.json` (threshold, keyword list, task→model table, model URLs)
-- [x] **ROUT-06**: Each routing decision attaches a `RoutingReason` (DU: ExplicitModelOverride / ExplicitTask / Heuristic / Default) for logging and `/stats`
+- [x] **ROUT-06**: Each routing decision attaches a `RoutingReason` (DU: ExplicitModelOverride / ExplicitTask / Heuristic / Default / ML) for logging and `/stats`
 - [x] **ROUT-07**: Router preserves blueCode's HF-id trap defense — POST body's `model` field carries the upstream's local-path id (preferring `data[0]` entries that start with `/`), not the HF repo id
 
 ### Concurrency + Queueing
@@ -80,13 +81,57 @@
 
 ### Testing
 
-- [ ] **TEST-01**: Expecto unit tests cover routing pipeline: model override, task table, heuristic scoring, keyword detection, priority assignment, fallback decisions
-- [ ] **TEST-02**: Integration tests run against fake upstream Kestrel servers on random ports (deterministic responses, controlled latency, controlled failures)
+- [x] **TEST-01**: Expecto unit tests cover routing pipeline: model override, task table, heuristic scoring, keyword detection, priority assignment, fallback decisions
+- [x] **TEST-02**: Integration tests run against fake upstream Kestrel servers on random ports (deterministic responses, controlled latency, controlled failures)
 - [x] **TEST-03**: Streaming tests verify chunk ordering, mid-stream cancellation, mid-stream upstream failure, `[DONE]` propagation
 - [x] **TEST-04**: Concurrency tests verify SemaphoreSlim enforcement, priority ordering, semaphore-release on cancellation
 - [ ] **TEST-05**: Failure tests cover upstream timeout, malformed JSON from upstream, unavailable model server, fallback path, `graph_indexing`-must-fail path
 - [x] **TEST-06**: Load tests measure latency under contention and validate 122B throughput cap holds under burst
 - [x] **TEST-07**: Tests use the explicit `rootTests` list pattern in the test entrypoint (matches blueCode; Expecto auto-discovery is unreliable)
+
+### ML Algorithm Seam (Phase 4)
+
+- [ ] **ML-01**: `RoutingAlgorithm` is a function-type alias `RoutingConfig -> RouterRequest -> RoutingDecision` in Core; both `Heuristic.applyHeuristic` and `ML.applyML` conform to the same shape
+- [ ] **ML-02**: `appsettings.json` `Routing.Algorithm` key (`"heuristic" | "ml"`) selects the active algorithm at startup; default is `"heuristic"` if absent
+- [ ] **ML-03**: CLI flag `--routing-algorithm=heuristic|ml` overrides the config value at startup; verified by start-twice integration test
+- [ ] **ML-04**: `Routing/Heuristic.fs` and `Routing/ML.fs` are separate modules with **zero cross-imports** — verified by CI grep that fails the build on any cross-module reference
+
+### Decision Logging (Phase 5)
+
+- [ ] **LOG-01**: Each routing decision emits a JSONL line at `logs/decisions/YYYY-MM-DD.jsonl` with the full schema: `correlation_id`, `prompt_hash`, `routing_algorithm` (heuristic|ml), `routing_reason`, `target` (Qwen35B|Qwen122B), `latency_ms`, `fallback_used` (bool), `model_version` (string), `task_type` (optional), `timestamp`
+- [ ] **LOG-02**: JSONL writer is thread-safe via single-writer `Channel<DecisionLog>` background pump — `File.AppendAllText` is explicitly forbidden (CI grep); 100 concurrent requests produce 100 valid JSON lines with no `IOException` or interleaved bytes
+- [ ] **LOG-03**: Daily file rotation creates a new dated file at midnight local time; writer flushes pending entries on graceful shutdown (`app.StopAsync`); no log loss on clean exit
+- [ ] **LOG-04**: Correlation ID is generated per request (middleware), propagated through Serilog stderr output AND the JSONL file, AND included in any SSE error event body — verified by a test that captures all three sources
+
+### Embeddings + Classifier (Phase 6)
+
+- [ ] **EMBED-01**: `IEmbedder` port in Core (no NuGet deps); `BgeSmallEmbedder` adapter in Cli using `SmartComponents.LocalEmbeddings`; produces 384-dim L2-normalized vectors (NOT the spec's 128 placeholder)
+- [ ] **EMBED-02**: Same prompt produces the same vector across runs (determinism); verified by unit test on three fixed prompts
+- [ ] **CLS-01**: `IClassifier` port in Core; `MlNetClassifier` adapter in Cli loading via `Microsoft.Extensions.ML.PredictionEnginePool`; predicts a binary label + confidence given a 384-dim vector
+- [ ] **CLS-02**: First-run bootstrap — when `models/router.zip` is missing at startup, a dummy model with random weights is auto-generated; logged warning explains it's a placeholder; `applyML` does not throw on cold start
+- [ ] **CLS-03**: `applyML` produces decisions that diverge from `applyHeuristic` on at least one test prompt (proves real ML is wired, not a passthrough); verified by an a/b unit test
+
+### Failure Detection + Teacher Labeling (Phase 7)
+
+- [ ] **FAIL-01**: `FailureDetector` reads `decisions/*.jsonl`, filters records where `fallback_used=true`, returns the hard-case set; verified by unit test on a fixture file
+- [ ] **FAIL-02**: `TeacherLabeler` calls 122B with the prompt template from `~/projs/smart-router-distillation/prompts/teacher_prompt.md`, parses the response into `(prompt, label)`, enforces 30s timeout per call + 3x retry on transient failure
+- [ ] **FAIL-03**: Daily cost cap (configurable; default 1000 calls/day) — calls beyond the cap are skipped with a logged warning; verified by a test that exercises the limit
+- [ ] **FAIL-04**: Hard-case dataset persists to `datasets/hard-cases.jsonl` append-only with a single-writer file lock; 10 concurrent runs produce a corruption-free file (line count == sum of inputs)
+
+### Retraining Loop (Phase 8)
+
+- [ ] **RETRAIN-01**: `DatasetMerger` produces a 70/30 old/new split with class-stratified balance — both classes appear in ≥30% of samples (no catastrophic forgetting); verified by unit test on synthetic input
+- [ ] **RETRAIN-02**: `RetrainingService : BackgroundService` triggers retrain when `hard-cases.jsonl` count ≥500 OR a 1-hour `PeriodicTimer` fires (whichever first); verified by two integration tests
+- [ ] **RETRAIN-03**: `Validator` rejects the new model if held-out accuracy < baseline OR `fallback_rate` on validation set > baseline; failed models are NOT written; rejection is logged with rationale
+- [ ] **RETRAIN-04**: New `models/router.zip` is written atomically (temp file + rename); `PredictionEnginePool` with `watchForChanges:true` swaps the live classifier; in-flight requests complete on the previous model — verified by a 3-request before/retrain/after test that asserts the `model_version` flip in DecisionLog
+- [ ] **RETRAIN-05**: A `Mutex` (or equivalent single-writer lock) ensures only one retrain runs at a time; concurrent triggers serialize or skip; verified by a 2-concurrent-trigger test
+- [ ] **RETRAIN-06**: Retraining failures (mid-pipeline throws) are caught with `try/with`, do NOT crash the host, do NOT block subsequent retrains, and Loop A (request handling) is unaffected; verified by a force-throw test
+
+### Canary Deployment (Phase 9)
+
+- [ ] **CANARY-01**: `Microsoft.FeatureManagement` + `PercentageFilter` splits traffic between baseline and canary models; bucket assignment is sticky per `correlation_id` (same correlation always lands in the same cohort); verified statistically over 1000 requests (binomial 95% CI)
+- [ ] **CANARY-02**: `Routing.Canary.PercentageEnabled` config (default 10%) controls canary share; `model_version` in DecisionLog distinguishes canary vs baseline cohorts; cohort comparison (avg `fallback_rate`, latency) is trivial via JSONL group-by
+- [ ] **CANARY-03**: Auto-rollback fires when canary's rolling-60s `fallback_rate` exceeds baseline by >10% (configurable threshold); admin endpoint `/canary` supports manual promote (canary → 100%) and rollback (canary → 0%); verified by integration tests for both transitions
 
 ## v2 Requirements
 
@@ -101,10 +146,12 @@ Deferred. Tracked but not in current roadmap.
 
 - **OBS2-01**: Prometheus `/metrics` exposition
 
-### Routing
+### ML / Routing
 
-- **ROUT2-01**: ML / learned routing trained on accumulated `/stats` + log data
-- **ROUT2-02**: Embedding-based semantic task classification
+- **ML2-01**: Active learning — only label uncertain (low-confidence) cases instead of all fallbacks
+- **ML2-02**: Online learning — real-time weight updates per request without full retrain
+- **ML2-03**: Multi-model routing (3+ models, cost-quality trade-off space) instead of binary 35B/122B
+- **ML2-04**: Embedding model upgrade path (bge-small → bge-large or e5-large) with vector-dim migration
 
 ### Providers
 
@@ -130,6 +177,9 @@ Deferred. Tracked but not in current roadmap.
 | Function-call rewriting | Pure pass-through router; client owns OpenAI tools/function-call shape |
 | Prompt caching | Not in router scope; upstream mlx_lm.server handles its own KV cache |
 | Embeddings endpoint | Out of scope; unrelated to chat-completions routing core value |
+| Active / online learning | Deferred to v2 (ML2-01, ML2-02); v1 ML retrains in batch via BackgroundService |
+| Multi-model routing (>2) | Deferred to v2 (ML2-03); v1 is binary 35B/122B |
+| Removing the heuristic algorithm | Heuristic stays forever as v1 baseline + emergency fallback when ML fails (model file corrupt/missing); A/B comparator |
 
 ## Traceability
 
@@ -139,8 +189,8 @@ Deferred. Tracked but not in current roadmap.
 | API-02 | Phase 1 | Complete |
 | API-03 | Phase 1 | Complete |
 | API-04 | Phase 1 | Complete |
-| API-05 | Phase 4 | Pending |
-| API-06 | Phase 6 | Pending |
+| API-05 | Phase 10 | Pending |
+| API-06 | Phase 11 | Pending |
 | API-07 | Phase 3 | Complete |
 | ROUT-01 | Phase 1 | Complete |
 | ROUT-02 | Phase 1 | Complete |
@@ -163,10 +213,10 @@ Deferred. Tracked but not in current roadmap.
 | STRM-05 | Phase 2 | Complete |
 | STRM-06 | Phase 2 | Complete |
 | STRM-07 | Phase 2 | Complete |
-| REL-01 | Phase 4 | Pending |
-| REL-02 | Phase 4 | Pending |
-| REL-03 | Phase 4 | Pending |
-| REL-04 | Phase 4 | Pending |
+| REL-01 | Phase 10 | Pending |
+| REL-02 | Phase 10 | Pending |
+| REL-03 | Phase 10 | Pending |
+| REL-04 | Phase 10 | Pending |
 | REL-05 | Phase 3 | Complete |
 | OBS-01 | Phase 5 | Pending |
 | OBS-02 | Phase 3 | Complete |
@@ -179,26 +229,52 @@ Deferred. Tracked but not in current roadmap.
 | ARCH-05 | Phase 1 | Complete |
 | ARCH-06 | Phase 1 | Complete |
 | ARCH-07 | Phase 1 | Complete |
-| OPS-01 | Phase 6 | Pending |
-| OPS-02 | Phase 6 | Pending |
-| OPS-03 | Phase 6 | Pending |
+| OPS-01 | Phase 11 | Pending |
+| OPS-02 | Phase 11 | Pending |
+| OPS-03 | Phase 11 | Pending |
 | OPS-04 | Phase 1 | Complete |
 | OPS-05 | Phase 1 | Complete |
-| TEST-01 | Phase 5 | Pending |
-| TEST-02 | Phase 5 | Pending |
+| TEST-01 | Phases 1+3 | Complete |
+| TEST-02 | Phases 2+3 | Complete |
 | TEST-03 | Phase 2 | Complete |
 | TEST-04 | Phase 3 | Complete |
-| TEST-05 | Phase 4 | Pending |
+| TEST-05 | Phase 10 | Pending |
 | TEST-06 | Phase 3 | Complete |
 | TEST-07 | Phase 1 | Complete |
+| ML-01 | Phase 4 | Pending |
+| ML-02 | Phase 4 | Pending |
+| ML-03 | Phase 4 | Pending |
+| ML-04 | Phase 4 | Pending |
+| LOG-01 | Phase 5 | Pending |
+| LOG-02 | Phase 5 | Pending |
+| LOG-03 | Phase 5 | Pending |
+| LOG-04 | Phase 5 | Pending |
+| EMBED-01 | Phase 6 | Pending |
+| EMBED-02 | Phase 6 | Pending |
+| CLS-01 | Phase 6 | Pending |
+| CLS-02 | Phase 6 | Pending |
+| CLS-03 | Phase 6 | Pending |
+| FAIL-01 | Phase 7 | Pending |
+| FAIL-02 | Phase 7 | Pending |
+| FAIL-03 | Phase 7 | Pending |
+| FAIL-04 | Phase 7 | Pending |
+| RETRAIN-01 | Phase 8 | Pending |
+| RETRAIN-02 | Phase 8 | Pending |
+| RETRAIN-03 | Phase 8 | Pending |
+| RETRAIN-04 | Phase 8 | Pending |
+| RETRAIN-05 | Phase 8 | Pending |
+| RETRAIN-06 | Phase 8 | Pending |
+| CANARY-01 | Phase 9 | Pending |
+| CANARY-02 | Phase 9 | Pending |
+| CANARY-03 | Phase 9 | Pending |
 
 **Coverage:**
-- v1 requirements: 56 total
-- Mapped to phases: 56 ✓
+- v1 requirements: 82 total (56 original + 26 ML-arc additions)
+- Mapped to phases: 82 ✓
 - Unmapped: 0
-- Complete: 42 (Phase 1 ✓ + Phase 2 ✓ + Phase 3 ✓)
-- Pending: 14
+- Complete: 44 (Phase 1 ✓ + Phase 2 ✓ + Phase 3 ✓ + TEST-01/TEST-02 retroactive)
+- Pending: 38 (26 ML arc + 12 deferred heuristic-cleanup)
 
 ---
 *Requirements defined: 2026-05-07*
-*Last updated: 2026-05-08 after Phase 3 (122B Concurrency Gate) completion — 42 requirements verified Complete*
+*Last updated: 2026-05-08 after milestone reorganization — ML arc folded forward; old Phase 4/5/6 deferred and renumbered to 10/11; old Phase 5 dissolved (OBS-01/03 → NEW Phase 5; TEST-01/02 → retroactively Complete via Phases 1-3 tests)*

@@ -118,7 +118,7 @@ When tradeoffs arise:
 - **Rate limiting** — single host, two known clients, no abuse vector. Defer until a real abuse / runaway-loop scenario appears.
 - **Auth / API keys** — loopback-only (`localhost:4000`); no external exposure, no auth surface.
 - **Prometheus `/metrics` endpoint** — `/stats` covers v1 observability needs. Add Prometheus exposition only if a scraper actually arrives.
-- **ML / learned routing** — heuristics only for v1; revisit after `/stats` + structured logs accumulate enough decision data to train against.
+- ~~**ML / learned routing** — heuristics only for v1; revisit after `/stats` + structured logs accumulate enough decision data to train against.~~ **(Folded into v1 on 2026-05-08, Phases 4-9.)** Heuristic stays as permanent baseline + emergency fallback when ML breaks. ML algorithm is an additional option selected via `Routing.Algorithm` config key. See `~/projs/smart-router-distillation/docs/handoff-to-smart-router.md` for the integration strategy and the operator's decision rationale.
 - **Concrete provider implementations beyond Qwen 35B / 122B** — Claude / OpenAI / DeepSeek / Gemini / Gemma / Llama get extension *seams* only, no live integrations.
 - **Docker / docker-compose deployment** — Mac-only via launchd; matches blueCode operational pattern. Container packaging deferred until a reason to run elsewhere appears.
 - **Windows support** — Mac-only; mirrors blueCode's Unix-path heuristic in `tryParseModelId`.
@@ -251,7 +251,9 @@ regression.
 | Mac-only / loopback-only | Matches blueCode constraint and the actual deployment target; cuts auth, TLS, and cross-platform path handling out of v1 scope. | — Pending |
 | Health/stats endpoints in v1 (was v2 in pre-Graphify draft) | Graphify spec needs `/health` for liveness, `/stats` for queue monitoring. Cheap to add at this stage; expensive to retrofit observability later. | — Pending |
 | Retry policy + backend health detection in v1 (was v2 in pre-Graphify draft) | Required by graphify spec; backend health detection is also the input to fallback logic. | — Pending |
-| Reject Channels / TPL Dataflow for v1 | Priority queue + semaphore covers v1 needs without the abstraction tax. Reach for Dataflow only if v2 fan-out pipelines justify it. | — Pending |
+| Reject Channels / TPL Dataflow for v1 | Priority queue + semaphore covers v1 needs without the abstraction tax. Reach for Dataflow only if v2 fan-out pipelines justify it. | ✓ Good |
+| **ML routing folded into v1** (was originally Out of Scope / v2). NEW Phases 4-9 ship the ML arc; old Phases 4 and 6 deferred to Phases 10-11. Old Phase 5 dissolved (OBS-01/03 → NEW Phase 5; TEST-01/02 retroactively Complete via Phases 1-3 tests). | Operator decision 2026-05-08 to fold the ML revisit forward after Phase 3 completion. The 3-layer integration strategy (code separation: `Heuristic.fs` + `ML.fs`; config selection: `Routing.Algorithm`; CLI override) keeps the heuristic baseline as the permanent fallback. Source: `~/projs/smart-router-distillation/docs/handoff-to-smart-router.md`. | — Pending |
+| **Heuristic stays forever** even after ML matures | Heuristic = baseline for A/B compare, emergency fallback when ML model file is missing/corrupt, debugging tool ("how would heuristic decide this?"). Removing it would make every ML failure user-visible. | — Pending |
 
 ---
-*Last updated: 2026-05-07 after Graphify scope expansion*
+*Last updated: 2026-05-08 after milestone reorganization — ML arc folded into v1 (Phases 4-9); old heuristic-cleanup Phase 4 + Phase 6 deferred to Phases 10-11.*

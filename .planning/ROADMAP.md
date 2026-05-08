@@ -2,12 +2,18 @@
 
 ## Overview
 
-Smart Router ships in six phases that follow the build-order constraint of the hexagonal architecture: Core domain and routing pure functions first, then the two atomic correctness clusters (SSE streaming, 122B concurrency gate), then the health/fallback/graph_indexing correctness unit, then OpenAI wire-format compliance and observability, and finally launchd deployment. Each phase delivers a coherent, independently verifiable capability; no phase can be entered before its predecessor compiles and passes tests.
+Smart Router ships in two arcs:
+
+**Arc A — Heuristic baseline (Phases 1-3, DONE):** Hexagonal F# foundation, SSE pass-through, 122B concurrency gate. The router routes by hand-written rules and the heuristic baseline becomes the permanent fallback for everything that follows.
+
+**Arc B — ML-augmented routing (Phases 4-9, NEW):** Add a learned routing algorithm as an *additional* option (single config line to select). Pass-through Loop A keeps routing fast; Loop B (`BackgroundService`) eats fallback logs and self-improves the classifier on a periodic cadence. Heuristic stays forever as the v1 baseline + emergency fallback when ML breaks. This block reorders work that was originally PROJECT.md `Out of Scope` ("ML / learned routing — revisit after observability lands") because the operator decided to fold the ML revisit forward.
+
+**Arc C — Heuristic-baseline cleanup (Phases 10-11, DEFERRED):** What was originally Phases 4 and 6 — health probing + fallback + graph_indexing-no-fallback rule, then launchd deployment + `/v1/models` + README. These were paused at the operator's request and renumbered after the ML arc lands. Old Phase 5 (Observability + Tests) dissolves: OBS-01 / OBS-03 are absorbed into NEW Phase 5 (Decision Logging — they're literally the input Loop B reads); TEST-01 / TEST-02 are already covered by Phases 1-3 tests (RoutingTests 22, StreamingTests 8, QueueTests 9).
 
 ## Phases
 
 **Phase Numbering:**
-- Integer phases (1, 2, 3): Planned milestone work
+- Integer phases (1, 2, 3, ...): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 Decimal phases appear between their surrounding integers in numeric order.
@@ -15,9 +21,14 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Foundation** ✓ — Project scaffold, Core domain types, routing pipeline, non-streaming HTTP adapter, appsettings wiring
 - [x] **Phase 2: SSE Streaming Pass-Through** ✓ — Complete atomic SSE correctness cluster (STRM-01..07); Hermes is unblocked when this ships
 - [x] **Phase 3: 122B Concurrency Gate** ✓ — Complete atomic concurrency cluster (CONC-01..06 + REL-05); Graphify concurrent requests are safe when this ships
-- [ ] **Phase 4: Health + Fallback + graph_indexing No-Fallback** — Health probing, retry policy, fallback routing, and the graph_indexing-must-fail correctness unit
-- [ ] **Phase 5: Observability + Unit/Integration Tests** — Structured per-request logging, correlation IDs, unit tests for routing pipeline, integration tests with fake upstream servers
-- [ ] **Phase 6: Deployment + Documentation** — launchd plist, /v1/models endpoint, README
+- [ ] **Phase 4: ML Algorithm Seam** — Placeholder ML algorithm + config dispatch (`Routing.Algorithm: "heuristic" | "ml"`) + CLI `--routing-algorithm` override; heuristic stays default; existing tests stay green; same-shape ML test confirms dispatch
+- [ ] **Phase 5: Routing-Decision Logging** — Per-request structured JSONL log with routing reason, latency, model_version, fallback flag, correlation ID; thread-safe writer; absorbs OBS-01 and OBS-03 from old Phase 5 — this is Loop B's input
+- [ ] **Phase 6: Real ML Routing** — `SmartComponents.LocalEmbeddings` (bge-small) + ML.NET `LbfgsLogisticRegression` + replace placeholder; first model file (committed dummy or auto-generated on first run); both algorithms produce different decisions on the same input
+- [ ] **Phase 7: Failure Detection + Teacher Labeling** — Failure detector (fallback-used + error + short-response + low-confidence signals); teacher labeler (HTTP to 122B with timeout/retry/cost cap, `prompts/teacher_prompt.md`); hard-case dataset extraction
+- [ ] **Phase 8: Retraining Loop** — Dataset merger (old 70 + new 30 with class balance); ML.NET trainer; held-out validator with rollback gate; `BackgroundService` + `PeriodicTimer`; `PredictionEnginePool` + `watchForChanges:true` for atomic hot-reload; idempotency lock
+- [ ] **Phase 9: Canary Deployment** — `Microsoft.FeatureManagement` + `PercentageFilter` for 10/90 split; `model_version` cohort tagging in logs; comparison + rollout/rollback workflow
+- [ ] **Phase 10: Health + Fallback + graph_indexing No-Fallback** — (was old Phase 4) Health probing, retry policy, fallback routing, and the graph_indexing-must-fail correctness unit
+- [ ] **Phase 11: Deployment + Documentation** — (was old Phase 6) launchd plist, `/v1/models` endpoint, README
 
 ## Phase Details
 
@@ -71,63 +82,157 @@ Plans:
 - [x] 03-02-STATS-AND-QUEUE-TESTS-PLAN.md ✓ — GET /stats endpoint (Stats.fs) reading IStatsProvider; QueueTests.fs with FakeUpstreamClient + LatencyFake (9 tests: serialization, priority preempt, K-th forced low pick at low1Idx==4, cancel-pre-dequeue, cancel-post-dequeue mid-acquire, timeout release, 35B bypass, live snapshot, in-process Kestrel /stats JSON wire assertion for all 10 snake_case keys)
 - [x] 03-03-LOAD-TESTS-PLAN.md ✓ — LoadTests.fs with ptestCaseAsync burst tests (20-concurrent serialization + mixed-priority cap-holds-under-load); opt-in only, default dotnet test unchanged at 39/39
 
-### Phase 4: Health + Fallback + graph_indexing No-Fallback
-**Goal**: The router knows whether each upstream is reachable, gracefully reroutes 122B requests to 35B when 122B is down — except for graph_indexing which must return an error rather than silently downgrade.
+### Phase 4: ML Algorithm Seam
+**Goal**: A new ML routing algorithm exists as a parallel option to the heuristic. `Routing.Algorithm` config key (`"heuristic" | "ml"`) selects which one runs at request time. CLI flag `--routing-algorithm=...` overrides config. The placeholder ML algorithm is intentionally dumb (always picks 35B) — the value of this phase is the *seam*, not the model.
 **Depends on**: Phase 3
+**Requirements**: ML-01, ML-02, ML-03, ML-04
+**Success Criteria** (what must be TRUE):
+  1. `routeRequest` accepts a routing algorithm function as a parameter; `applyHeuristic` and `applyML` both have signature `RoutingConfig -> RouterRequest -> RoutingDecision`. Existing 39 heuristic tests still pass after every callsite is updated to pass `Heuristic.applyHeuristic` explicitly.
+  2. With `appsettings.json: "Routing.Algorithm": "ml"`, sending any request hits the placeholder `applyML` (verified by a unit test that injects a probe-able placeholder); with `"heuristic"`, the heuristic path runs (verified by existing heuristic tests staying green).
+  3. CLI flag `--routing-algorithm=ml` overrides the config-set `"heuristic"` (verified by a startup-test that boots both ways and asserts the registered function).
+  4. `SmartRouter.Core/Routing/Heuristic.fs` and `SmartRouter.Core/Routing/ML.fs` are separate modules with **zero cross-imports** — verified by grep.
+  5. Default behavior is unchanged: `Routing.Algorithm` defaults to `"heuristic"` if absent from config; old behavior preserved bit-for-bit.
+**Plans**: TBD
+
+Plans:
+- [ ] 04-01: Refactor Routing.fs into Routing/{Heuristic.fs, ML.fs}; introduce `RoutingAlgorithm` function-type alias; change `routeRequest` signature to take algorithm parameter; update all 39 existing test callsites to pass Heuristic explicitly
+- [ ] 04-02: Wire `appsettings.json` `Routing.Algorithm` key + `Routing.ML` skeleton section; CompositionRoot dispatch (`"heuristic" -> Heuristic.applyHeuristic | "ml" -> ML.applyML`); CLI override via Program.fs args parsing
+- [ ] 04-03: Tests — placeholder ML probe-call test + algorithm-dispatch test + CLI-override test; verify cross-import grep returns empty
+
+### Phase 5: Routing-Decision Logging
+**Goal**: Every routing decision (whether heuristic or ML) emits a structured JSONL log line with all the fields Loop B's retrainer needs: prompt hash, request features, routing reason, target model, latency, fallback flag, model_version, correlation ID. The writer is thread-safe (Serilog `Channel`-backed, NOT `File.AppendAllText`). This phase delivers OBS-01 and OBS-03 (absorbed from old Phase 5) plus the persistence destination for ML retraining.
+**Depends on**: Phase 4
+**Requirements**: OBS-01, OBS-03, LOG-01, LOG-02, LOG-03, LOG-04
+**Success Criteria** (what must be TRUE):
+  1. After a request completes, `logs/decisions/YYYY-MM-DD.jsonl` contains exactly one line per request with: `correlation_id`, `prompt_hash`, `routing_algorithm` (heuristic|ml), `routing_reason` (ExplicitModelOverride|ExplicitTask|Heuristic|Default), `target` (Qwen35B|Qwen122B), `latency_ms`, `fallback_used` (bool, always false in this phase — flag set in Phase 10), `model_version` (string; "heuristic-v1" or e.g. "ml-v0-placeholder"), `task_type` (optional), `timestamp`.
+  2. Two concurrent identical requests both produce two valid JSON lines (no `IOException`, no interleaved bytes) — verified by a 100-concurrent-requests test that reads the file and counts valid JSON lines.
+  3. The same correlation ID appears in stderr Serilog output and the JSONL file for the same request — verified by a test that captures both.
+  4. JSONL writer flushes on shutdown (graceful `app.StopAsync`) — no in-flight log loss; verified by start/route/stop/read sequence.
+**Plans**: TBD
+
+Plans:
+- [ ] 05-01: Define `DecisionLog` record + JSONL schema; add `Channel<DecisionLog>` + single-writer background task; integrate `correlation_id` middleware (`HttpContext.Items["CorrelationId"]`)
+- [ ] 05-02: Wire decision logging at all routing exit points (`ChatCompletions.fs`, future fallback paths); add `model_version` to RoutingConfig; update Phase 4's placeholder ML to populate it
+- [ ] 05-03: LoggingTests.fs — concurrency safety (100 concurrent), correlation ID propagation, schema completeness, graceful shutdown flush
+
+### Phase 6: Real ML Routing
+**Goal**: Replace the placeholder `applyML` with a real classifier: `SmartComponents.LocalEmbeddings` (bge-small, 384-dim) + ML.NET `LbfgsLogisticRegression` loaded from a model file. Same-prompt comparison shows heuristic and ML producing different decisions on the same input. The first model file is auto-generated at startup if missing (dummy weights → ~50/50 routing) so the system bootstraps without a pre-trained model.
+**Depends on**: Phase 5
+**Requirements**: EMBED-01, EMBED-02, CLS-01, CLS-02
+**Success Criteria** (what must be TRUE):
+  1. `IEmbedder` port in Core; `BgeSmallEmbedder` adapter in Cli using `SmartComponents.LocalEmbeddings`; produces 384-dim L2-normalized vectors; verified by unit test on three known prompts.
+  2. `IClassifier` port in Core; `MlNetClassifier` adapter in Cli loading `models/router.zip` via `PredictionEnginePool`; verified by unit test that loads a hand-built dummy model and predicts.
+  3. `applyML` is the real implementation: embed → classify → threshold → `RoutingDecision { Target; Priority; Reason = ML }`. Heuristic decision and ML decision diverge on at least one test prompt (verified by an a/b assertion).
+  4. First-run bootstrap: if `models/router.zip` is missing, a startup task creates a dummy model with random weights so `applyML` doesn't throw; logged warning explains the model is dummy.
+  5. `model_version` in DecisionLog reflects the loaded model's filename hash (so Loop B's retraining is cohorted correctly).
+**Plans**: TBD
+
+Plans:
+- [ ] 06-01: Add `SmartComponents.LocalEmbeddings` + `Microsoft.ML` + `Microsoft.Extensions.ML` NuGet pins; verify versions live; design `IEmbedder` and `IClassifier` ports
+- [ ] 06-02: Implement `BgeSmallEmbedder` and `MlNetClassifier` adapters; first-run dummy model generator; replace placeholder `applyML`
+- [ ] 06-03: Tests — embedding determinism, classifier load+predict, a/b decision divergence, dummy bootstrap, model_version tagging in DecisionLog
+
+### Phase 7: Failure Detection + Teacher Labeling
+**Goal**: Build the offline data pipeline that produces labeled training samples from production logs. Failure detector reads JSONL logs and emits hard cases (currently: `fallback_used=true` only — Phase 10 expands signals). Teacher labeler calls 122B (or Claude) per hard case and produces `(prompt, label)` pairs with timeout, retry, and a daily cost cap. Hard-case dataset is appended to `datasets/hard-cases.jsonl`. This phase produces no behavior change at request time — it's prep for Phase 8's retraining loop.
+**Depends on**: Phase 6
+**Requirements**: FAIL-01, FAIL-02, FAIL-03, FAIL-04
+**Success Criteria** (what must be TRUE):
+  1. Given a `decisions/*.jsonl` file with mixed records, `extractHardCases` returns only `fallback_used=true` records; verified by unit test on a fixture file.
+  2. Teacher labeler sends a single `prompt` to 122B with the prompt template from `~/projs/smart-router-distillation/prompts/teacher_prompt.md` and parses the response into a label; verified by integration test against a fake upstream Kestrel that returns canned responses.
+  3. Teacher labeler enforces 30s timeout per request, 3x retry on transient failure, daily cost cap (configurable; default 1000 calls/day) — verified by tests that exercise each limit.
+  4. `datasets/hard-cases.jsonl` is append-only; concurrent runs don't corrupt it (single-writer file lock); verified by 10-concurrent-runs test.
+**Plans**: TBD
+
+Plans:
+- [ ] 07-01: Implement `FailureDetector` (read JSONL, filter hard cases) and `TeacherLabeler` (HTTP, timeout, retry, cost cap)
+- [ ] 07-02: Implement `HardCaseDatasetWriter` (append-only JSONL, file lock); embed `prompts/teacher_prompt.md` content as a string constant in `SmartRouter.Cli/Resources/`
+- [ ] 07-03: TeacherTests.fs — fixture-based hard-case extraction, fake-Kestrel teacher labeling integration test, timeout/retry/cost-cap enforcement, concurrent-write safety
+
+### Phase 8: Retraining Loop
+**Goal**: Loop B is real. A `BackgroundService` periodically (every hour, or when `hard-cases.jsonl` exceeds 500 entries) reads hard-case dataset + old training set, merges 70/30 with class balance, retrains the ML.NET LR classifier, validates against a held-out set, and writes the new model to `models/router.zip` only if validation passes. `PredictionEnginePool` with `watchForChanges:true` swaps the live classifier atomically; in-flight requests complete on the old model. A `Mutex` ensures only one retrain runs at a time. Failures in Loop B never affect Loop A — `try/with` isolation is mandatory.
+**Depends on**: Phase 7
+**Requirements**: RETRAIN-01, RETRAIN-02, RETRAIN-03, RETRAIN-04, RETRAIN-05, RETRAIN-06
+**Success Criteria** (what must be TRUE):
+  1. Dataset merger produces a balanced training set: 70% old, 30% new, with each class appearing in ≥30% of samples (no catastrophic forgetting); verified by a unit test on synthetic input.
+  2. Retraining is triggered by `hard-cases.jsonl` count ≥ 500 OR by a 1-hour timer (whichever comes first); verified by two integration tests.
+  3. Validation gate: new model must hit accuracy ≥ baseline AND `fallback_rate` on validation set ≤ baseline. If either fails, the new `router.zip` is not written; the previous model stays live; the rejection is logged.
+  4. After a successful retrain, the next request transparently uses the new model — `model_version` in DecisionLog changes; verified by a 3-request test (before / retrain / after).
+  5. Concurrent retrain triggers are serialized by `Mutex`; the second trigger waits or skips; verified by a 2-concurrent-trigger test.
+  6. A retrain that throws mid-way doesn't crash the host process or block subsequent retrains; verified by a force-throw test that confirms Loop A keeps responding and the next tick retries.
+**Plans**: TBD
+
+Plans:
+- [ ] 08-01: Implement `DatasetMerger` (70/30 balance, class-stratified sampling); `Retrainer` (ML.NET `LbfgsLogisticRegression.Fit`); `Validator` (held-out accuracy + fallback rate vs baseline); `ModelRegistry` (write router.zip atomically via temp file + rename)
+- [ ] 08-02: Implement `RetrainingService : BackgroundService` (`PeriodicTimer` + count-based trigger + Mutex idempotency + try/with isolation); wire `PredictionEnginePool.AddPredictionEnginePool<...>` with `watchForChanges:true`
+- [ ] 08-03: RetrainingTests.fs — merger balance, validation-gate rejection on bad model, concurrent-trigger serialization, mid-retrain throw isolation, end-to-end retrain → hot-reload → DecisionLog model_version flip
+
+### Phase 9: Canary Deployment
+**Goal**: When a new model lands, route only a percentage of traffic (default 10%) to it for a configurable window before promoting to 100%. `Microsoft.FeatureManagement` + `PercentageFilter` does the split based on `correlation_id` hash. Logs always tag `model_version` so cohort comparison is straightforward (canary vs baseline fallback rate, latency, etc.). Manual or automatic rollback: if canary's `fallback_rate` exceeds baseline by >10%, the canary model is unloaded and traffic returns to 100% baseline.
+**Depends on**: Phase 8
+**Requirements**: CANARY-01, CANARY-02, CANARY-03
+**Success Criteria** (what must be TRUE):
+  1. With canary set to 10%, ~10% of requests go to the new model and ~90% to the previous; verified statistically over 1000 fake-upstream requests (binomial 95% CI test).
+  2. `DecisionLog` records `model_version` distinguishing canary vs baseline; cohort comparison is trivial (group by `model_version`).
+  3. A `/canary` admin endpoint (or config setting) promotes the canary to 100% OR rolls back; verified by integration test that exercises both transitions.
+  4. Auto-rollback: if canary's rolling 60s `fallback_rate` exceeds baseline's by >10%, canary is unloaded automatically; logged. Verified by an integration test that injects fake "bad" responses for the canary and confirms rollback fires.
+**Plans**: TBD
+
+Plans:
+- [ ] 09-01: Wire `Microsoft.FeatureManagement` + `PercentageFilter`; tag `correlation_id` for sticky bucketing; expose `Routing.Canary.PercentageEnabled` config
+- [ ] 09-02: Implement `/canary` admin endpoint (promote / rollback); auto-rollback watcher (rolling-window fallback-rate compare)
+- [ ] 09-03: CanaryTests.fs — split distribution test (1000-request statistical), promote/rollback transitions, auto-rollback trigger
+
+### Phase 10: Health + Fallback + graph_indexing No-Fallback
+**(Was Phase 4 in the original roadmap; deferred at operator request after Phase 3 completion to ship the ML arc first.)**
+
+**Goal**: The router knows whether each upstream is reachable, gracefully reroutes 122B requests to 35B when 122B is down — except for graph_indexing which must return an error rather than silently downgrade.
+**Depends on**: Phase 9 (or earlier — could land between Phases 4-9 if priority shifts; currently slotted last in the heuristic-cleanup arc)
 **Requirements**: REL-01, REL-02, REL-03, REL-04, API-05, TEST-05
 **Success Criteria** (what must be TRUE):
   1. `GET /health` returns per-upstream reachability status that reflects whether each Qwen server is actually responding.
-  2. When 122B is stopped, a `reasoning` task request is transparently served by 35B (logged as fallback); the response reaches the caller without error.
+  2. When 122B is stopped, a `reasoning` task request is transparently served by 35B (logged as fallback; `fallback_used=true` in DecisionLog); the response reaches the caller without error.
   3. When 122B is stopped, a `graph_indexing` request returns an error response (not a 35B response) — the response body contains a clear error message, not model output.
   4. A request that fails on first attempt due to a transient upstream error is retried with backoff and succeeds on retry — verified by failure tests with a fake upstream that fails once then succeeds.
   5. The failure tests (timeout, malformed JSON, unavailable model, fallback path, graph_indexing-must-fail) all pass.
 **Plans**: TBD
 
 Plans:
-- [ ] 04-01: Implement HealthAdapter.fs (background poll of /v1/models per upstream, reachability tracking); wire /health endpoint
-- [ ] 04-02: Add fallback policy to QueueDispatcher (check IHealthProbe before enqueue; graph_indexing → GraphIndexingMustFail error; other 122B → reroute to 35B with IsFallback=true); wire retry policy via AddResilienceHandler in QwenUpstreamClient
-- [ ] 04-03: Write failure tests (graph_indexing-must-fail, 122B-unavailable fallback, retry-on-transient, health probe timeout)
+- [ ] 10-01: Implement HealthAdapter.fs (background poll of /v1/models per upstream, reachability tracking); wire /health endpoint
+- [ ] 10-02: Add fallback policy to QueueDispatcher (check IHealthProbe before enqueue; graph_indexing → GraphIndexingMustFail error; other 122B → reroute to 35B with IsFallback=true); wire retry policy via AddResilienceHandler in QwenUpstreamClient
+- [ ] 10-03: Write failure tests (graph_indexing-must-fail, 122B-unavailable fallback, retry-on-transient, health probe timeout)
 
-### Phase 5: Observability + Unit/Integration Tests
-**Goal**: Every request produces a structured log line with routing reason and latency; each request carries a correlation ID through logs and error events; the routing pipeline and integration path are fully tested.
-**Depends on**: Phase 4
-**Requirements**: OBS-01, OBS-03, TEST-01, TEST-02
-**Success Criteria** (what must be TRUE):
-  1. After a request completes, stderr contains a structured JSON log line with: selected model, routing reason (ExplicitModelOverride / ExplicitTask / Heuristic / Default), latency, token count, backend status, and queue wait time.
-  2. The correlation ID in the request log line matches the ID in any SSE error events emitted for that same request.
-  3. Expecto unit tests cover all routing pipeline branches: model override short-circuits, all seven task-table entries, heuristic keyword hits, heuristic prompt-length threshold, priority assignment for each task type, fallback decisions.
-  4. Integration tests with fake upstream Kestrel servers on random ports pass: full routing path for non-streaming and streaming, upstream failure scenarios, concurrent request ordering.
-**Plans**: TBD
+### Phase 11: Deployment + Documentation
+**(Was Phase 6 in the original roadmap; deferred along with Phase 4 → 10.)**
 
-Plans:
-- [ ] 05-01: Wire OBS-01 per-request log line (Serilog structured event with all required fields) and OBS-03 correlation ID generation/propagation; verify stderr/stdout separation
-- [ ] 05-02: Write RouterTests.fs unit coverage (all routing pipeline branches, priority assignment, fallback decisions); write IntegrationTests.fs with fake upstream servers
-
-### Phase 6: Deployment + Documentation
 **Goal**: The router auto-starts under launchd supervision, the /v1/models endpoint proxies both upstream model lists, and the README gives the operator everything needed to tune, debug, and connect both clients.
-**Depends on**: Phase 5
+**Depends on**: Phase 10
 **Requirements**: API-06, OPS-01, OPS-02, OPS-03
 **Success Criteria** (what must be TRUE):
   1. `launchctl load -w ~/Library/LaunchAgents/com.ohama.smart-router.plist` starts the router and it is reachable at `http://127.0.0.1:4000/health` without running `dotnet run`.
   2. After a simulated crash (kill -9 on the router process), launchd restarts it automatically within 5 seconds.
   3. `GET /v1/models` returns a deduplicated list that includes model entries from both upstream servers.
-  4. The README explains the routing decision pipeline, how to adjust the heuristic threshold and keyword list, how to connect Hermes, and how to connect Graphify — a new operator can follow the steps without asking for clarification.
+  4. The README explains the routing decision pipeline (heuristic + ML), how to switch algorithms, how to tune the heuristic threshold and keyword list, how to interpret DecisionLog, how to connect Hermes, how to connect Graphify, the canary workflow, and the launchd restart procedure — a new operator can follow the steps without asking for clarification.
 **Plans**: TBD
 
 Plans:
-- [ ] 06-01: Implement /v1/models endpoint (proxy both upstreams, deduplicate by id); configure dotnet publish (-r osx-arm64 --self-contained); write com.ohama.smart-router.plist with absolute dotnet path
-- [ ] 06-02: Write README (architecture overview, routing rules, threshold tuning, debugging, Hermes integration steps, Graphify integration steps, launchd restart procedure)
+- [ ] 11-01: Implement /v1/models endpoint (proxy both upstreams, deduplicate by id); configure dotnet publish (-r osx-arm64 --self-contained); write com.ohama.smart-router.plist with absolute dotnet path
+- [ ] 11-02: Write README (architecture overview, routing rules incl. heuristic + ML + canary, threshold tuning, debugging, Hermes integration, Graphify integration, launchd restart procedure, retraining loop operations)
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
+Phases execute in numeric order: 1 → 2 → 3 → **(ML arc)** 4 → 5 → 6 → 7 → 8 → 9 → **(deferred heuristic-cleanup arc)** 10 → 11
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | ✓ Complete | 2026-05-07 |
 | 2. SSE Streaming Pass-Through | 2/2 | ✓ Complete | 2026-05-08 |
 | 3. 122B Concurrency Gate | 3/3 | ✓ Complete | 2026-05-08 |
-| 4. Health + Fallback + graph_indexing No-Fallback | 0/3 | Not started | - |
-| 5. Observability + Unit/Integration Tests | 0/2 | Not started | - |
-| 6. Deployment + Documentation | 0/2 | Not started | - |
+| 4. ML Algorithm Seam | 0/3 | Not started | - |
+| 5. Routing-Decision Logging | 0/3 | Not started | - |
+| 6. Real ML Routing | 0/3 | Not started | - |
+| 7. Failure Detection + Teacher Labeling | 0/3 | Not started | - |
+| 8. Retraining Loop | 0/3 | Not started | - |
+| 9. Canary Deployment | 0/3 | Not started | - |
+| 10. Health + Fallback + graph_indexing No-Fallback | 0/3 | Not started (was Phase 4) | - |
+| 11. Deployment + Documentation | 0/2 | Not started (was Phase 6) | - |
