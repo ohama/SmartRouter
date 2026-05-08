@@ -187,6 +187,8 @@ type IModelVersionProvider =
 
 **DI:** `CanaryService` is triple-registered — `AddSingleton<CanaryService>` + `AddSingleton<ICanaryService>` (alias) + `AddHostedService<CanaryService>(sp -> sp.GetRequiredService<CanaryService>())`. The third registration is what gives the .NET host control of `StartAsync` / `StopAsync` (so the watcher is armed at boot and disposed on shutdown).
 
+**Verification path:** `tests/SmartRouter.Tests/CanaryTests.fs::canary04_fileSystemWatcher` (Plan 09-03 Task 2) boots the router with `CanaryModelExists = false`, writes a stand-in `router-canary.zip` AFTER `StartAsync`, and asserts `GET /canary` reports `canary_model_version` ending in `-canary` within ~2s; then deletes the file and asserts the field clears within ~2s. This is the bit-level proof that the watcher arms post-startup and the Created/Deleted handlers route through `versionProvider.UpdateCanary`.
+
 ---
 
 ## Lock 10 — DI registration patterns for new singletons
