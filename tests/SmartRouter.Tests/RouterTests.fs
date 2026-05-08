@@ -24,6 +24,7 @@ let rootTests : Test list =
         SmartRouter.Tests.FailureDetectorTests.tests   // Phase 7
         SmartRouter.Tests.TeacherLabelerTests.tests    // Phase 7
         SmartRouter.Tests.HardCaseDatasetTests.tests   // Phase 7
+        SmartRouter.Tests.RetrainingTests.tests        // Phase 8
     ]
 
 [<EntryPoint>]
