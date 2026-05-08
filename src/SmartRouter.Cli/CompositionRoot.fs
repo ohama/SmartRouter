@@ -25,6 +25,17 @@ type TaskTableEntry =
     { Model    : string   // "35b" | "122b" | any model alias
       Priority : string } // "high" | "low"
 
+/// ML-specific configuration subsection (Routing.ML in appsettings.json).
+/// Cli-only binding type — Core never sees this record.
+[<CLIMutable>]
+type MlOptions =
+    { ModelPath          : string
+      EmbeddingModelPath : string
+      TokenizerPath      : string
+      Threshold          : float32
+      MaxTokens          : int
+      UseCoreMLEP        : bool }
+
 /// Full routing configuration as it appears in appsettings.json "Routing" section.
 /// Cli-only: Core uses the pure RoutingConfig record from Domain.fs.
 [<CLIMutable>]
@@ -32,7 +43,7 @@ type RoutingOptions =
     { Algorithm           : string   // "heuristic" (default) | "ml"; null when key absent
       ComplexityThreshold : int
       TimeoutSeconds      : int
-      MlThreshold         : float32  // Phase 6: ML decision threshold; defaults to 0.5 when absent
+      ML                  : MlOptions  // Phase 6: Routing.ML subsection; null when section absent
       Keywords            : string[]
       TaskTable           : Dictionary<string, TaskTableEntry>
       ModelAliases        : Dictionary<string, string> }
@@ -68,10 +79,17 @@ let buildRoutingConfig (opts: RoutingOptions) : RoutingConfig =
             taskName.ToLowerInvariant(), (modelId, priority))
         |> Map.ofSeq
 
+    let mlThreshold =
+        // Defensive default: heuristic-only deployments can omit Routing.ML entirely;
+        // CLIMutable float32 defaults to 0.0f when JSON key absent.
+        if obj.ReferenceEquals(opts.ML, null) then 0.5f
+        else if opts.ML.Threshold = 0.0f then 0.5f
+        else opts.ML.Threshold
+
     { ComplexityThreshold = opts.ComplexityThreshold
       Keywords            = List.ofArray opts.Keywords
       TaskTable           = taskMap
-      MlThreshold         = if opts.MlThreshold = 0.0f then 0.5f else opts.MlThreshold }
+      MlThreshold         = mlThreshold }
 
 // ── validateConfig ───────────────────────────────────────────────────────────
 
