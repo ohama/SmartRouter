@@ -661,7 +661,58 @@ testCase "ML.makeApplyML returns Qwen122B when score >= threshold, Qwen35B other
     Expect.equal dHigh.Reason ML       "Reason = ML"
 ```
 
-c) Tests 3, 4, 5 — keep as-is. Test 3 (`routeRequest dispatches the algorithm parameter`) needs `applyML`; replace with the same fake-classifier-built closure pattern shown above. Tests 4+5 already use DI through CompositionRoot → with Routing:Algorithm=ml override, the real makeApplyML wiring runs. They will require either:
+c) Test 3 (`routeRequest dispatches the algorithm parameter`) currently references `ML.applyML` directly — that symbol no longer exists post-Phase 6 (the legacy placeholder is removed in Task 3). Replace its body with the concrete fake-port closure pattern below.
+
+OLD body (recognition target for the executor — the existing test that must be replaced):
+```fsharp
+testCase "routeRequest dispatches the algorithm parameter" <| fun () ->
+    let req = mkReq None None "hello" 1
+    let dh = routeRequest defaultConfig applyHeuristic req
+    let dm = routeRequest defaultConfig ML.applyML req
+    Expect.equal dm.Reason ML "ML algorithm sets Reason = ML"
+    // ... existing assertions referencing ML.applyML directly ...
+```
+
+NEW body — uses fake `IEmbedder` + `IClassifier` ports + `makeApplyML` closure to verify routeRequest honors the algorithm parameter (NOT the placeholder behavior):
+```fsharp
+testCaseAsync "routeRequest dispatches the algorithm parameter" <| async {
+    // Fake ports — embed returns deterministic vector; classify returns
+    // Score=0.9 (above threshold) so the ML path lands on Qwen122B with Reason=ML.
+    let fakeEmbedder =
+        { new SmartRouter.Core.MLPorts.IEmbedder with
+            member _.EmbedAsync(_prompt, _ct) =
+                System.Threading.Tasks.Task.FromResult(Array.create 1024 0.5f) }
+    let fakeClassifier =
+        { new SmartRouter.Core.MLPorts.IClassifier with
+            member _.PredictAsync(_emb, _ct) =
+                System.Threading.Tasks.Task.FromResult(
+                    { Score = 0.9f; PredictedLabel = true }
+                    : SmartRouter.Core.MLPorts.ClassifierPrediction) }
+    let cfg = { defaultConfig with MlThreshold = 0.5f }
+    let mlAlgo = SmartRouter.Core.ML.makeApplyML fakeEmbedder fakeClassifier
+    let req = mkReq None None "a plain prompt" 1
+
+    // ML path with high score → routes 122B (Reason = ML)
+    let mlResult = routeRequest cfg mlAlgo req
+    match mlResult with
+    | Ok d ->
+        Expect.equal d.Target Qwen122B "ml path: Score 0.9 ≥ 0.5 → 122B"
+        Expect.equal d.Reason ML        "ml path: Reason = ML"
+        Expect.equal d.Priority Low     "ml path: Priority = Low"
+        Expect.equal d.IsFallback false "ml path: IsFallback = false"
+    | Error e -> failtestf "expected Ok from ml path, got Error %A" e
+
+    // Heuristic path on same prompt: Reason should differ from ML — proves
+    // routeRequest is honoring the algorithm parameter (not hard-coded to ML).
+    let heuristicResult = routeRequest cfg applyHeuristic req
+    match heuristicResult with
+    | Ok { Reason = Heuristic _ } | Ok { Reason = Default } -> ()
+    | Ok d -> failtestf "expected Heuristic or Default reason on heuristic path, got %A" d.Reason
+    | Error e -> failtestf "expected Ok from heuristic path, got Error %A" e
+}
+```
+
+Tests 4, 5 — keep as-is structurally. Tests 4+5 already use DI through CompositionRoot → with Routing:Algorithm=ml override, the real makeApplyML wiring runs. They will require either:
    - `models/embed/bge-m3-int8.onnx` + `models/embed/sentencepiece.bpe.model` to be present locally (CI-only setup), OR
    - Skip (with `ptestCase`) if the embedding files are missing — preferred, since it lets every developer run dotnet test without first running scripts/download-models.sh.
 

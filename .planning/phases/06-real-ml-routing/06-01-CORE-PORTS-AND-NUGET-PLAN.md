@@ -8,6 +8,7 @@ files_modified:
   - src/SmartRouter.Core/MLPorts.fs
   - src/SmartRouter.Core/Domain.fs
   - src/SmartRouter.Core/ML.fs
+  - src/SmartRouter.Core/Routing.fs
   - src/SmartRouter.Core/SmartRouter.Core.fsproj
   - src/SmartRouter.Cli/SmartRouter.Cli.fsproj
   - .gitignore
@@ -37,6 +38,9 @@ must_haves:
     - path: "src/SmartRouter.Core/Domain.fs"
       provides: "RoutingConfig with MlThreshold field"
       contains: "MlThreshold"
+    - path: "src/SmartRouter.Core/Routing.fs"
+      provides: "defaultRoutingConfig initializes MlThreshold = 0.5f"
+      contains: "MlThreshold = 0.5f"
     - path: "src/SmartRouter.Cli/SmartRouter.Cli.fsproj"
       provides: "4 pinned ML NuGet PackageReferences"
       contains: "Microsoft.ML.OnnxRuntime"
@@ -95,6 +99,7 @@ Output: 4 modified F# files (MLPorts.fs new, Domain.fs +1 field, ML.fs +makeAppl
     src/SmartRouter.Core/MLPorts.fs
     src/SmartRouter.Core/Domain.fs
     src/SmartRouter.Core/ML.fs
+    src/SmartRouter.Core/Routing.fs
     src/SmartRouter.Core/SmartRouter.Core.fsproj
     tests/SmartRouter.Tests/RoutingTests.fs
   </files>
@@ -153,7 +158,7 @@ type RoutingConfig =
       MlThreshold         : float32 }
 ```
 
-Update `defaultRoutingConfig` in Routing.fs to include `MlThreshold = 0.5f`:
+Edit `src/SmartRouter.Core/Routing.fs` — update `defaultRoutingConfig` to include `MlThreshold = 0.5f` (REQUIRED: adding the field to the RoutingConfig record breaks the build at this construction site until the new field is initialized):
 ```fsharp
 let defaultRoutingConfig : RoutingConfig =
     { ComplexityThreshold = 3
@@ -252,6 +257,7 @@ let applyML (config: RoutingConfig) (req: RouterRequest) : RoutingDecision =
 - `cd /Users/ohama/projs/smart-router && bash scripts/check-routing-isolation.sh` exits 0 (Heuristic.fs and ML.fs zero cross-imports).
 - `cd /Users/ohama/projs/smart-router && bash scripts/check-no-async.sh` exits 0 (Core uses task{}, not async{}).
 - `grep -E "Microsoft\\.ML|OnnxRuntime|Tokenizers" src/SmartRouter.Core/SmartRouter.Core.fsproj` returns no matches (ARCH-01 preserved).
+- `grep -E 'MlThreshold\s*=\s*0\.5f' src/SmartRouter.Core/Routing.fs` returns ≥1 match (defaultRoutingConfig initializes the new field).
   </verify>
   <done>
 MLPorts.fs exists with IEmbedder + IClassifier + ClassifierPrediction. Domain.fs RoutingConfig has MlThreshold. ML.fs exports both makeApplyML (new closure) and applyML (legacy placeholder retained). Core compiles. Full test suite (49) green. Core stays NuGet-clean.
