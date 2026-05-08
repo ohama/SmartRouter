@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 5 — Decision Logging (Loop B's input)
+**Current focus:** Phase 6 — Deploy / launchd / README (Phase 5 complete)
 
 ## Current Position
 
-Phase: 5 of 11 (Routing Decision Logging) — In progress
-Plan: 2 of 3 in current phase — COMPLETE ✓
-Status: Phase 5 plan 2 complete. RoutingAlgorithmRegistration record + 8 decisionLogger.Log call sites at every ChatCompletions exit point + SSE error correlation_id wired. 44/44 tests pass (0 warnings). Ready for 05-03 integration tests + StreamingTests temp-dir hygiene.
-Last activity: 2026-05-08 — Completed 05-02-ENDPOINT-WIRING-PLAN.md
+Phase: 5 of 11 (Routing Decision Logging) — COMPLETE ✓
+Plan: 3 of 3 in current phase — COMPLETE ✓
+Status: Phase 5 complete. All 3 plans shipped: DecisionLogWriter BackgroundService + CorrelationMiddleware + 8 log call sites + SSE error correlation_id + 5 integration tests. 49/49 tests pass (0 warnings). Ready for Phase 6.
+Last activity: 2026-05-08 — Completed 05-03-LOGGING-TESTS-PLAN.md
 
-Progress: [█████░░░░░░░░░░░░░░░░░░] 13 of ~30 plans (phase 5 plan 2 done)
+Progress: [██████░░░░░░░░░░░░░░░░░] 14 of ~30 plans (phase 5 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 13 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 2 decision-logging)
+- Total plans completed: 14 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging)
 - Average duration: ~7 min
-- Total execution time: ~50 min
+- Total execution time: ~55 min
 
 **By Phase:**
 
@@ -31,11 +31,11 @@ Progress: [█████░░░░░░░░░░░░░░░░░░
 | 02-sse-streaming-pass-through | 2/2 | ~24 min | 12 min |
 | 03-122b-concurrency-gate | 3/3 | ~53 min | 18 min |
 | 04-ml-algorithm-seam | 3/3 | ~21 min | 7 min |
-| 05-routing-decision-logging | 2/3 | ~14 min | 7 min |
+| 05-routing-decision-logging | 3/3 | ~19 min | 6 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-02 (~15 min), 04-03 (~3 min), 05-01 (~8 min), 05-02 (~6 min)
-- Trend: Cli/integration plans take longer; Core + test-only plans very fast (~3 min)
+- Last 5 plans: 04-03 (~3 min), 05-01 (~8 min), 05-02 (~6 min), 05-03 (~5 min)
+- Trend: Cli/integration plans take longer; Core + test-only plans very fast (~3-5 min)
 
 *Updated after each plan completion*
 
@@ -92,6 +92,9 @@ Recent decisions affecting current work:
 - 05-02: streamError mutable flag in streaming branch tracks whether the Error arm fired during the enumerator loop so the normal-exit disposal path can append ;stream_error to the reason without a second try/with
 - 05-02: escapeJsonString private helper in ChatCompletions.fs prevents JSON injection when upstream error messages contain quotes/newlines in SSE error event bodies
 - 05-02: Streaming path logs AFTER enumerator.DisposeAsync() in all 3 try/with arms so latency_ms reflects time-to-last-byte (LOG-01)
+- 05-03: CapturingSink ILogEventSink installed as Log.Logger BEFORE configureServices + testBuilder.Host.UseSerilog() — Serilog Console sink captures Console.Error reference at construction time, making post-hoc Console.SetError redirect ineffective; the only correct approach is a custom ILogEventSink installed before the host pipeline builds
+- 05-03: startFakeStreamingErrorUpstream returns HTTP 502 (not malformed SSE payload) — QwenUpstreamClient.StreamAsync yields Ok line for any non-blank SSE line without JSON-parsing the payload; Error arm is only triggered by non-2xx HTTP status
+- 05-03: DecisionLog:Directory override in AddInMemoryCollection required in all test modules that call configureServices to prevent JSONL pollution under bin/Debug/net10.0/logs/decisions/
 
 ### Pending Todos
 
@@ -105,6 +108,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-08T06:14:07Z
-Stopped at: Completed 05-02-ENDPOINT-WIRING-PLAN.md — Phase 5 plan 2 complete; RoutingAlgorithmRegistration + 8 decisionLogger.Log call sites + SSE error correlation_id; 44/44 tests pass (0 warnings); check scripts pass; smoke test JSONL 12 fields confirmed
+Last session: 2026-05-08T06:24:32Z
+Stopped at: Completed 05-03-LOGGING-TESTS-PLAN.md — Phase 5 complete (all 3 plans); 5 integration tests ship; 49/49 tests pass (0 warnings); Phase 5 SC all proven
 Resume file: None
