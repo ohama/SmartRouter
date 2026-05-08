@@ -55,21 +55,32 @@ let private mkHardCaseEntry (salt: int) (label: int) : HardCaseEntry =
 
 /// Fake IEmbedder that returns synthetic features keyed off the prompt text.
 /// Avoids loading bge-m3 ONNX in tests (saves ~580MB + 5s warmup per test run).
+/// Uses Task.Yield() so callers genuinely suspend at the first await point —
+/// required for test4_concurrentTriggers to observe the SemaphoreSlim skip semantics
+/// (both RunNowAsync calls are in-flight simultaneously; t1 holds semaphore while
+/// awaiting embeddings; t2 finds semaphore taken and logs "skipping trigger").
 type private FakeEmbedder() =
     interface IEmbedder with
         member _.EmbedAsync(text: string, _ct: CancellationToken) : Task<float32[]> =
-            // Parse "synthetic prompt N" -> N as salt; default to text hash if unparseable.
-            let salt =
-                let parts = text.Split(' ')
-                if parts.Length >= 3 then
-                    match Int32.TryParse(parts.[2]) with
-                    | true, n -> n
-                    | _ -> text.GetHashCode()
-                else
-                    text.GetHashCode()
-            // Choose label by salt parity (matches mkHardCaseEntry where Label=salt%2)
-            let label = salt % 2 = 1
-            Task.FromResult(synthFeatures salt label)
+            task {
+                // Yield so the task scheduler can interleave other tasks.
+                // Without this, Task.FromResult-based returns allow the entire runRetrain
+                // pipeline to execute synchronously before the second RunNowAsync checks
+                // the semaphore — causing both to appear as "1 start, 0 skips".
+                do! Task.Yield()
+                // Parse "synthetic prompt N" -> N as salt; default to text hash if unparseable.
+                let salt =
+                    let parts = text.Split(' ')
+                    if parts.Length >= 3 then
+                        match Int32.TryParse(parts.[2]) with
+                        | true, n -> n
+                        | _ -> text.GetHashCode()
+                    else
+                        text.GetHashCode()
+                // Choose label by salt parity (matches mkHardCaseEntry where Label=salt%2)
+                let label = salt % 2 = 1
+                return synthFeatures salt label
+            }
 
 /// Default RetrainingOptions for tests — small intervals and counts.
 let private mkOptions (dir: string) : RetrainingOptions =
