@@ -13,10 +13,11 @@ open SmartRouter.Cli.Adapters.QueueDispatcher
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 let private mkDecision (target: ModelId) (priority: Priority) : RoutingDecision =
-    { Target     = target
-      Priority   = priority
-      Reason     = Default
-      IsFallback = false }
+    { Target       = target
+      Priority     = priority
+      Reason       = Default
+      IsFallback   = false
+      ModelVersion = "" }
 
 let private emptyRequest : RouterRequest =
     { Messages      = [{ Role = User; Content = "burst" }]
@@ -26,6 +27,7 @@ let private emptyRequest : RouterRequest =
       Temperature    = None
       TopP           = None
       MaxTokens      = None
+      CorrelationId  = ""
       UnknownFields  = Map.empty }
 
 let private defaultOpts =

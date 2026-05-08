@@ -16,13 +16,14 @@ let private mkReq (task: string option) (model: string option) (content: string)
         [ for _ in 1 .. msgs ->
             { Role = User; Content = content } ]
     { Messages      = messages
-      ModelOverride = model
-      Task          = task
-      Stream        = false
-      Temperature   = None
-      TopP          = None
-      MaxTokens     = None
-      UnknownFields = Map.empty }
+      ModelOverride  = model
+      Task           = task
+      Stream         = false
+      Temperature    = None
+      TopP           = None
+      MaxTokens      = None
+      CorrelationId  = ""
+      UnknownFields  = Map.empty }
 
 /// Convenience: route with the default config. Every test in this suite uses this
 /// unless it's specifically testing config-driven behavior.

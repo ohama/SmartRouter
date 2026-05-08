@@ -56,7 +56,9 @@ let private parseRole (s: string) : MessageRole =
     | _           -> MessageRole.User
 
 /// Convert the wire request type to the Core RouterRequest domain type.
-let private mapWireToRequest (wire: RouterRequestWire) : RouterRequest =
+/// Phase 9: correlationId threaded through so RouterRequest.CorrelationId carries
+/// the HttpContext-extracted value into Core for the canary gate (ML.fs).
+let private mapWireToRequest (correlationId: string) (wire: RouterRequestWire) : RouterRequest =
     let messages =
         if isNull wire.messages then []
         else
@@ -73,14 +75,15 @@ let private mapWireToRequest (wire: RouterRequestWire) : RouterRequest =
             |> Seq.map (fun kv -> kv.Key, kv.Value)
             |> Map.ofSeq
 
-    { Messages     = messages
-      ModelOverride = if String.IsNullOrEmpty(wire.model) then None else Some wire.model
-      Task          = if String.IsNullOrWhiteSpace(wire.task) then None else Some (wire.task.Trim())
-      Stream        = wire.stream.HasValue && wire.stream.Value
-      Temperature   = if wire.temperature.HasValue then Some wire.temperature.Value else None
-      TopP          = if wire.top_p.HasValue then Some wire.top_p.Value else None
-      MaxTokens     = if wire.max_tokens.HasValue then Some wire.max_tokens.Value else None
-      UnknownFields = unknownFields }
+    { Messages      = messages
+      ModelOverride  = if String.IsNullOrEmpty(wire.model) then None else Some wire.model
+      Task           = if String.IsNullOrWhiteSpace(wire.task) then None else Some (wire.task.Trim())
+      Stream         = wire.stream.HasValue && wire.stream.Value
+      Temperature    = if wire.temperature.HasValue then Some wire.temperature.Value else None
+      TopP           = if wire.top_p.HasValue then Some wire.top_p.Value else None
+      MaxTokens      = if wire.max_tokens.HasValue then Some wire.max_tokens.Value else None
+      CorrelationId  = correlationId   // NEW Phase 9
+      UnknownFields  = unknownFields }
 
 // ── DecisionLog helpers ──────────────────────────────────────────────────────
 
@@ -90,18 +93,24 @@ let private escapeJsonString (s: string) =
     s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r")
 
 /// Build a DecisionLog from request + routing outcome.
-/// Used at every exit point in handler to reduce duplication.
-/// latency_ms is computed at call time (DateTimeOffset.UtcNow - started).
+/// Phase 9: model_version cascades from RoutingDecision.ModelVersion (load-bearing for ML cohort)
+/// to IModelVersionProvider.CurrentVersion (fallback for non-ML stages: override / task table / heuristic).
+/// decisionOpt = None for pre-routing failures (null body, parse error).
 let private buildDecisionLog
     (req             : RouterRequest)
     (regn            : RoutingAlgorithmRegistration)
     (versionProvider : IModelVersionProvider)
     (correlationId   : string)
     (started         : DateTimeOffset)
+    (decisionOpt     : RoutingDecision option)
     (target          : string)
     (reason          : string)
     (fallbackUsed    : bool)
     : DecisionLog =
+    let modelVersion =
+        match decisionOpt with
+        | Some d when not (String.IsNullOrEmpty(d.ModelVersion)) -> d.ModelVersion
+        | _ -> versionProvider.CurrentVersion
     { schema_version           = 1
       correlation_id           = correlationId
       prompt_hash              = computePromptHash req.Messages
@@ -111,7 +120,7 @@ let private buildDecisionLog
       target                   = target
       latency_ms               = (DateTimeOffset.UtcNow - started).TotalMilliseconds
       fallback_used            = fallbackUsed
-      model_version            = versionProvider.CurrentVersion
+      model_version            = modelVersion
       task_type                = req.Task
       timestamp                = DateTimeOffset.UtcNow }
 
@@ -161,23 +170,24 @@ let handler
         if isNull (wireBody :> obj) then
             // Null body — log with synthetic empty request (no messages, no task).
             let emptyReq =
-                { Messages     = []
-                  ModelOverride = None
-                  Task          = None
-                  Stream        = false
-                  Temperature   = None
-                  TopP          = None
-                  MaxTokens     = None
-                  UnknownFields = Map.empty }
+                { Messages      = []
+                  ModelOverride  = None
+                  Task           = None
+                  Stream         = false
+                  Temperature    = None
+                  TopP           = None
+                  MaxTokens      = None
+                  CorrelationId  = correlationId   // NEW Phase 9 — even synthetic requests carry the correlation ID
+                  UnknownFields  = Map.empty }
             ctx.Response.StatusCode <- 400
             do! ctx.Response.WriteAsJsonAsync(
                     {| error = {| message = "request body is required"
                                   ``type`` = "invalid_request_error" |} |},
                     jsonOptions, ctx.RequestAborted)
-            decisionLogger.Log(buildDecisionLog emptyReq regn versionProvider correlationId started "unknown" "error:null_body" false)
+            decisionLogger.Log(buildDecisionLog emptyReq regn versionProvider correlationId started None "unknown" "error:null_body" false)
         else
 
-        let req = mapWireToRequest wireBody
+        let req = mapWireToRequest correlationId wireBody
 
         // 2. Pure routing — config-driven. The RoutingConfig singleton was built from
         //    appsettings.json at startup; editing JSON + restart changes this behavior (ROUT-05).
@@ -190,7 +200,7 @@ let handler
                     {| error = {| message = $"unknown task: {raw}"
                                   ``type`` = "invalid_request_error" |} |},
                     jsonOptions, ctx.RequestAborted)
-            decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started "unknown" (sprintf "error:unsupported_task:%s" raw) false)
+            decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started None "unknown" (sprintf "error:unsupported_task:%s" raw) false)
 
         | Error e ->
             ctx.Response.StatusCode <- 400
@@ -198,7 +208,7 @@ let handler
                     {| error = {| message = string e
                                   ``type`` = "invalid_request_error" |} |},
                     jsonOptions, ctx.RequestAborted)
-            decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started "unknown" (sprintf "error:%A" e) false)
+            decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started None "unknown" (sprintf "error:%A" e) false)
 
         | Ok decision ->
 
@@ -274,7 +284,7 @@ let handler
                         if streamError
                         then formatReason decision.Reason + ";stream_error"
                         else formatReason decision.Reason
-                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (sprintf "%A" decision.Target) reason decision.IsFallback)
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) reason decision.IsFallback)
 
                 with
                 | :? OperationCanceledException ->
@@ -282,11 +292,11 @@ let handler
                     // No more writes possible — log and dispose.
                     Log.Information("StreamAsync: client disconnected mid-stream for {Target}", decision.Target)
                     do! enumerator.DisposeAsync()
-                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";cancelled") decision.IsFallback)
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) (formatReason decision.Reason + ";cancelled") decision.IsFallback)
                 | ex ->
                     Log.Error(ex, "StreamAsync: unexpected error writing to response for {Target}", decision.Target)
                     do! enumerator.DisposeAsync()
-                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";stream_error") decision.IsFallback)
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) (formatReason decision.Reason + ";stream_error") decision.IsFallback)
 
             else
                 // ── Non-streaming branch (unchanged from Phase 1) ────────────────────
@@ -300,7 +310,7 @@ let handler
                 | Ok body ->
                     ctx.Response.ContentType <- "application/json"
                     do! ctx.Response.WriteAsync(body, ctx.RequestAborted)
-                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason) decision.IsFallback)
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) (formatReason decision.Reason) decision.IsFallback)
 
                 | Error e ->
                     ctx.Response.StatusCode <- 502
@@ -308,7 +318,7 @@ let handler
                             {| error = {| message = string e
                                           ``type`` = "upstream_error" |} |},
                             jsonOptions, ctx.RequestAborted)
-                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (sprintf "%A" decision.Target) (formatReason decision.Reason + ";upstream_error") decision.IsFallback)
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) (formatReason decision.Reason + ";upstream_error") decision.IsFallback)
     }
 
 // ── Endpoint registration ────────────────────────────────────────────────────

@@ -236,13 +236,27 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
                   ModelVersion = "heuristic-v1" }
             | "ml" ->
                 // ML branch — resolve adapters once; close over them in the makeApplyML factory.
+                // Phase 9: Plan 09-01 ships baseline-only path. canaryClassifier = baselineClassifier and
+                // canaryGate is an inline NullCanaryGate (always returns false). Plan 09-02 replaces both
+                // with the real FeatureManagementCanaryGate + dual-classifier dispatch.
                 let embedder   = sp.GetRequiredService<IEmbedder>()
                 let classifier = sp.GetRequiredService<IClassifier>()
                 let mlPath     = opts.ML.ModelPath
                 let modelHash  = computeModelVersion mlPath
-                { Algorithm    = SmartRouter.Core.ML.makeApplyML embedder classifier
+                let baselineVersion = sprintf "ml-%s" modelHash
+                let nullCanaryGate =
+                    { new SmartRouter.Core.CanaryPorts.ICanaryGate with
+                        member _.IsCanaryAsync(_correlationId, _ct) =
+                            System.Threading.Tasks.Task.FromResult(false) }
+                { Algorithm    = SmartRouter.Core.ML.makeApplyML
+                                    embedder
+                                    classifier
+                                    classifier            // canaryClassifier = baselineClassifier (placeholder; replaced in Plan 09-02)
+                                    nullCanaryGate
+                                    baselineVersion
+                                    ""                    // canaryVersion = "" (no canary loaded yet)
                   Name         = "ml"
-                  ModelVersion = sprintf "ml-%s" modelHash }
+                  ModelVersion = baselineVersion }
             | other ->
                 let msg =
                     sprintf

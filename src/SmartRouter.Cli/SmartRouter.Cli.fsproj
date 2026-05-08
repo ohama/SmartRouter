@@ -46,6 +46,8 @@
     <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
     <PackageReference Include="Microsoft.ML" Version="5.0.0" />
     <PackageReference Include="Microsoft.Extensions.ML" Version="5.0.0" />
+    <!-- Feature flag stack — Phase 9 -->
+    <PackageReference Include="Microsoft.FeatureManagement.AspNetCore" Version="4.5.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\SmartRouter.Core\SmartRouter.Core.fsproj" />

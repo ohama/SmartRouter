@@ -21,6 +21,7 @@ let private mkReq (task: string option) (model: string option) (content: string)
       Temperature    = None
       TopP           = None
       MaxTokens      = None
+      CorrelationId  = ""
       UnknownFields  = Map.empty }
 
 let private defaultConfig : RoutingConfig = defaultRoutingConfig
@@ -51,7 +52,11 @@ let tests : Test =
                         System.Threading.Tasks.Task.FromResult(
                             { Score = 0.4f; PredictedLabel = false }
                             : SmartRouter.Core.MLPorts.ClassifierPrediction) }
-            let m : RoutingAlgorithm = SmartRouter.Core.ML.makeApplyML fakeEmb fakeCls
+            let nullGate =
+                { new SmartRouter.Core.CanaryPorts.ICanaryGate with
+                    member _.IsCanaryAsync(_, _) =
+                        System.Threading.Tasks.Task.FromResult(false) }
+            let m : RoutingAlgorithm = SmartRouter.Core.ML.makeApplyML fakeEmb fakeCls fakeCls nullGate "baseline-v1" ""
             let req = mkReq None None "hello" 1
             let dh = h defaultConfig req
             let dm = m defaultConfig req
@@ -76,8 +81,13 @@ let tests : Test =
             let cfg = { defaultConfig with MlThreshold = 0.5f }
             let req = mkReq None None "hello" 1
 
+            let nullGate =
+                { new SmartRouter.Core.CanaryPorts.ICanaryGate with
+                    member _.IsCanaryAsync(_, _) =
+                        System.Threading.Tasks.Task.FromResult(false) }
+
             // score below threshold → 35B
-            let lowAlgo = SmartRouter.Core.ML.makeApplyML fakeEmb (mkClassifier 0.3f)
+            let lowAlgo = SmartRouter.Core.ML.makeApplyML fakeEmb (mkClassifier 0.3f) (mkClassifier 0.3f) nullGate "baseline-v1" ""
             let dLow = lowAlgo cfg req
             Expect.equal dLow.Target Qwen35B  "score 0.3 < 0.5 → 35B"
             Expect.equal dLow.Reason ML        "Reason = ML"
@@ -85,7 +95,7 @@ let tests : Test =
             Expect.equal dLow.IsFallback false "IsFallback = false"
 
             // score at/above threshold → 122B
-            let highAlgo = SmartRouter.Core.ML.makeApplyML fakeEmb (mkClassifier 0.8f)
+            let highAlgo = SmartRouter.Core.ML.makeApplyML fakeEmb (mkClassifier 0.8f) (mkClassifier 0.8f) nullGate "baseline-v1" ""
             let dHigh = highAlgo cfg req
             Expect.equal dHigh.Target Qwen122B "score 0.8 ≥ 0.5 → 122B"
             Expect.equal dHigh.Reason ML       "Reason = ML"
@@ -104,8 +114,12 @@ let tests : Test =
                         System.Threading.Tasks.Task.FromResult(
                             { Score = 0.9f; PredictedLabel = true }
                             : SmartRouter.Core.MLPorts.ClassifierPrediction) }
+            let nullGate =
+                { new SmartRouter.Core.CanaryPorts.ICanaryGate with
+                    member _.IsCanaryAsync(_, _) =
+                        System.Threading.Tasks.Task.FromResult(false) }
             let cfg    = { defaultConfig with MlThreshold = 0.5f }
-            let mlAlgo = SmartRouter.Core.ML.makeApplyML fakeEmbedder fakeClassifier
+            let mlAlgo = SmartRouter.Core.ML.makeApplyML fakeEmbedder fakeClassifier fakeClassifier nullGate "baseline-v1" ""
             let req    = mkReq None None "a plain prompt" 1
 
             // ML path with high score → routes 122B (Reason = ML)
