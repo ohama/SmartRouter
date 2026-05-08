@@ -45,15 +45,3 @@ let makeApplyML
           Reason     = ML
           IsFallback = false }
 
-/// Legacy placeholder retained so CompositionRoot's `"ml"` branch continues
-/// to compile in wave 1 (before adapter wiring lands in 06-02).
-/// Always picks Qwen35B/Low/ML/IsFallback=false — Phase 4 ML-02 contract.
-/// REMOVED in 06-02 once makeApplyML is wired through CompositionRoot.
-/// MUST NOT import the Heuristic module (zero cross-imports enforced by ML-04).
-let applyML (config: RoutingConfig) (req: RouterRequest) : RoutingDecision =
-    ignore config
-    ignore req
-    { Target     = Qwen35B
-      Priority   = Low
-      Reason     = ML
-      IsFallback = false }

@@ -5,13 +5,18 @@ open System.Collections.Generic
 open System.Net.Http
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.ML
 open Microsoft.Extensions.Options
 open Serilog
 open SmartRouter.Core.Domain
+open SmartRouter.Core.MLPorts
 open SmartRouter.Core.Ports
 open SmartRouter.Core.Routing
+open SmartRouter.Cli.Adapters.BgeM3Embedder
 open SmartRouter.Cli.Adapters.DecisionLogger
 open SmartRouter.Cli.Adapters.DecisionLogWriter
+open SmartRouter.Cli.Adapters.MlNetClassifier
+open SmartRouter.Cli.Adapters.ModelBootstrapper
 open SmartRouter.Cli.Adapters.RoutingAlgorithm
 open SmartRouter.Cli.Adapters.QwenUpstreamClient
 open SmartRouter.Cli.Adapters.QueueDispatcher
@@ -161,10 +166,45 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
         buildRoutingConfig opts)
         |> ignore
 
+    // ── ML wiring ──────────────────────────────────────────────────────────────
+    //
+    // Order matters:
+    //   1. ensureEmbeddingFilesPresent — fail-fast with operator-friendly error if files missing
+    //   2. ensureDummyModel            — generate router.zip if missing (idempotent)
+    //   3. AddPredictionEnginePool     — registers pool; file is guaranteed to exist
+    //
+    // Steps 1+2 run synchronously at configure time so the pool registration has
+    // guaranteed file presence. Both are no-ops on second startup.
+    let mlOpts = config.GetSection("Routing:ML").Get<MlOptions>()
+    if not (obj.ReferenceEquals(mlOpts, null)) then
+        ensureEmbeddingFilesPresent mlOpts.EmbeddingModelPath mlOpts.TokenizerPath
+        ensureDummyModel mlOpts.ModelPath
+
+        services
+            .AddPredictionEnginePool<RouteInput, RoutePrediction>()
+            .FromFile(
+                modelName       = "router",
+                filePath        = mlOpts.ModelPath,
+                watchForChanges = true)
+            |> ignore
+
+        // BgeM3Embedder — singleton; warm-up runs at construction.
+        services.AddSingleton<IEmbedder>(fun _sp ->
+            new BgeM3Embedder(
+                mlOpts.EmbeddingModelPath,
+                mlOpts.TokenizerPath,
+                mlOpts.MaxTokens) :> IEmbedder)
+            |> ignore
+
+        services.AddSingleton<IClassifier>(fun sp ->
+            let pool = sp.GetRequiredService<PredictionEnginePool<RouteInput, RoutePrediction>>()
+            MlNetClassifier(pool) :> IClassifier)
+            |> ignore
+
     // RoutingAlgorithmRegistration as a DI singleton — pairs the algorithm function
     // with its name and model_version so the endpoint can populate DecisionLog.
     // null | "" | "heuristic" -> applyHeuristic / "heuristic" / "heuristic-v1"
-    // "ml"                    -> applyML        / "ml"        / "ml-v0-placeholder"
+    // "ml"                    -> makeApplyML closure / "ml" / "ml-{8hexchars}"
     // other                   -> InvalidOperationException at startup (fail-fast)
     services.AddSingleton<RoutingAlgorithmRegistration>(
         Func<IServiceProvider, RoutingAlgorithmRegistration>(fun sp ->
@@ -175,9 +215,14 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
                   Name         = "heuristic"
                   ModelVersion = "heuristic-v1" }
             | "ml" ->
-                { Algorithm    = SmartRouter.Core.ML.applyML
+                // ML branch — resolve adapters once; close over them in the makeApplyML factory.
+                let embedder   = sp.GetRequiredService<IEmbedder>()
+                let classifier = sp.GetRequiredService<IClassifier>()
+                let mlPath     = opts.ML.ModelPath
+                let modelHash  = computeModelVersion mlPath
+                { Algorithm    = SmartRouter.Core.ML.makeApplyML embedder classifier
                   Name         = "ml"
-                  ModelVersion = "ml-v0-placeholder" }
+                  ModelVersion = sprintf "ml-%s" modelHash }
             | other ->
                 let msg =
                     sprintf
