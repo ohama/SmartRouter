@@ -10,10 +10,14 @@ open Microsoft.Extensions.Logging
 open Serilog
 open Serilog.Events
 open SmartRouter.Cli.Adapters
+open SmartRouter.Cli.Adapters.CanaryWatchdog
 open SmartRouter.Cli.Adapters.CorrelationMiddleware
 open SmartRouter.Cli.Adapters.QueueDispatcher
+open SmartRouter.Cli.Adapters.RoutingAlgorithm
+open SmartRouter.Cli.Adapters.TeacherLabeler
 open SmartRouter.Cli.CompositionRoot
 open SmartRouter.Cli.Endpoints
+open SmartRouter.Core.RetrainingPorts
 
 // Phase 13 Q8: map string → Serilog LogEventLevel with short aliases.
 let private parseLogLevel (raw: string) : LogEventLevel =
@@ -211,6 +215,29 @@ let main args =
             SmartRouter.Cli.Endpoints.Health.mapEndpoints app
             // Register GET /v1/models — Phase 11 (parallel fetch + dedupe + IHealthProbe gating)
             SmartRouter.Cli.Endpoints.Models.mapEndpoints app
+
+            // Phase 13 — startup banner. Operators reading the operational log see a
+            // single proof-of-startup snapshot: which port, model version, canary state,
+            // queue config, etc. Helps confirm the binary they tail matches expectations.
+            let startupBanner =
+                let regn         = app.Services.GetRequiredService<RoutingAlgorithmRegistration>()
+                let vp           = app.Services.GetRequiredService<IModelVersionProvider>()
+                let queueOpts    = app.Services.GetRequiredService<IOptions<QueueDispatcherOptions>>().Value
+                let teacherOpts  = app.Services.GetRequiredService<IOptions<TeacherLabelerOptions>>().Value
+                let canaryOpts   = app.Services.GetRequiredService<IOptions<CanaryOptions>>().Value
+                let logging      = builder.Configuration.GetSection("Logging")
+                let logDir       = logging.["Directory"] |> Option.ofObj |> Option.defaultValue "logs/operational"
+                let listenUrl    = builder.Configuration.["Kestrel:Endpoints:Http:Url"]
+                                   |> Option.ofObj |> Option.defaultValue "http://localhost:4000"
+                let canaryVer    = vp.CanaryVersion
+                let canaryVerStr = if System.String.IsNullOrWhiteSpace(canaryVer) then "(none)" else canaryVer
+                sprintf "SmartRouter starting\n    listen            = %s\n    routing.algorithm = %s\n    model.version     = %s\n    canary.version    = %s\n    canary.percent    = %d\n    queue.maxconc.122B = %d\n    queue.fairnessK   = %d\n    teacher.cap.daily = %d\n    log.dir           = %s"
+                    listenUrl regn.Name regn.ModelVersion canaryVerStr
+                    canaryOpts.PercentageEnabled queueOpts.MaxConcurrent122B queueOpts.FairnessK
+                    teacherOpts.DailyCallCap logDir
+            let bannerLogger =
+                app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup")
+            bannerLogger.LogInformation("{Banner}", startupBanner)
 
             app.Run()
             0
