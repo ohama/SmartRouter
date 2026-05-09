@@ -5,6 +5,7 @@ open System.IO
 open System.Threading
 open System.Diagnostics
 open Expecto
+open Microsoft.Extensions.Logging.Abstractions
 open SmartRouter.Cli.Adapters.BgeM3Embedder
 
 // ── Embedding-file gate ──────────────────────────────────────────────────────
@@ -39,7 +40,7 @@ let private mlTestCase name body =
 /// Lazy singleton — construct ONCE per test run; warm-up at construction
 /// is amortized across all tests.
 let private embedderLazy =
-    lazy (new BgeM3Embedder(onnxPath, tokenizerPath, 512) :> SmartRouter.Core.MLPorts.IEmbedder)
+    lazy (new BgeM3Embedder(onnxPath, tokenizerPath, 512, NullLogger<BgeM3Embedder>.Instance) :> SmartRouter.Core.MLPorts.IEmbedder)
 
 let private embed (s: string) : float32[] =
     embedderLazy.Value.EmbedAsync(s, CancellationToken.None).GetAwaiter().GetResult()

@@ -9,8 +9,8 @@ open System.Threading.Tasks
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.Logging
 open Microsoft.Extensions.Primitives
-open Serilog
 open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
 open SmartRouter.Core.Routing
@@ -167,6 +167,7 @@ let handler
     (decisionLogger  : IDecisionLogger)
     (metrics         : ICanaryMetrics)        // NEW Phase 9 — canary rolling metric
     (upstream        : IUpstreamClient)
+    (logger          : ILogger)
     (ctx             : HttpContext) : Task =
     task {
         // Capture start time and correlation ID at the very top of the handler.
@@ -257,7 +258,7 @@ let handler
                 if decision.Target = Qwen122B
                    && not isGraphIndexing
                    && not (healthProbe.IsReachable(Qwen122B)) then
-                    Log.Warning(
+                    logger.LogWarning(
                         "ChatCompletions: 122B unreachable; rerouting task={Task} to 35B (fallback)",
                         req.Task)
                     { decision with
@@ -279,7 +280,7 @@ let handler
                 // Transfer-Encoding: chunked is applied automatically by Kestrel when
                 // Content-Length is absent. Do NOT set Content-Length or Transfer-Encoding.
 
-                Log.Information(
+                logger.LogInformation(
                     "Routing target={Target} reason={Reason} priority={Priority} stream=true",
                     decision.Target, decision.Reason, decision.Priority)
 
@@ -348,14 +349,14 @@ let handler
                 | :? OperationCanceledException ->
                     // Client disconnected mid-stream (ctx.RequestAborted fired).
                     // No more writes possible — log and dispose.
-                    Log.Information("StreamAsync: client disconnected mid-stream for {Target}", decision.Target)
+                    logger.LogInformation("StreamAsync: client disconnected mid-stream for {Target}", decision.Target)
                     do! enumerator.DisposeAsync()
                     let cancelReason = formatReason decision.Reason + ";cancelled"
                     decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) cancelReason decision.IsFallback)
                     let isCanary, isFb = metricCohort decision cancelReason
                     metrics.Record(isCanary, isFb)
                 | ex ->
-                    Log.Error(ex, "StreamAsync: unexpected error writing to response for {Target}", decision.Target)
+                    logger.LogError(ex, "StreamAsync: unexpected error writing to response for {Target}", decision.Target)
                     do! enumerator.DisposeAsync()
                     let errReason = formatReason decision.Reason + ";stream_error"
                     decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) errReason decision.IsFallback)
@@ -364,7 +365,7 @@ let handler
 
             else
                 // ── Non-streaming branch (unchanged from Phase 1) ────────────────────
-                Log.Information(
+                logger.LogInformation(
                     "Routing target={Target} reason={Reason} priority={Priority}",
                     decision.Target, decision.Reason, decision.Priority)
 
@@ -407,4 +408,5 @@ let mapEndpoints (app: WebApplication) =
         let decisionLogger   = ctx.RequestServices.GetRequiredService<IDecisionLogger>()
         let metrics          = ctx.RequestServices.GetRequiredService<ICanaryMetrics>()  // NEW Phase 9
         let upstream         = ctx.RequestServices.GetRequiredService<IUpstreamClient>()
-        handler routingConfig regn versionProvider decisionLogger metrics upstream ctx)) |> ignore
+        let logger           = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ChatCompletions")
+        handler routingConfig regn versionProvider decisionLogger metrics upstream logger ctx)) |> ignore

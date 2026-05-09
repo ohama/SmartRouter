@@ -4,16 +4,16 @@ open System
 open System.IO
 open System.Threading
 open System.Threading.Tasks
+open Microsoft.Extensions.Logging
 open Microsoft.ML.OnnxRuntime
 open Microsoft.ML.OnnxRuntime.Tensors
 open Microsoft.ML.Tokenizers
-open Serilog
 open SmartRouter.Core.MLPorts
 
 /// bge-m3 embedder adapter — int8 quantized ONNX + XLM-R SentencePiece tokenizer.
 /// Produces 1024-dim L2-normalized float32 vectors via mean pooling over attention_mask.
 /// Disposable: owns the InferenceSession; should be a DI singleton.
-type BgeM3Embedder(onnxPath: string, tokenizerPath: string, maxTokens: int) =
+type BgeM3Embedder(onnxPath: string, tokenizerPath: string, maxTokens: int, logger: ILogger<BgeM3Embedder>) =
     do
         if not (File.Exists onnxPath) then
             failwithf
@@ -93,9 +93,9 @@ type BgeM3Embedder(onnxPath: string, tokenizerPath: string, maxTokens: int) =
         try
             let warmIds = encode "hello"
             runOnnx warmIds |> ignore
-            Log.Information("BgeM3Embedder warm-up complete (model: {OnnxPath})", onnxPath)
+            logger.LogInformation("BgeM3Embedder warm-up complete (model: {OnnxPath})", onnxPath)
         with ex ->
-            Log.Warning(ex, "BgeM3Embedder warm-up failed; continuing")
+            logger.LogWarning(ex, "BgeM3Embedder warm-up failed; continuing")
 
     interface IEmbedder with
         member _.EmbedAsync(prompt: string, _ct: CancellationToken) : Task<float32[]> =

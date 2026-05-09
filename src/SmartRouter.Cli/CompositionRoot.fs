@@ -313,11 +313,12 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
             |> ignore
 
         // BgeM3Embedder — singleton; warm-up runs at construction.
-        services.AddSingleton<IEmbedder>(fun _sp ->
+        services.AddSingleton<IEmbedder>(fun sp ->
             new BgeM3Embedder(
                 mlOpts.EmbeddingModelPath,
                 mlOpts.TokenizerPath,
-                mlOpts.MaxTokens) :> IEmbedder)
+                mlOpts.MaxTokens,
+                sp.GetRequiredService<ILogger<BgeM3Embedder>>()) :> IEmbedder)
             |> ignore
 
         // Phase 9: keyed classifiers (baseline + canary) from the same pool.
