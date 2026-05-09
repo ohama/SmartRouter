@@ -6,7 +6,7 @@ open System.Text
 open SmartRouter.Core.Domain
 
 /// Compute SHA-256 hex of concatenated message content.
-/// Full conversation, not just last user message — matches what the heuristic scores.
+/// Full conversation, not just last user message.
 /// (Pitfall P8: use sha per call — SHA256 is not thread-safe.)
 let computePromptHash (messages: Message list) : string =
     let text = messages |> List.map (fun m -> m.Content) |> String.concat ""
@@ -31,10 +31,9 @@ let formatReason (reason: RoutingReason) : string =
     match reason with
     | ExplicitModelOverride alias -> sprintf "explicit_model:%s" alias
     | ExplicitTask taskType       -> sprintf "explicit_task:%A" taskType
-    | Heuristic score             -> sprintf "heuristic:score=%d" score
     | Default                     -> "default"
     | ML                          -> "ml"
-    | FallbackTo35B               -> "fallback_to_35b"   // NEW Phase 10
+    | FallbackTo35B               -> "fallback_to_35b"
 
 /// One JSONL line per routing decision.
 /// Cli-only — pure F# record, no Core references beyond Domain.
