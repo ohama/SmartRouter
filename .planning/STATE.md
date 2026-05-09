@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 
 ## Current Position
 
-Phase: 11 of 11 (Deployment + Docs) — In progress
-Plan: 3 of 3 in current phase — COMPLETE ✓
-Status: Phase 11 Plan 3 COMPLETE. README.md shipped at repo root (1020 lines, 14 sections). All 8 endpoints, 7 task types, Loop A/B, canary, launchd, DecisionLog schema documented. Pure-docs plan — zero code changes. Tests unchanged: 86 pass + 17 ignored. SUMMARY: .planning/phases/11-deployment-documentation/11-03-README-SUMMARY.md
-Last activity: 2026-05-09 — Phase 11 Plan 3 (COMPLETE).
+Phase: 11 of 11 (Deployment + Docs) — COMPLETE ✓
+Plan: 3 of 3 in current phase — ALL COMPLETE ✓
+Status: Phase 11 ALL PLANS COMPLETE. 11-01 (/v1/models endpoint), 11-02 (launchd plist + deploy scripts), 11-03 (README.md) all done. Tests: 86 pass + 17 ignored + 0 failed. SUMMARIES: 11-01-SUMMARY.md, 11-02-LAUNCHD-OPS-SUMMARY.md, 11-03-README-SUMMARY.md
+Last activity: 2026-05-09 — Phase 11 Plan 2 (COMPLETE). All 3 plans in Phase 11 done.
 
-Progress: [██████████████████████████] 35 of ~35 plans (phases 1-11 complete; 11-02 plist+scripts may still be running in parallel)
+Progress: [██████████████████████████] 35 of 35 plans (ALL PHASES 1-11 COMPLETE)
 
 ## Performance Metrics
 
@@ -201,6 +201,11 @@ Recent decisions affecting current work:
 - 11-03: All 8 endpoints + 7 task types + Loop A/B + canary workflow + launchd setup documented; bge-m3, LbfgsLogisticRegression, ContextualTargetingFilter all named
 - 11-03: README links to documentation/howto/ (11 howtos) and .planning/ROADMAP.md for deeper material; README is operator-facing only (not technical reference — that's CLAUDE.md / .planning/)
 - 11-03: No code changes — pure documentation plan; 86 pass + 17 ignored test count unchanged
+- 11-02: deploy/com.ohama.smart-router.plist mirrors qwen36-35b + qwen122b convention exactly (4-space XML, KeepAlive=<true/>, ThrottleInterval=30, RunAtLoad=<true/>); plutil -lint OK
+- 11-02: dotnet absolute path /opt/homebrew/bin/dotnet (operator's host; PATH unavailable to launchd at load time per OPS-02)
+- 11-02: WorkingDirectory /Users/ohama/llm-system/services/smart-router — relative paths in appsettings.json (models/, datasets/, prompts/, logs/) resolve from this root
+- 11-02: install-launchd.sh does NOT auto-execute launchctl load (Lock 21) — manual UAT step on host since SC#1+SC#2 require live macOS launchd interaction; script prints next-steps heredoc with $ prompt prefix
+- 11-02: Framework-dependent publish (PublishTrimmed=false — ML.NET reflection breaks under trimming; operator already has .NET 10 runtime); EnvironmentVariables adds HOME + ASPNETCORE_ENVIRONMENT (qwen plists only need PATH)
 - 10-VERIFICATION (verifier scored 30/30 must-haves): Phase 10 goal fully achieved. ChatCompletions pre-flight at lines 229-268 (BEFORE SSE headers); QueueDispatcher dual-layer fallback at lines 242-261 + 313-339 (CompleteAsync + StreamAsync); HealthService 135 lines with ConcurrentDictionary + PeriodicTimer + ExceptionDispatchInfo.Capture at all 3 OCE points; ARCH-01 invariant preserved (only IHealthProbe BCL-only port added to Core); REL-01..04 + API-05 + TEST-05 all marked Complete in REQUIREMENTS.md. ML feedback loop is now self-sustaining: real upstream failures → fallback fires → fallback_used=true in JSONL → FailureDetector → TeacherLabeler → Retraining loop. Three human-verification items deferred (live mlx_lm.server downtime detection, real Hermes Agent fallback round-trip, AutoRollback under production load) — non-blocking; require live upstream.
 
 ### Pending Todos
@@ -215,6 +220,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-09T03:49:41Z
-Stopped at: Phase 11 Plan 3 COMPLETE — README.md shipped at repo root (1020 lines, 14 sections); build clean; 86 pass + 17 ignored. Phase 11 Plan 2 (launchd plist + scripts) may still be running in parallel (file-disjoint from 11-03).
+Last session: 2026-05-09T03:51:00Z
+Stopped at: Phase 11 Plan 2 COMPLETE — deploy/com.ohama.smart-router.plist + scripts/deploy.sh + scripts/install-launchd.sh shipped. All 3 Phase 11 plans now complete. ALL 35 PLANS ACROSS ALL PHASES COMPLETE. Build clean; 86 pass + 17 ignored.
+Resume file: None
 Resume file: None
