@@ -47,12 +47,12 @@ type CanaryMetrics() =
             if isCanary then canary.RateAndCount(windowSeconds)
             else baseline.RateAndCount(windowSeconds)
 
-/// No-op ICanaryMetrics — used in heuristic mode where there is no canary cohort.
-/// Record is a swallow; FallbackRate returns (0.0, 0). This lets ChatCompletions
-/// resolve ICanaryMetrics universally (without `if routingAlgo = ml`) — the production
-/// CanaryMetrics overrides this via plain AddSingleton inside the ML branch
-/// (TryAddSingleton fallback + AddSingleton override pattern; Microsoft.Extensions.DI
-/// last-registration-wins semantics for GetRequiredService<T>).
+/// No-op ICanaryMetrics — TryAddSingleton fallback for contexts without canary
+/// infrastructure (offline retrain path, tests). Record is a swallow; FallbackRate
+/// returns (0.0, 0). This lets ChatCompletions resolve ICanaryMetrics universally —
+/// the production CanaryMetrics overrides this via plain AddSingleton inside
+/// configureRequestPipeline (TryAddSingleton fallback + AddSingleton override pattern;
+/// Microsoft.Extensions.DI last-registration-wins semantics for GetRequiredService<T>).
 type NoOpCanaryMetrics() =
     interface ICanaryMetrics with
         member _.Record(_, _)             = ()

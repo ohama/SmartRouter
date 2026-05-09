@@ -5,7 +5,7 @@ open System.Threading.Tasks
 
 /// Canary gate port — answers "is this correlation_id in the canary cohort?"
 /// BCL-only signature: keeps Core ARCH-01 invariant (no Microsoft.FeatureManagement reference).
-/// Plan 09-02 implements FeatureManagementCanaryGate (Cli) and NullCanaryGate (Cli, no-op for heuristic mode).
+/// Plan 09-02 implements FeatureManagementCanaryGate (Cli) and NullCanaryGate (Cli, no-op fallback for non-canary contexts).
 ///
 /// Returns true → route to canary classifier; false → route to baseline classifier.
 /// Implementations MUST short-circuit to false when:

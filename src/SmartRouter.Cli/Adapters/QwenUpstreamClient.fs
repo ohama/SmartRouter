@@ -27,7 +27,7 @@ type UpstreamOptions =
 
 /// Parse the best id from a GET /v1/models response body.
 ///
-/// Heuristic: some servers (notably mlx_lm.server) advertise multiple ids per
+/// Strategy: some servers (notably mlx_lm.server) advertise multiple ids per
 /// model entry — e.g. a HuggingFace repo id ("Qwen/Qwen2.5-Coder-32B") alongside
 /// the local absolute path ("/Users/.../qwen35b"). Sending the HF id back in the
 /// POST "model" field triggers the server's HF Hub fallback, which refetches the

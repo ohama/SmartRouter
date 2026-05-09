@@ -12,8 +12,8 @@ open SmartRouter.Cli.Adapters.CanaryState
 [<Literal>]
 let CanaryFeatureName = "Canary"
 
-/// No-op canary gate — used in heuristic mode where there is no ML classifier and
-/// no canary infrastructure. Always returns false.
+/// No-op canary gate — used in non-canary contexts (offline retrain path, tests)
+/// where there is no ML classifier or canary infrastructure. Always returns false.
 type NullCanaryGate() =
     interface ICanaryGate with
         member _.IsCanaryAsync(_correlationId, _ct) =
