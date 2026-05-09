@@ -5,7 +5,7 @@ open System.Collections.Generic
 open System.Threading
 open System.Threading.Tasks
 open FSharp.Control
-open Serilog
+open Microsoft.Extensions.Logging
 open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
 
@@ -72,7 +72,8 @@ type private Ticket =
 type QueueDispatcher
     ( inner       : IUpstreamClient
     , options     : QueueDispatcherOptions
-    , healthProbe : IHealthProbe ) =
+    , healthProbe : IHealthProbe
+    , logger      : ILogger<QueueDispatcher> ) =
 
     // Startup validation — correctness invariant for current Qwen rig.
     do
@@ -147,7 +148,7 @@ type QueueDispatcher
             | Some t ->
                 if t.Ct.IsCancellationRequested then
                     // Already cancelled while queued — discard, no semaphore acquired.
-                    Log.Debug("QueueDispatcher: discarding cancelled queued request")
+                    logger.LogDebug("QueueDispatcher: discarding cancelled queued request")
                     t.Tcs.TrySetCanceled(t.Ct) |> ignore
                 else
                     // Acquire the gate. CancellationToken.None: dispatcher must NOT be
@@ -243,7 +244,7 @@ type QueueDispatcher
                     if decision.Target = Qwen122B
                        && not (healthProbe.IsReachable(Qwen122B))
                        && not isGraphIndexing then
-                        Log.Warning(
+                        logger.LogWarning(
                             "QueueDispatcher.CompleteAsync: 122B unreachable; rerouting task={Task} to 35B (fallback)",
                             req.Task)
                         { decision with
@@ -320,7 +321,7 @@ type QueueDispatcher
                 if decision.Target = Qwen122B
                    && not (healthProbe.IsReachable(Qwen122B))
                    && not isGraphIndexing then
-                    Log.Warning(
+                    logger.LogWarning(
                         "QueueDispatcher.StreamAsync: 122B unreachable; rerouting task={Task} to 35B (fallback)",
                         req.Task)
                     { decision with

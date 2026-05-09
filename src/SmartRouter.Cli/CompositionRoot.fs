@@ -400,7 +400,8 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         QueueDispatcher(
             sp.GetRequiredService<QwenUpstreamClient>() :> IUpstreamClient,
             sp.GetRequiredService<IOptions<QueueDispatcherOptions>>().Value,
-            sp.GetRequiredService<IHealthProbe>()))
+            sp.GetRequiredService<IHealthProbe>(),
+            sp.GetRequiredService<ILogger<QueueDispatcher>>()))
         |> ignore
 
     services.AddSingleton<IUpstreamClient>(fun sp ->
