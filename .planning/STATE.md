@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 13 IN PROGRESS — Service Logging foundation complete (13-01). Dual sink live, IConfiguration wired. Ready for 13-02 (ILogger<T> migration).
+**Current focus:** Phase 13 IN PROGRESS — ILogger<T> migration complete (13-02). All Serilog.Log.* static calls removed from adapters. Ready for 13-03 (behavior changes).
 
 ## Current Position
 
 Phase: 13 of 13 (Service Logging) — IN PROGRESS
-Plan: 1 of 6 in current phase — COMPLETE ✓
-Status: 13-01 foundation complete. Serilog dual-sink (Console stderr OBS-04 + rolling File), ReadFrom.Configuration, new output template with [{correlation_id}] default, appsettings.json Override table + Logging:Directory/RetentionDays + DecisionLog:RetentionDays. Program.fs IConfiguration wired. Test baseline preserved: **62 passed + 16 ignored + 0 failed**.
-Last activity: 2026-05-09 — Completed 13-01-FOUNDATION-PLAN.md.
+Plan: 2 of 6 in current phase — COMPLETE ✓
+Status: 13-02 ILogger<T> migration complete. 10 type adapters + 4 module functions + ChatCompletions endpoint migrated. Static Log.* retained only in 2 startup-window call sites. Test baseline preserved: **62 passed + 16 ignored + 0 failed**.
+Last activity: 2026-05-09 — Completed 13-02-ILOGGER-MIGRATION-PLAN.md.
 
-Progress: [█████████████████████████████████░░░░░] 42 of 47 plans (Phases 1-12 complete; Phase 13: 1/6 done)
+Progress: [█████████████████████████████████░░░░░] 43 of 47 plans (Phases 1-12 complete; Phase 13: 2/6 done)
 
 ## Performance Metrics
 
@@ -226,6 +226,12 @@ Recent decisions affecting current work:
 - 13-01: OBS-04 invariant preserved: Console sink standardErrorFromLevel=Verbose unchanged; file sink is purely additive
 - 13-01: Enrich.WithProperty("correlation_id", "-") registered BEFORE WriteTo sinks — ensures [-] renders in background logs; LogContext.PushProperty overrides at request scope (CorrelationMiddleware)
 - 13-02 executor note: Phase 12-05 stated "Phase 13-02 executor must add NullLogger<HealthService> + NullLogger<QueueDispatcher> at manual instantiation sites in StreamingTests/LoggingTests/HealthFallbackTests when those ctor params are added"
+- 13-02: ILogger<T> ctor injection chosen (not ILoggerFactory injection) — DI auto-resolves ILogger<T> from AddLogging(); SourceContext auto-populated from T; no extra factory boilerplate
+- 13-02: Option A (logger param) for module functions, not Option B — F# modules lack constructors; param threading is explicit + testable; no hidden global state
+- 13-02: ILoggerFactory.CreateLogger("ChatCompletions") in mapEndpoints — handler is a module function; category name is explicit; ctx.RequestServices available at per-request resolution
+- 13-02: NullLogger.Instance for bootstrap calls in configureRequestPipeline — DI container not yet built at configure time; startup-window Serilog static sink still captures fatal exceptions
+- 13-02: CapturingLogger<T> MEL type replaces Serilog CapturingSink for RETRAIN-05 — ILogger<T> injection means messages no longer flow through Serilog static logger; MEL capture is the correct interception point
+- 13-02: Log.Verbose maps to logger.LogTrace (ILogger equivalent of Serilog Verbose level) — confirmed for CanaryWatchdog migration
 
 ### Pending Todos
 
@@ -242,5 +248,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-09
-Stopped at: Completed 13-01-FOUNDATION-PLAN.md. Dual-sink Serilog live. Test baseline 62+16+0 preserved. 4 task commits: d72a4b2, 79ed99b, 4f04c88, 463404a.
+Stopped at: Completed 13-02-ILOGGER-MIGRATION-PLAN.md. All Serilog.Log.* static calls removed from adapters. ILogger<T> ctor injection for 10 type adapters + Option A for 4 module functions + ILoggerFactory for ChatCompletions. Test baseline 62+16+0 preserved. Key commits: c91ddae, c1d4f17, 316b704, c27786b, f981f3a, c826984, b5c4885, 709e0f5, 3974e20, ec7dc30, 90e0d7d, 3999a78, 0927b2a, ee9a4e0.
 Resume file: None
