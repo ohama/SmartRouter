@@ -93,7 +93,7 @@ let tryTaskTable (config: RoutingConfig) (req: RouterRequest) : Result<RoutingDe
 // ── Pipeline entry point ──────────────────────────────────────────────────────
 
 /// Three-stage pure routing pipeline parameterized by RoutingConfig and a
-/// pluggable algorithm (Heuristic.applyHeuristic or ML.applyML).
+/// pluggable algorithm (ML.applyML; future implementations conform to RoutingAlgorithm shape).
 /// Returns Ok RoutingDecision or Error RouterError.
 /// No IO. No logging. No clock.
 /// Signature: RoutingConfig -> RoutingAlgorithm -> RouterRequest -> Result<RoutingDecision, RouterError>
@@ -125,15 +125,7 @@ let canonicalTaskTable : Map<string, ModelId * Priority> =
       "summary"               , taskToDecision Summary              |> fun d -> d.Target, d.Priority ]
     |> Map.ofList
 
-let canonicalKeywords : string list =
-    [ "recursive"; "dependency"; "lowering"; "mlir"; "llvm"; "compiler"
-      "architecture"; "type inference"; "graph relation"; "closure conversion"
-      "cross-file"; "multi-file"; "reasoning"; "inference"; "optimization"
-      "refactor"; "redesign"; "abstract"; "formal"; "proof" ]
-
 /// Default RoutingConfig (used by tests + as the baseline the JSON validator diffs against).
 let defaultRoutingConfig : RoutingConfig =
-    { ComplexityThreshold = 3
-      Keywords            = canonicalKeywords
-      TaskTable           = canonicalTaskTable
-      MlThreshold         = 0.5f }
+    { TaskTable   = canonicalTaskTable
+      MlThreshold = 0.5f }
