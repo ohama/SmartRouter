@@ -10,7 +10,7 @@ open System.Threading
 open System.Threading.Channels
 open System.Threading.Tasks
 open Microsoft.Extensions.Hosting
-open Serilog
+open Microsoft.Extensions.Logging
 open SmartRouter.Core.RetrainingPorts
 
 /// Cli-only options bound from appsettings.json "HardCaseDataset" section.
@@ -28,7 +28,7 @@ type HardCaseDatasetOptions =
 ///      back-pressure is fine because writes are infrequent (one per labeled hard case).
 ///   3. Append-time dedupe by (CorrelationId, PromptHash) via in-memory HashSet seeded
 ///      from existing file at first iteration. Prevents double-labeling on rerun.
-type HardCaseDatasetWriter(options: HardCaseDatasetOptions) =
+type HardCaseDatasetWriter(options: HardCaseDatasetOptions, logger: ILogger<HardCaseDatasetWriter>) =
     inherit BackgroundService()
 
     // Defensive defaults — CompositionRoot in Plan 07-05 also applies these,
@@ -77,9 +77,9 @@ type HardCaseDatasetWriter(options: HardCaseDatasetOptions) =
                             let entry = JsonSerializer.Deserialize<HardCaseEntry>(line, jsonOpts)
                             set.Add(dedupeKey entry) |> ignore
                         with ex ->
-                            Log.Warning(ex, "HardCaseDatasetWriter: skipping malformed line during seed"))
+                            logger.LogWarning(ex, "HardCaseDatasetWriter: skipping malformed line during seed"))
             with ex ->
-                Log.Warning(ex, "HardCaseDatasetWriter: failed to seed dedupe from {Path}", path)
+                logger.LogWarning(ex, "HardCaseDatasetWriter: failed to seed dedupe from {Path}", path)
 
     /// AppendAsync — fire-and-forget from the producer's perspective. Returns
     /// after the entry is written into the channel (back-pressure honored on Wait).
@@ -100,7 +100,7 @@ type HardCaseDatasetWriter(options: HardCaseDatasetOptions) =
             // Seed dedupe set from existing file (rerun-safety per FAIL-04).
             let dedupe = HashSet<string>()
             seedDedupe dedupe
-            Log.Information(
+            logger.LogInformation(
                 "HardCaseDatasetWriter: seeded dedupe set with {N} existing entries from {Path}",
                 dedupe.Count, path)
 
@@ -130,7 +130,7 @@ type HardCaseDatasetWriter(options: HardCaseDatasetOptions) =
                     let! entry = channel.Reader.ReadAsync(stoppingToken)
                     let key = dedupeKey entry
                     if dedupe.Contains(key) then
-                        Log.Debug(
+                        logger.LogDebug(
                             "HardCaseDatasetWriter: dedupe hit; skipping correlation_id={Cid} prompt_hash={Hash}",
                             entry.CorrelationId, entry.PromptHash)
                     else
@@ -141,11 +141,11 @@ type HardCaseDatasetWriter(options: HardCaseDatasetOptions) =
                             sw.Flush()   // per-line OS write; atomic for short lines under PIPE_BUF
                             dedupe.Add(key) |> ignore
                         with ex ->
-                            Log.Error(ex, "HardCaseDatasetWriter: write failed for correlation_id={Cid}", entry.CorrelationId)
+                            logger.LogError(ex, "HardCaseDatasetWriter: write failed for correlation_id={Cid}", entry.CorrelationId)
             with
             | :? OperationCanceledException -> ()   // graceful shutdown via stoppingToken
             | :? ChannelClosedException     -> ()   // graceful shutdown via TryComplete()
-            | ex -> Log.Error(ex, "HardCaseDatasetWriter: writer loop crashed")
+            | ex -> logger.LogError(ex, "HardCaseDatasetWriter: writer loop crashed")
 
             // Drain remaining items after cancellation (Pitfall P2 mirror).
             let mutable more = true
@@ -161,7 +161,7 @@ type HardCaseDatasetWriter(options: HardCaseDatasetOptions) =
                             sw.Flush()
                             dedupe.Add(key) |> ignore
                         with ex ->
-                            Log.Warning(ex, "HardCaseDatasetWriter: drain write failed")
+                            logger.LogWarning(ex, "HardCaseDatasetWriter: drain write failed")
                 | false, _ -> more <- false
 
             // Dispose the StreamWriter cleanly (Pitfall P3 — no handle leak).

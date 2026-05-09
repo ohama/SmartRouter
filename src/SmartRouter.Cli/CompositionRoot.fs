@@ -517,7 +517,8 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         let opts = sp.GetRequiredService<IOptions<HardCaseDatasetOptions>>().Value
         let p   = if String.IsNullOrWhiteSpace(opts.Path) then "datasets/hard-cases.jsonl" else opts.Path
         let cap = if opts.ChannelCapacity <= 0 then 1000 else opts.ChannelCapacity
-        new HardCaseDatasetWriter({ Path = p; ChannelCapacity = cap }))
+        new HardCaseDatasetWriter({ Path = p; ChannelCapacity = cap },
+            sp.GetRequiredService<ILogger<HardCaseDatasetWriter>>()))
     |> ignore
 
     services.AddSingleton<IHardCaseDatasetWriter>(fun sp ->
@@ -860,7 +861,8 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
         let opts = sp.GetRequiredService<IOptions<HardCaseDatasetOptions>>().Value
         let p   = if String.IsNullOrWhiteSpace(opts.Path) then "datasets/hard-cases.jsonl" else opts.Path
         let cap = if opts.ChannelCapacity <= 0 then 1000 else opts.ChannelCapacity
-        new HardCaseDatasetWriter({ Path = p; ChannelCapacity = cap }))
+        new HardCaseDatasetWriter({ Path = p; ChannelCapacity = cap },
+            sp.GetRequiredService<ILogger<HardCaseDatasetWriter>>()))
     |> ignore
 
     services.AddSingleton<IHardCaseDatasetWriter>(fun sp ->
