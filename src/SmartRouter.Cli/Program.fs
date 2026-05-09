@@ -8,11 +8,54 @@ open Microsoft.Extensions.Hosting
 open Microsoft.Extensions.Options
 open Microsoft.Extensions.Logging
 open Serilog
+open Serilog.Events
 open SmartRouter.Cli.Adapters
 open SmartRouter.Cli.Adapters.CorrelationMiddleware
 open SmartRouter.Cli.Adapters.QueueDispatcher
 open SmartRouter.Cli.CompositionRoot
 open SmartRouter.Cli.Endpoints
+
+// Phase 13 Q8: map string → Serilog LogEventLevel with short aliases.
+let private parseLogLevel (raw: string) : LogEventLevel =
+    match raw.ToLowerInvariant() with
+    | "verbose" | "vrb"                   -> LogEventLevel.Verbose
+    | "debug"   | "dbg"                   -> LogEventLevel.Debug
+    | "information" | "info" | "inf"      -> LogEventLevel.Information
+    | "warning" | "warn" | "wrn"          -> LogEventLevel.Warning
+    | "error"   | "err"                   -> LogEventLevel.Error
+    | "fatal"   | "ftl"                   -> LogEventLevel.Fatal
+    | other ->
+        failwithf
+            "--log-level=%s invalid; valid: verbose|debug|information|warning|error|fatal (or vrb/dbg/info/warn/err/ftl aliases)"
+            other
+
+/// Detect --trace (migration guard) and apply --log-level if present.
+/// Called in BOTH the --retrain branch and the main Kestrel branch.
+let private applyLogLevelFromArgs (args: string array) : unit =
+    // Migration guard: --trace was removed in Phase 13.
+    if args |> Array.contains "--trace" then
+        failwith "--trace flag was removed in Phase 13; use --log-level=debug instead"
+
+    let logLevelArg =
+        args |> Array.tryFindIndex (fun a -> a = "--log-level" || a.StartsWith("--log-level="))
+        |> Option.map (fun idx ->
+            let raw =
+                if args.[idx].StartsWith("--log-level=") then
+                    let v = args.[idx].["--log-level=".Length..]
+                    if v = "" then failwith "--log-level= requires a value"
+                    v
+                elif idx + 1 < args.Length then
+                    let v = args.[idx + 1]
+                    if v.StartsWith("--") then failwith "--log-level requires a value (e.g., debug)"
+                    v
+                else failwith "--log-level requires a value"
+            parseLogLevel raw)
+
+    match logLevelArg with
+    | Some level ->
+        Logging.setLevel level
+        Log.Information("Log level set to {Level} via --log-level CLI flag", level)
+    | None -> ()  // levelSwitch default (Information) set by Logging.fs init
 
 [<EntryPoint>]
 let main args =
@@ -30,6 +73,8 @@ let main args =
                     |> ignore
                 // Configure Serilog from IConfiguration now that appsettings.json is loaded.
                 Logging.configure(retrainBuilder.Configuration)
+                // Phase 13 Q8: apply --log-level flag (or fail on legacy --trace).
+                applyLogLevelFromArgs args
                 // configureWithoutMl skips IEmbedder/IClassifier/RoutingAlgorithmRegistration/ML model checks.
                 // The retrain pipeline needs IFailureDetector + ITeacherLabeler + IHardCaseDatasetWriter only.
                 CompositionRoot.configureWithoutMl retrainBuilder.Services retrainBuilder.Configuration |> ignore
@@ -109,6 +154,8 @@ let main args =
             // Must run AFTER builder creation so IConfiguration (appsettings.json) is available.
             // Pre-init crash window writes to stderr via the outer `with` eprintfn fallback.
             Logging.configure(builder.Configuration)
+            // Phase 13 Q8: apply --log-level flag (or fail on legacy --trace).
+            applyLogLevelFromArgs args
 
             // Wire Serilog as the ASP.NET host logger
             builder.Host.UseSerilog() |> ignore
