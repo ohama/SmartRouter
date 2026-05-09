@@ -525,6 +525,19 @@ let tests =
             let builder = WebApplication.CreateBuilder()
             builder.WebHost.UseUrls("http://127.0.0.1:0") |> ignore
             builder.Services.AddSingleton<IStatsProvider>(qd :> IStatsProvider) |> ignore
+            // Issue #7: /stats endpoint additionally resolves IModelVersionProvider +
+            // ICanaryState. Register lightweight stubs so the wire-shape assertion below
+            // continues to focus on snake_case key presence (not value correctness).
+            let stubVersion =
+                { new SmartRouter.Core.RetrainingPorts.IModelVersionProvider with
+                    member _.CurrentVersion = "ml-test"
+                    member _.CanaryVersion  = ""
+                    member _.Update(_)      = ()
+                    member _.UpdateCanary(_)= () }
+            builder.Services.AddSingleton<SmartRouter.Core.RetrainingPorts.IModelVersionProvider>(stubVersion) |> ignore
+            builder.Services.AddSingleton<SmartRouter.Cli.Adapters.CanaryState.ICanaryState>(
+                SmartRouter.Cli.Adapters.CanaryState.CanaryState(0)
+                :> SmartRouter.Cli.Adapters.CanaryState.ICanaryState) |> ignore
             let app = builder.Build()
             SmartRouter.Cli.Endpoints.Stats.mapEndpoints app
 
@@ -563,7 +576,13 @@ let tests =
                       "avg_latency_ms_60s"
                       "failure_count_total"
                       "fairness_picks_high"
-                      "fairness_picks_low" ]
+                      "fairness_picks_low"
+                      // Issue #7: additive wire fields. Existing consumers ignore
+                      // unknown keys; new consumers can rely on these.
+                      "baseline_model_version"
+                      "canary_model_version"
+                      "canary_percent"
+                      "canary_active" ]
                 for key in requiredKeys do
                     let mutable prop = Unchecked.defaultof<JsonElement>
                     Expect.isTrue (root.TryGetProperty(key, &prop))
