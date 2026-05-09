@@ -664,51 +664,70 @@ The router emits two parallel log streams plus a few small auxiliary files. All 
 
 | Path | Stream | Format | Audience |
 |------|--------|--------|----------|
-| stderr (Serilog Console sink) | Operational | text, structured | live `tail -f` in dev mode; launchd captures it to `~/llm-system/services/logs/smart-router.err` in production |
+| `logs/operational/smart-router-YYYYMMDD.log` | Operational (rolling) | text, structured | primary post-mortem; `tail -f` in production |
+| stderr (Serilog Console sink) | Operational (mirror) | text, structured | launchd captures to `~/llm-system/services/logs/smart-router.err`; mirrors rolling file |
 | `logs/decisions/YYYY-MM-DD.jsonl` | Decision | JSONL (12-field schema in §9.1) | FailureDetector / dashboards / Loop B retraining |
 | `datasets/hard-cases.jsonl` | Training | JSONL (labeled samples) | Loop B input |
 | `datasets/teacher-cap-YYYY-MM-DD.json` | Cap counter | JSON | TeacherLabeler daily cost-cap state |
 | `logs/retraining-rejections.jsonl` | Validator audit | JSONL | post-mortem on rejected retrains |
 | `~/llm-system/services/logs/smart-router.log` | launchd-captured stdout | (mostly empty — OBS-04 stream separation) | crash-time fallback only |
-| `~/llm-system/services/logs/smart-router.err` | launchd-captured stderr | text (whatever Serilog writes) | post-mortem if no rolling file is configured yet |
+| `~/llm-system/services/logs/smart-router.err` | launchd-captured stderr | text | mirrors operational stream; mostly redundant once rolling file is active |
 
-**v1 logging stream model:** Serilog writes structured events to **stderr only** (OBS-04 invariant; stdout is reserved for the application). The launchd plist captures stderr to a flat file at `~/llm-system/services/logs/smart-router.err`. There is no built-in rotation in v1 — the file grows until the operator truncates it (`truncate -s 0 ~/llm-system/services/logs/smart-router.err`) or until Phase 13 ships rolling file sinks (planned: `logs/operational/smart-router-{Date}.log`, 50 MB cap, 30-day retention).
+**Operational rolling files** are written to `logs/operational/` (configurable via `Logging:Directory` in `appsettings.json`). Files roll daily and on a 50 MB size cap:
 
-The DecisionLog stream is **rotated daily by filename** (UTC date in the name); there is no built-in retention in v1 — files accumulate until Phase 13's `LogRetentionService` ships (planned: 90-day retention).
+```
+logs/operational/
+├── smart-router-20260509.log       # daily roll — current day
+├── smart-router-20260509_001.log   # size-roll within the day (50 MB cap)
+├── smart-router-20260508.log       # previous day
+└── ...                              # auto-pruned after 30 days by LogRetentionService
+```
+
+Pattern: `smart-router-{yyyyMMdd}[_{NNN}].log` where `_NNN` suffix appears only when a single day's file exceeds 50 MB.
+
+**Decision JSONL** is rotated daily by filename (UTC date in name) and auto-pruned after 90 days by `LogRetentionService`.
+
+**`smart-router.err`** (launchd stderr capture): Serilog writes to this as a side-effect of the Console sink, but the rolling operational log is the authoritative source. In steady state `smart-router.err` is mostly redundant. Quarterly housekeeping: `truncate -s 0 ~/llm-system/services/logs/smart-router.err`. Serilog continues writing to its own rolling files unaffected.
 
 ### 9.7 Reading the operational log
 
-Each line is a structured Serilog event written via the template `[{Level:u3}] {Message:lj}{NewLine}{Exception}`. Examples:
+Each log line follows the output template:
 
 ```
-[INF] Now listening on: http://127.0.0.1:4000
-[INF] HealthService starting
-[INF] HealthService: Qwen35B reachable
-[INF] HealthService: Qwen122B reachable
-[INF] CanaryService: starting; canary_version=(none)
-[INF] Routing target=Qwen122B reason=ML priority=Low stream=true
-[WRN] HealthService: Qwen122B probe failed (consecutive=1)
-[ERR] StreamAsync: unexpected error writing to response for Qwen122B
+{Timestamp:yyyy-MM-ddTHH:mm:ss.fffzzz} [{Level:u3}] {SourceContext} [{correlation_id}] {Message:lj}
+```
+
+Example lines:
+
+```
+2026-05-09T14:32:11.001+09:00 [INF] Startup [-] SmartRouter starting
+    listen            = http://127.0.0.1:4000
+    routing.algorithm = ml
+    model.version     = v1.0.0
+    canary.version    = (none)
+    ...
+2026-05-09T14:32:11.123+09:00 [INF] SmartRouter.Cli.Adapters.HealthService.HealthService [-] HealthService: Qwen35B reachable (transitioned from down)
+2026-05-09T14:32:11.456+09:00 [INF] SmartRouter.Cli.Endpoints.ChatCompletions [abc12345...] /v1/chat/completions request received
+2026-05-09T14:32:11.789+09:00 [WRN] SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher [abc12345...] QueueDispatcher: 122B queue depth=8 (high water)
+2026-05-09T14:32:12.001+09:00 [ERR] SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient [abc12345...] StreamAsync: unexpected error
        System.Net.Http.HttpRequestException: Connection refused
 ```
 
-The `correlation_id` (32-char hex) injected by `CorrelationMiddleware` is captured into Serilog's `LogContext` per request and is the join key with the JSONL DecisionLog rows. In v1 the operational template does not render `correlation_id` directly — to trace a single request, look up its `correlation_id` in the DecisionLog JSONL first, then grep the Serilog stream for any entries matching that value (Phase 13 expands the template to render `[{correlation_id}]` per line).
+- `[-]` = log not associated with a specific HTTP request (background services, startup, shutdown)
+- `[abc12345...]` = correlation_id (32-char hex) — joinable with the same `correlation_id` field in JSONL DecisionLog
 
 **Common operator queries:**
 
 ```bash
-# Tail the live stderr stream (dev mode)
-dotnet run --project src/SmartRouter.Cli 2>&1 | tee /tmp/smart-router.log
+# Tail the live operational rolling log (cd to WorkingDirectory first)
+tail -f logs/operational/smart-router-$(date +%Y%m%d).log
 
-# Tail launchd-captured stderr (production)
-tail -f ~/llm-system/services/logs/smart-router.err
+# Find all warnings and errors today
+grep -E '\[(WRN|ERR)\]' logs/operational/smart-router-$(date +%Y%m%d).log
 
-# Find all warnings + errors today (launchd)
-grep -E '\[(WRN|ERR)\]' ~/llm-system/services/logs/smart-router.err
-
-# Trace a request across both streams
-CID=$(jq -r 'select(.correlation_id == "abc12345...")' < logs/decisions/$(date +%F).jsonl | head -1 | jq -r .correlation_id)
-echo "DecisionLog rows for $CID:"
+# Trace a specific request by correlation_id (across both streams)
+CID=abc12345
+grep "\[$CID\]" logs/operational/smart-router-*.log
 grep "\"correlation_id\":\"$CID\"" logs/decisions/*.jsonl
 
 # Count requests by target (last 24h)
@@ -716,44 +735,56 @@ jq -r '.target' < logs/decisions/$(date +%F).jsonl | sort | uniq -c
 
 # Count fallback events (last 7 days)
 for d in 0 1 2 3 4 5 6; do
-  date=$(date -v -${d}d +%F 2>/dev/null || date -d "${d} days ago" +%F)
-  count=$(jq 'select(.fallback_used == true)' < logs/decisions/${date}.jsonl 2>/dev/null | wc -l | tr -d ' ')
-  echo "${date}: ${count} fallback events"
+  day=$(date -v -${d}d +%F 2>/dev/null || date -d "${d} days ago" +%F)
+  count=$(jq 'select(.fallback_used == true)' < logs/decisions/${day}.jsonl 2>/dev/null | wc -l | tr -d ' ')
+  echo "${day}: ${count} fallback events"
 done
+
+# Find requests that timed out or were cancelled
+grep "TaskCanceledException\|cancelled\|OperationCanceledException" logs/operational/smart-router-*.log
+
+# Dev mode: tail stderr directly
+dotnet run --project src/SmartRouter.Cli 2>&1 | tee /tmp/smart-router-dev.log
 ```
 
 ### 9.8 Log levels and filtering
 
-Serilog's runtime minimum level is controlled by a `LoggingLevelSwitch`. In v1, the default level is `Information`; the legacy `--trace` boolean flag flips it to `Debug`. Phase 13 replaces `--trace` with `--log-level=enum` (valid values: `verbose | debug | information | warning | error | fatal`).
+Serilog's runtime minimum level is controlled by a `LoggingLevelSwitch`. The default level is `Information`. Override via CLI flag `--log-level`:
+
+```bash
+dotnet run --project src/SmartRouter.Cli -- --log-level=debug
+dotnet run --project src/SmartRouter.Cli -- --log-level=warn
+```
+
+Valid values: `verbose` | `debug` | `information` | `warning` | `error` | `fatal`. Short aliases: `vrb`, `dbg`, `info`, `warn`, `err`, `ftl`. An invalid value fails fast at startup with a descriptive error. The legacy `--trace` flag was removed — use `--log-level=debug` instead (using `--trace` causes a startup error with a migration message).
 
 | Level | Volume | Used for |
 |-------|--------|----------|
 | Verbose / VRB | very low | per-token streaming events; off by default |
-| Debug / DBG | low | per-request prompt-feature extraction; HealthService steady-state probes; queue ticket lifecycle |
-| Information / INF | moderate | per-request routing decisions (note: hot-path); HealthService startup + state-changes; CanaryService promote/rollback; RetrainingService cycle start/end |
-| Warning / WRN | bursty | upstream 502/timeouts (retries handle them); HealthService transitions to unreachable; queue depth high-water; cost cap thresholds; FileSystemWatcher rearm failures |
+| Debug / DBG | low | per-request prompt-feature extraction; endpoint hit signals; queue ticket lifecycle |
+| Information / INF | moderate | HealthService state transitions; CanaryService promote/rollback; RetrainingService cycle start/end; startup + shutdown banners |
+| Warning / WRN | bursty | upstream 502/timeouts; HealthService unreachable transitions; queue high-water; cost cap thresholds; FileSystemWatcher rearm failures |
 | Error / ERR | rare | unhandled exceptions in BackgroundService loops; SSE write failures; teacher labeler malformed responses after retries |
 | Fatal / FTL | should never appear | reserved for unrecoverable host failures |
 
-`appsettings.json:Serilog.MinimumLevel.Default` documents the intended config-driven default but is not yet wired to Serilog's startup binding in v1 (Phase 13 wires `.ReadFrom.Configuration(...)` so the appsettings value takes effect; v1 always boots at `Information` regardless of the appsettings value).
+`appsettings.json:Serilog.MinimumLevel.Default` sets the config-driven default (active, bound via `.ReadFrom.Configuration(...)`). Per-category overrides in `Serilog:MinimumLevel:Override` filter noisy ASP.NET host messages to Warning — tweak as needed.
 
 ### 9.9 Log parameters reference
 
 The following keys in `appsettings.json` control logging behavior:
 
-| Key | Type | Default | Effect (v1) | Effect after Phase 13 |
-|-----|------|---------|-------------|----------------------|
-| `Serilog.MinimumLevel.Default` | string | `"Information"` | (v1: ignored — see §9.8) | active default level |
-| `Serilog.MinimumLevel.Override.{Source}` | string | absent | (v1: ignored) | per-category filter (e.g., `Microsoft.AspNetCore: Warning`) |
-| `Logging.Directory` | string | n/a (Phase 13) | (v1: stderr only) | rolling file sink location |
-| `Logging.RetentionDays` | int | n/a (Phase 13) | n/a | days of operational logs to keep |
-| `DecisionLog.Directory` | string | `"logs/decisions"` | output directory for JSONL DecisionLog | unchanged |
-| `DecisionLog.ChannelCapacity` | int | `10000` | in-memory async-channel buffer for DecisionLog writer | unchanged |
-| `DecisionLog.RetentionDays` | int | n/a (Phase 13) | n/a | days of decision JSONL to keep |
-| CLI flag `--trace` | bool | absent | flips `LoggingLevelSwitch` to Debug | replaced by `--log-level=enum` |
-| CLI flag `--log-level=...` | enum | n/a (Phase 13) | n/a | sets `LoggingLevelSwitch` for the lifetime of the process |
+| Key | Type | Default | Effect |
+|-----|------|---------|--------|
+| `Serilog.MinimumLevel.Default` | string | `"Information"` | Active default log level (bound via ReadFrom.Configuration) |
+| `Serilog.MinimumLevel.Override.{Source}` | string | see appsettings.json | Per-category filter — e.g., `"Microsoft.AspNetCore": "Warning"` suppresses host noise |
+| `Logging.Directory` | string | `"logs/operational"` | Rolling operational log file directory (relative to WorkingDirectory) |
+| `Logging.RetentionDays` | int | `30` | Days of operational log files to retain; LogRetentionService prunes hourly |
+| `DecisionLog.Directory` | string | `"logs/decisions"` | Directory for JSONL DecisionLog files (one per day) |
+| `DecisionLog.ChannelCapacity` | int | `10000` | In-memory async-channel buffer for DecisionLogWriter |
+| `DecisionLog.RetentionDays` | int | `90` | Days of decision JSONL to retain; LogRetentionService prunes hourly |
+| CLI flag `--log-level=...` | enum | absent (defaults to Information) | Sets LoggingLevelSwitch for the lifetime of the process |
 
-In dev mode (`dotnet run`), Serilog writes to the console. In the launchd deployment, it writes to whatever launchd captures stderr into (default: `smart-router.err`). Phase 13 introduces a parallel rolling file sink so post-mortem analysis doesn't require trawling a single growing file.
+Note: the `--trace` flag was removed in Phase 13. Using it causes a startup error directing the operator to `--log-level=debug`.
 
 ---
 
