@@ -15,10 +15,6 @@ open SmartRouter.Cli.Endpoints
 
 [<EntryPoint>]
 let main args =
-    // Configure Serilog BEFORE WebApplication.CreateBuilder so even host startup
-    // logs (e.g., "Now listening on...") go to stderr — OBS-04.
-    Logging.configure ()
-
     try
         try
             // Phase 7: --retrain CLI command — runs the offline labeling pipeline and exits.
@@ -31,6 +27,8 @@ let main args =
                                .SetBasePath(System.IO.Directory.GetCurrentDirectory())
                                .AddJsonFile("appsettings.json", optional = false)
                     |> ignore
+                // Configure Serilog from IConfiguration now that appsettings.json is loaded.
+                Logging.configure(retrainBuilder.Configuration)
                 // configureWithoutMl skips IEmbedder/IClassifier/RoutingAlgorithmRegistration/ML model checks.
                 // The retrain pipeline needs IFailureDetector + ITeacherLabeler + IHardCaseDatasetWriter only.
                 CompositionRoot.configureWithoutMl retrainBuilder.Services retrainBuilder.Configuration |> ignore
@@ -105,6 +103,11 @@ let main args =
 
             let builder = WebApplication.CreateBuilder(args)
 
+            // Configure Serilog from IConfiguration (dual sink: Console stderr + rolling File).
+            // Must run AFTER builder creation so IConfiguration (appsettings.json) is available.
+            // Pre-init crash window writes to stderr via the outer `with` eprintfn fallback.
+            Logging.configure(builder.Configuration)
+
             // Wire Serilog as the ASP.NET host logger
             builder.Host.UseSerilog() |> ignore
 
@@ -163,6 +166,9 @@ let main args =
             app.Run()
             0
         with ex ->
+            // If Logging.configure has already run, this reaches Serilog.
+            // If it failed before configure(), eprintfn ensures launchd captures it in smart-router.err.
+            eprintfn "Fatal: %s" ex.Message
             Log.Fatal(ex, "Host terminated unexpectedly")
             1
     finally
