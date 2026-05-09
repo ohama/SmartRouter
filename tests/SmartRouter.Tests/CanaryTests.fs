@@ -324,11 +324,7 @@ let private startCanaryRouter
                 KeyValuePair("Upstreams:Model35B",  sprintf "http://127.0.0.1:%d" fakePort)
                 KeyValuePair("Upstreams:Model122B", sprintf "http://127.0.0.1:%d" fakePort)
 
-                // ML mode required for canary
-                KeyValuePair("Routing:Algorithm",            "ml")
-                KeyValuePair("Routing:ComplexityThreshold", "3")
                 KeyValuePair("Routing:TimeoutSeconds",       "300")
-                KeyValuePair("Routing:Keywords:0",           "recursive")
                 KeyValuePair("Routing:ML:ModelPath",         "models/router.zip")
                 KeyValuePair("Routing:ML:EmbeddingModelPath","models/embed/bge-m3-int8.onnx")
                 KeyValuePair("Routing:ML:TokenizerPath",     "models/embed/sentencepiece.bpe.model")

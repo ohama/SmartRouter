@@ -80,10 +80,7 @@ let private startApp
         .AddInMemoryCollection([
             KeyValuePair("Upstreams:Model35B",  model35bUrl)
             KeyValuePair("Upstreams:Model122B", model122bUrl)
-            KeyValuePair("Routing:Algorithm",            "heuristic")
-            KeyValuePair("Routing:ComplexityThreshold", "3")
             KeyValuePair("Routing:TimeoutSeconds",       "300")
-            KeyValuePair("Routing:Keywords:0",           "recursive")
             KeyValuePair("Routing:TaskTable:graph_indexing:Model",           "122b")
             KeyValuePair("Routing:TaskTable:graph_indexing:Priority",        "high")
             KeyValuePair("Routing:TaskTable:compiler_debug:Model",           "122b")

@@ -8,12 +8,11 @@ open SmartRouter.Core.Domain
 // which algorithm ran (for DecisionLog.routing_algorithm) and what model_version
 // to log (for DecisionLog.model_version). This record carries all three together.
 //
-// Algorithm   : the chosen function — Heuristic.applyHeuristic OR ML.applyML
+// Algorithm   : the chosen function — always ML.applyML (post Phase 12)
 //               (RoutingAlgorithm is a function-type alias defined in
 //               SmartRouter.Core.Domain — open above brings it into scope.)
-// Name        : "heuristic" | "ml" — appears in JSONL routing_algorithm field
-// ModelVersion: "heuristic-v1" | "ml-v0-placeholder" — appears in JSONL model_version field
-// Phase 6 will redefine ModelVersion for ML to include router.zip's short hash.
+// Name        : "ml" — appears in JSONL routing_algorithm field
+// ModelVersion: short hash of router.zip — appears in JSONL model_version field
 //
 // This type lives in its own file (rather than inside CompositionRoot.fs) so
 // that ChatCompletions.fs (compile pos 14) can reference it: F# compile order
