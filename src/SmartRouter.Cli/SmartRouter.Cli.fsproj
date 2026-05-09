@@ -4,6 +4,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>SmartRouter</AssemblyName>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!--
+      FS3511 — F# state machine fallback warning. The long task {} block in
+      ChatCompletions.fs:172-396 cannot be inlined statically by the .NET 10
+      F# compiler; a dynamic implementation is used instead. Functionally
+      correct; only marginally slower than the inlined form. Suppressing
+      because TreatWarningsAsErrors otherwise blocks Release builds (issue #1).
+      Refactoring the handler to fit the inliner is tracked as a future
+      improvement when the hot path is restructured.
+    -->
+    <NoWarn>$(NoWarn);3511</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <!-- Adapters (Infrastructure) — must precede Endpoints and Program -->
