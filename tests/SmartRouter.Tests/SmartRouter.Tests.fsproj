@@ -20,6 +20,8 @@
     <Compile Include="RetrainingTests.fs" />
     <!-- Phase 9 -->
     <Compile Include="CanaryTests.fs" />
+    <!-- Phase 10 -->
+    <Compile Include="HealthFallbackTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
