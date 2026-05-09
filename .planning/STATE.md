@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 10 — Health/Fallback + graph_indexing no-fallback rule (next: Phase 9 complete; Phase 10 depends on Phase 9 canary infrastructure)
+**Current focus:** Phase 11 — Deployment + Docs (launchd plist, README, production deployment guide)
 
 ## Current Position
 
-Phase: 10 of 11 (Health/Fallback + graph_indexing no-fallback) — IN PROGRESS
-Plan: 2 of 3 in current phase — COMPLETE ✓
-Status: Phase 10 Plan 02 COMPLETE. Implementation: HealthService BackgroundService + /health endpoint + 5 named HttpClients (chain form, retry on non-stream) + QueueDispatcher 3-arg fallback policy (CompleteAsync + StreamAsync) + ChatCompletions pre-flight 503 + shadow-rebind + 11 test construction sites updated. Build: 0/0. Tests: 78 pass + 17 ignored + 0 failed (baseline preserved). SUMMARY: .planning/phases/10-health-fallback-and-graph-indexing-no-fallback/10-02-SUMMARY.md
-Last activity: 2026-05-09 — Phase 10 Plan 2 (COMPLETE).
+Phase: 10 of 11 (Health/Fallback + graph_indexing no-fallback) — COMPLETE ✓
+Plan: 3 of 3 in current phase — COMPLETE ✓
+Status: Phase 10 COMPLETE. Tests: 83 passed + 17 ignored + 0 failed (net +5 from HLTH-04..08). All 5 ROADMAP success criteria for Phase 10 covered by integration tests. SUMMARY: .planning/phases/10-health-fallback-and-graph-indexing-no-fallback/10-03-SUMMARY.md
+Last activity: 2026-05-09 — Phase 10 Plan 3 (COMPLETE). Phase 10 fully done.
 
-Progress: [███████████████████████░] 31 of ~32 plans (phase 9 complete; phase 10 plan 2 of 3 complete)
+Progress: [████████████████████████] 32 of ~32 plans (all phases 1-10 complete; phase 11 deployment+docs remaining)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 29 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing + 6 failure-detection + 3 retraining-loop + 3 canary-deployment)
+- Total plans completed: 32 (3 foundation + 2 streaming + 3 concurrency-gate + 3 ml-seam + 3 decision-logging + 3 real-ml-routing + 6 failure-detection + 3 retraining-loop + 3 canary-deployment + 3 health-fallback)
 - Average duration: ~7 min
-- Total execution time: ~158 min
+- Total execution time: ~198 min
 
 **By Phase:**
 
@@ -36,6 +36,7 @@ Progress: [███████████████████████
 | 07-failure-detection-and-teacher-labeling | 6/6 | ~50 min | ~8 min |
 | 08-retraining-loop | 3/3 | ~32 min | ~11 min |
 | 09-canary-deployment | 3/3 | ~38 min | ~13 min |
+| 10-health-fallback | 3/3 | ~40 min | ~13 min |
 
 **Recent Trend:**
 - Last 5 plans: 08-01 (~8 min), 08-02 (~7 min), 08-03 (~17 min), 09-01 (~8 min)
@@ -186,6 +187,11 @@ Recent decisions affecting current work:
 - 10-02 Task 2a: 5 named HttpClients via .ConfigureHttpClient chain (forbidden 2-arg form replaced); -stream clients have NO retry handler; non-stream clients use AddResilienceHandler with shouldHandle 5xx + transient (NOT 4xx); open System.Threading.Tasks required for ValueTask in retry predicate; HealthService() needs 'new' keyword (BackgroundService: IDisposable)
 - 10-02 Task 2b: QueueDispatcher fallback in BOTH CompleteAsync + StreamAsync (taskSeq yield-and-terminate); QwenUpstreamClient.resolveProbe stream-aware (4-way map: target x bool); ChatCompletions Option B early-return + shadow-rebind (NOT wrap-in-else); 5+ existing decisionLogger.Log calls auto-pickup fallback flag from rebound shadow variable
 - 10-02 Task 3: 11 test construction sites updated for QueueDispatcher 3-arg signature; alwaysReachableProbe stub used as default fake; AutoRollbackEnabled=true (10-01) now active; CanaryWatchdog rolling-60s metric becomes meaningful when REL-03 fires real fallback_used=true records
+- 10-03: acquireDeadPort uses TcpListener(Loopback, 0) start-then-stop (not privileged port 1 or hard-coded 65530) — OS-allocated guaranteed-unused port, no TIME_WAIT since no connections accepted
+- 10-03: Fake upstreams always return 200 + model-id JSON for GET /v1/models — neutralizes QwenUpstreamClient lazy probe (Lazy<Task<Result>>) interference with callCount assertions
+- 10-03: HLTH-06 elapsed threshold is >= 400ms (not >= 1000ms) — Polly ±50% jitter on 1s base can produce ~500ms; 400ms proves retry happened without flaking on high-jitter runs
+- 10-03: HLTH-05 body read uses ResponseHeadersRead + exception catch — Kestrel early-return 503 closes TCP before chunked terminal frame; status code 503 is the authoritative assertion
+- 10-03: All 5 HLTH tests pass: 83 passed, 17 ignored, 0 failed (net +5 from Phase 9 baseline of 78). Phase 10 COMPLETE.
 
 ### Pending Todos
 
@@ -199,6 +205,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-09T01:35:27Z
-Stopped at: Phase 10 Plan 2 COMPLETE — HealthService + /health endpoint + 5-named-HttpClient retry policy + QueueDispatcher/ChatCompletions fallback gates. Build: 0/0. Tests: 78 pass + 17 ignored, 0 failed. Phase 10 Plan 3 (HealthFallbackTests.fs) is the next milestone gate.
+Last session: 2026-05-09
+Stopped at: Phase 10 Plan 3 COMPLETE — HealthFallbackTests.fs (HLTH-04..08). Build: 0/0. Tests: 83 passed + 17 ignored + 0 failed. Phase 10 fully done. Next: Phase 11 (Deployment + Docs).
 Resume file: None
