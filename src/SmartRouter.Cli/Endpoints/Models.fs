@@ -9,6 +9,7 @@ open System.Threading.Tasks
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.Logging
 open Microsoft.Extensions.Options
 open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
@@ -62,6 +63,7 @@ let mapEndpoints (app: WebApplication) =
         "/v1/models",
         Func<HttpContext, Task>(fun ctx ->
             task {
+                let logger  = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Models")
                 let probe   = ctx.RequestServices.GetRequiredService<IHealthProbe>()
                 let opts    = ctx.RequestServices.GetRequiredService<IOptions<UpstreamOptions>>().Value
                 let factory = ctx.RequestServices.GetRequiredService<IHttpClientFactory>()
@@ -72,11 +74,16 @@ let mapEndpoints (app: WebApplication) =
 
                 // L11 + research §2 — IsReachable is a sync fast-path. If an upstream is
                 // already known-down, skip its fetch entirely (don't burn the 5s timeout).
+                let r35  = probe.IsReachable(Qwen35B)
+                let r122 = probe.IsReachable(Qwen122B)
+                let upstreamsReachable = (if r35 then 1 else 0) + (if r122 then 1 else 0)
+                logger.LogDebug("/v1/models hit; upstreams_reachable={N}", upstreamsReachable)
+
                 let task35  =
-                    if probe.IsReachable(Qwen35B)  then fetchModels client opts.Model35B  ct
+                    if r35  then fetchModels client opts.Model35B  ct
                     else Task.FromResult []
                 let task122 =
-                    if probe.IsReachable(Qwen122B) then fetchModels client opts.Model122B ct
+                    if r122 then fetchModels client opts.Model122B ct
                     else Task.FromResult []
 
                 let! both = Task.WhenAll([| task35; task122 |])

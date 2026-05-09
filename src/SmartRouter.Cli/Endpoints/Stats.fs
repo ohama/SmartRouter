@@ -5,6 +5,7 @@ open System.Threading.Tasks
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.Logging
 open SmartRouter.Cli.Adapters.QueueDispatcher
 open SmartRouter.Cli.Adapters.Json
 
@@ -42,8 +43,12 @@ let private toWire (s: StatsSnapshot) : StatsWire =
 let mapEndpoints (app: WebApplication) =
     app.MapGet("/stats", Func<HttpContext, Task>(fun ctx ->
         task {
+            let logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Stats")
             let stats = ctx.RequestServices.GetRequiredService<IStatsProvider>()
             let wire = toWire (stats.GetSnapshot())
+            logger.LogDebug(
+                "/stats hit; queue_depth_high={H} active_122b={A}",
+                wire.queue_depth_122b_high, wire.active_122b)
             ctx.Response.ContentType <- "application/json"
             do! ctx.Response.WriteAsJsonAsync(wire, jsonOptions, ctx.RequestAborted)
         })) |> ignore

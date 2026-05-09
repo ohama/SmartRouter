@@ -4,6 +4,7 @@ open System
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.Logging
 open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
 open SmartRouter.Cli.Adapters.Json   // jsonOptions
@@ -17,6 +18,8 @@ let mapEndpoints (app: WebApplication) =
         "/health",
         Func<HttpContext, System.Threading.Tasks.Task>(fun ctx ->
             task {
+                let logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Health")
+                logger.LogDebug("/health hit; method={Method}", ctx.Request.Method)
                 let probe = ctx.RequestServices.GetRequiredService<IHealthProbe>()
                 let r35  = probe.IsReachable(Qwen35B)
                 let r122 = probe.IsReachable(Qwen122B)
