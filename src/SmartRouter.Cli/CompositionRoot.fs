@@ -423,7 +423,8 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         // Defensive defaults if config keys absent or blank
         let dir = if String.IsNullOrWhiteSpace(opts.Directory) then "logs/decisions" else opts.Directory
         let cap = if opts.ChannelCapacity <= 0 then 10000 else opts.ChannelCapacity
-        new DecisionLogWriter({ Directory = dir; ChannelCapacity = cap }))
+        new DecisionLogWriter({ Directory = dir; ChannelCapacity = cap },
+            sp.GetRequiredService<ILogger<DecisionLogWriter>>()))
     |> ignore
 
     services.AddSingleton<IDecisionLogger>(fun sp ->
@@ -787,7 +788,8 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
         let opts = sp.GetRequiredService<IOptions<DecisionLogOptions>>().Value
         let dir = if String.IsNullOrWhiteSpace(opts.Directory) then "logs/decisions" else opts.Directory
         let cap = if opts.ChannelCapacity <= 0 then 10000 else opts.ChannelCapacity
-        new DecisionLogWriter({ Directory = dir; ChannelCapacity = cap }))
+        new DecisionLogWriter({ Directory = dir; ChannelCapacity = cap },
+            sp.GetRequiredService<ILogger<DecisionLogWriter>>()))
     |> ignore
 
     services.AddSingleton<IDecisionLogger>(fun sp ->

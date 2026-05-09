@@ -8,7 +8,7 @@ open System.Text.Json.Serialization
 open System.Threading
 open System.Threading.Channels
 open Microsoft.Extensions.Hosting
-open Serilog
+open Microsoft.Extensions.Logging
 open SmartRouter.Cli.Adapters.DecisionLogger
 
 /// Options — bound from appsettings.json "DecisionLog" section.
@@ -23,7 +23,7 @@ type DecisionLogOptions =
 ///
 /// Channel is bounded with BoundedChannelFullMode.DropWrite — newest entry dropped and
 /// a Serilog warning emitted to stderr. Never blocks the request hot path.
-type DecisionLogWriter(options: DecisionLogOptions) =
+type DecisionLogWriter(options: DecisionLogOptions, logger: ILogger<DecisionLogWriter>) =
     inherit BackgroundService()
 
     // Bounded channel — DropWrite on overflow (per LOG-02 constraint).
@@ -46,10 +46,10 @@ type DecisionLogWriter(options: DecisionLogOptions) =
         o
 
     /// Enqueue without blocking. Called from the hot request path.
-    /// (Pitfall P4: log Serilog warning on overflow — never silent.)
+    /// (Pitfall P4: log warning on overflow — never silent.)
     member _.Enqueue(entry: DecisionLog) : unit =
         if not (channel.Writer.TryWrite(entry)) then
-            Log.Warning(
+            logger.LogWarning(
                 "decision log channel full; dropped 1 decision; check disk I/O (correlation_id={CorrelationId})",
                 entry.correlation_id)
 
@@ -90,11 +90,11 @@ type DecisionLogWriter(options: DecisionLogOptions) =
                         sw.WriteLine(line)
                         sw.Flush()   // per-line OS write; atomic for short lines under PIPE_BUF
                     with ex ->
-                        Log.Error(ex, "DecisionLogWriter: write failed for correlation_id={Cid}", entry.correlation_id)
+                        logger.LogError(ex, "DecisionLogWriter: write failed for correlation_id={Cid}", entry.correlation_id)
             with
             | :? OperationCanceledException -> ()   // graceful shutdown via stoppingToken
             | :? ChannelClosedException     -> ()   // graceful shutdown via TryComplete()
-            | ex -> Log.Error(ex, "DecisionLogWriter: writer loop crashed")
+            | ex -> logger.LogError(ex, "DecisionLogWriter: writer loop crashed")
 
             // Drain remaining items after cancellation (Pitfall P2 — flush in-flight entries).
             let mutable more = true
@@ -109,7 +109,7 @@ type DecisionLogWriter(options: DecisionLogOptions) =
                         sw.WriteLine(JsonSerializer.Serialize(entry, jsonOpts))
                         sw.Flush()
                     with ex ->
-                        Log.Warning(ex, "DecisionLogWriter: drain write failed")
+                        logger.LogWarning(ex, "DecisionLogWriter: drain write failed")
                 | false, _ -> more <- false
 
             // Dispose the StreamWriter cleanly (Pitfall P3 — no handle leak).
