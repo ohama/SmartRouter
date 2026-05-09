@@ -280,7 +280,9 @@ let handler
                 // Transfer-Encoding: chunked is applied automatically by Kestrel when
                 // Content-Length is absent. Do NOT set Content-Length or Transfer-Encoding.
 
-                logger.LogInformation(
+                // Hot-path: same routing decision is recorded in JSONL DecisionLog at INFO-equivalent.
+                // Operational log keeps this at DEBUG to avoid stderr duplication at default level.
+                logger.LogDebug(
                     "Routing target={Target} reason={Reason} priority={Priority} stream=true",
                     decision.Target, decision.Reason, decision.Priority)
 
@@ -365,7 +367,9 @@ let handler
 
             else
                 // ── Non-streaming branch (unchanged from Phase 1) ────────────────────
-                logger.LogInformation(
+                // Hot-path: same routing decision is recorded in JSONL DecisionLog at INFO-equivalent.
+                // Operational log keeps this at DEBUG to avoid stderr duplication at default level.
+                logger.LogDebug(
                     "Routing target={Target} reason={Reason} priority={Priority}",
                     decision.Target, decision.Reason, decision.Priority)
 
