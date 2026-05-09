@@ -90,9 +90,70 @@ When `models/router-canary.zip` is dropped into the models directory, a `FileSys
 - Two `mlx_lm.server` instances running:
   - Qwen 3.6 35B at `http://127.0.0.1:8000`
   - Qwen 3.5 122B at `http://127.0.0.1:8001`
-- For ML routing (default): bge-m3 int8 ONNX files in `models/embed/`
+- For ML routing (always-on as of Phase 12): bge-m3 int8 ONNX files in `models/embed/`
+- Python `huggingface_hub` package (for the `hf` CLI used by the model download script)
 
 The router does not start or manage the `mlx_lm.server` processes. They must be running independently (via launchd or manually) before the router starts probing them.
+
+### 3.1 First-time setup — ML embedding files (mandatory)
+
+Smart-router uses bge-m3 int8 embeddings for ML routing. **Two files must exist on disk before `dotnet run`** or the router exits at startup with a fatal log:
+
+```
+[FTL] Required ML embedding files missing:
+        models/embed/bge-m3-int8.onnx
+        models/embed/sentencepiece.bpe.model
+```
+
+Fetch them once with the helper script:
+
+```bash
+./scripts/download-models.sh
+```
+
+This downloads `Teradata/bge-m3` from HuggingFace via the `hf` CLI (~542 MB int8 ONNX + ~5 MB SentencePiece tokenizer) and places them at:
+
+- `models/embed/bge-m3-int8.onnx`
+- `models/embed/sentencepiece.bpe.model`
+- `models/embed/tokenizer.json` (kept for tokenizer flexibility; harmless if unused)
+
+Prerequisites for the script:
+
+```bash
+pip install -U huggingface_hub
+hf --version   # must succeed; see issue #5 if you have legacy huggingface-cli
+```
+
+### 3.2 Where to put the `models/` directory
+
+The router resolves model paths relative to its **process working directory**, not the binary location. Three deployment modes:
+
+| Mode | CWD | Where `models/` must live |
+|---|---|---|
+| `dotnet run --project src/SmartRouter.Cli` from repo root | `src/SmartRouter.Cli/` | symlink: `ln -s ../../models src/SmartRouter.Cli/models` |
+| `dotnet run --project src/SmartRouter.Cli` from `src/SmartRouter.Cli/` | `src/SmartRouter.Cli/` | place `models/` directly in `src/SmartRouter.Cli/models/` |
+| launchd-managed install (`scripts/deploy.sh`) | `~/llm-system/services/smart-router/` | the deploy script copies `models/` into the install dir |
+
+The simplest path for local dev is the symlink — `download-models.sh` writes to repo-root `models/`, and the symlink lets the running process resolve it. Issue #9 tracks making this CWD-independent (auto-resolve via `AppContext.BaseDirectory` walk-up); until then, the symlink is the path of least resistance.
+
+### 3.3 Smoke-test that setup is complete
+
+```bash
+ls -lh models/embed/bge-m3-int8.onnx models/embed/sentencepiece.bpe.model
+# expected: both files exist (~542 MB and ~5 MB)
+
+dotnet build -c Release src/SmartRouter.Cli/SmartRouter.Cli.fsproj
+# expected: 0 errors, 0 warnings
+
+dotnet run --project src/SmartRouter.Cli
+# expected (within ~3s):
+#   [INF] Now listening on: http://127.0.0.1:4000
+#   [INF] HealthService: Qwen35B reachable (transitioned from down)   (if 35B is up)
+#   [INF] HealthService: Qwen122B reachable (transitioned from down)  (if 122B is up)
+#   [INF] SmartRouter starting ...                                    (startup banner)
+```
+
+If startup fails with `Required ML embedding files missing`, re-check § 3.1 and § 3.2.
 
 ---
 
