@@ -488,7 +488,7 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
     services.AddSingleton<FailureDetector>(fun sp ->
         let opts = sp.GetRequiredService<IOptions<DecisionLogOptions>>().Value
         let dir = if String.IsNullOrWhiteSpace(opts.Directory) then "logs/decisions" else opts.Directory
-        FailureDetector(dir))
+        FailureDetector(dir, sp.GetRequiredService<ILogger<FailureDetector>>()))
     |> ignore
 
     services.AddSingleton<IFailureDetector>(fun sp ->
@@ -839,7 +839,7 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
     services.AddSingleton<FailureDetector>(fun sp ->
         let opts = sp.GetRequiredService<IOptions<DecisionLogOptions>>().Value
         let dir = if String.IsNullOrWhiteSpace(opts.Directory) then "logs/decisions" else opts.Directory
-        FailureDetector(dir))
+        FailureDetector(dir, sp.GetRequiredService<ILogger<FailureDetector>>()))
     |> ignore
 
     services.AddSingleton<IFailureDetector>(fun sp ->

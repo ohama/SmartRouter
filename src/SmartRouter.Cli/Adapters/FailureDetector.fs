@@ -6,7 +6,7 @@ open System.Text.Json
 open System.Text.Json.Serialization
 open System.Threading
 open System.Threading.Tasks
-open Serilog
+open Microsoft.Extensions.Logging
 open SmartRouter.Core.RetrainingPorts
 open SmartRouter.Cli.Adapters.DecisionLogger
 
@@ -20,7 +20,7 @@ open SmartRouter.Cli.Adapters.DecisionLogger
 /// Phase 10 forward-link: when fallback_used flips to true, this code immediately
 /// produces real hard cases — no Phase 7 changes needed. Until then, the empty
 /// result is logged at Information level so Phase 8's empty-loop is visible.
-type FailureDetector(logsDirectory: string) =
+type FailureDetector(logsDirectory: string, logger: ILogger<FailureDetector>) =
 
     // JSON options must match DecisionLogWriter's serializer:
     //   - PropertyNamingPolicy.SnakeCaseLower → matches snake_case JSONL field names
@@ -54,14 +54,14 @@ type FailureDetector(logsDirectory: string) =
                 if entry.fallback_used then Some (toHardCase entry)
                 else None
             with ex ->
-                Log.Warning(ex, "FailureDetector: skipping malformed JSONL line in {Dir}", logsDirectory)
+                logger.LogWarning(ex, "FailureDetector: skipping malformed JSONL line in {Dir}", logsDirectory)
                 None
 
     interface IFailureDetector with
         member _.ExtractHardCases(_ct: CancellationToken) : Task<HardCase list> =
             task {
                 if not (Directory.Exists logsDirectory) then
-                    Log.Information(
+                    logger.LogInformation(
                         "FailureDetector: directory {Dir} does not exist; returning 0 hard cases",
                         logsDirectory)
                     return []
@@ -76,15 +76,15 @@ type FailureDetector(logsDirectory: string) =
                                 |> Array.toList
                                 |> List.choose tryParseLine
                             with ex ->
-                                Log.Warning(ex, "FailureDetector: failed to read {Path}", path)
+                                logger.LogWarning(ex, "FailureDetector: failed to read {Path}", path)
                                 [])
 
                     if List.isEmpty hardCases then
-                        Log.Information(
+                        logger.LogInformation(
                             "FailureDetector: 0 hard cases found in {Dir} across {N} JSONL file(s); fallback_used is always false until Phase 10 ships. Run scripts/seed-hard-cases.fsx to seed synthetic data.",
                             logsDirectory, files.Length)
                     else
-                        Log.Information(
+                        logger.LogInformation(
                             "FailureDetector: extracted {Count} hard case(s) from {N} JSONL file(s) in {Dir}",
                             List.length hardCases, files.Length, logsDirectory)
 
