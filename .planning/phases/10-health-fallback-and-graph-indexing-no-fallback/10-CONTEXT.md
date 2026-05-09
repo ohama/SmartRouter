@@ -156,10 +156,10 @@ Phase 10 creates ONE new adapter, ONE new endpoint, modifies a small set of exis
 - `src/SmartRouter.Cli/SmartRouter.Cli.fsproj` (add HealthService.fs + Health.fs Compile entries)
 - `tests/SmartRouter.Tests/QueueTests.fs` + `tests/SmartRouter.Tests/LoadTests.fs` (add FakeHealthProbe to QueueDispatcher constructor sites, listed below)
 
-**QueueDispatcher constructor cascade (12 sites):**
-- `src/SmartRouter.Cli/CompositionRoot.fs:347` (production)
-- `tests/SmartRouter.Tests/LoadTests.fs:75, 111`
-- `tests/SmartRouter.Tests/QueueTests.fs:130, 168, 234, 302, 350, 397, 416, 445, 512`
+**QueueDispatcher constructor cascade (11 test sites + 1 production = 12 total):**
+- `src/SmartRouter.Cli/CompositionRoot.fs:347` (1 production site)
+- `tests/SmartRouter.Tests/LoadTests.fs:75, 111` (2 test sites)
+- `tests/SmartRouter.Tests/QueueTests.fs:130, 168, 234, 302, 350, 397, 416, 445, 512` (9 test sites)
 
 Each test file gets an `let alwaysReachableProbe = { new IHealthProbe with member _.IsReachable _ = true; member _.IsReachableAsync(_,_) = Task.FromResult true; member _.LastProbedAt _ = DateTimeOffset.MinValue }` helper at the top, used everywhere.
 
