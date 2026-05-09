@@ -239,6 +239,21 @@ let main args =
                 app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup")
             bannerLogger.LogInformation("{Banner}", startupBanner)
 
+            // Phase 13 — shutdown banner via ApplicationStopping.
+            // Fires synchronously on graceful shutdown; Logging.shutdown() in the outer
+            // finally block flushes Serilog so the banner reaches the rolling file sink.
+            let lifetime       = app.Services.GetRequiredService<IHostApplicationLifetime>()
+            let shutdownLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Shutdown")
+            lifetime.ApplicationStopping.Register(fun () ->
+                let statsProvider = app.Services.GetRequiredService<IStatsProvider>()
+                let snap          = statsProvider.GetSnapshot()
+                let inFlight      = snap.Active35B + snap.Active122B
+                let queueDepth    = snap.QueueDepth122BHigh + snap.QueueDepth122BLow
+                shutdownLogger.LogInformation(
+                    "SmartRouter stopping; in-flight={InFlight} queue.depth.total={QueueDepth} queue.depth.high={H} queue.depth.low={L}",
+                    inFlight, queueDepth, snap.QueueDepth122BHigh, snap.QueueDepth122BLow))
+            |> ignore
+
             app.Run()
             0
         with ex ->
