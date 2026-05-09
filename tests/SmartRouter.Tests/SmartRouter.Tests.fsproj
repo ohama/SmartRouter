@@ -23,6 +23,8 @@
     <Compile Include="HealthFallbackTests.fs" />
     <!-- Phase 11 -->
     <Compile Include="ModelsTests.fs" />
+    <!-- Phase 13 -->
+    <Compile Include="LogRotationTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
