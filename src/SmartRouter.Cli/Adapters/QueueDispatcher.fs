@@ -69,7 +69,10 @@ type private Ticket =
 ///   task {} finally: sem122b.Release() is synchronous — always legal in task {} finally.
 ///   taskSeq {} finally: sem122b.Release() is synchronous — legal in taskSeq {} finally too.
 ///   Neither uses do! in finally (FS0750 / Phase-2 pitfall does not apply here).
-type QueueDispatcher(inner: IUpstreamClient, options: QueueDispatcherOptions) =
+type QueueDispatcher
+    ( inner       : IUpstreamClient
+    , options     : QueueDispatcherOptions
+    , healthProbe : IHealthProbe ) =
 
     // Startup validation — correctness invariant for current Qwen rig.
     do
@@ -230,6 +233,34 @@ type QueueDispatcher(inner: IUpstreamClient, options: QueueDispatcherOptions) =
         ///        AFTER slot granted) → upstream call → Release in finally.
         member _.CompleteAsync req decision ct =
             task {
+                // ── Phase 10: Fallback policy (BEFORE existing match) ────────────────
+                let isGraphIndexing =
+                    req.Task
+                    |> Option.map (fun t -> t.Trim().ToLowerInvariant())
+                    |> (=) (Some "graph_indexing")
+
+                let decision =   // shadows the parameter
+                    if decision.Target = Qwen122B
+                       && not (healthProbe.IsReachable(Qwen122B))
+                       && not isGraphIndexing then
+                        Log.Warning(
+                            "QueueDispatcher.CompleteAsync: 122B unreachable; rerouting task={Task} to 35B (fallback)",
+                            req.Task)
+                        { decision with
+                            Target     = Qwen35B
+                            Reason     = FallbackTo35B
+                            IsFallback = true }
+                    else
+                        decision
+
+                // graph_indexing-must-fail short-circuit (defensive — ChatCompletions pre-flight should
+                // have already returned 503; this catches non-HTTP callers like integration tests).
+                if decision.Target = Qwen122B
+                   && isGraphIndexing
+                   && not (healthProbe.IsReachable(Qwen122B)) then
+                    return Error GraphIndexingMustFail
+                else
+
                 match decision.Target with
                 | Qwen35B ->
                     // 35B bypass: first line, no gate.
@@ -280,6 +311,34 @@ type QueueDispatcher(inner: IUpstreamClient, options: QueueDispatcherOptions) =
         /// Release fires when the consumer disposes the enumerator (ChatCompletions.fs disposes
         /// in all three exit arms: normal, cancel, error — verified in Phase 2 VERIFICATION.md).
         member _.StreamAsync req decision ct =
+            let isGraphIndexing =
+                req.Task
+                |> Option.map (fun t -> t.Trim().ToLowerInvariant())
+                |> (=) (Some "graph_indexing")
+
+            let decision =   // shadows the parameter (same shape as CompleteAsync)
+                if decision.Target = Qwen122B
+                   && not (healthProbe.IsReachable(Qwen122B))
+                   && not isGraphIndexing then
+                    Log.Warning(
+                        "QueueDispatcher.StreamAsync: 122B unreachable; rerouting task={Task} to 35B (fallback)",
+                        req.Task)
+                    { decision with
+                        Target     = Qwen35B
+                        Reason     = FallbackTo35B
+                        IsFallback = true }
+                else
+                    decision
+
+            // graph_indexing-must-fail: yield single Error and end the sequence.
+            if decision.Target = Qwen122B
+               && isGraphIndexing
+               && not (healthProbe.IsReachable(Qwen122B)) then
+                taskSeq {
+                    yield Error GraphIndexingMustFail
+                }
+            else
+
             match decision.Target with
             | Qwen35B ->
                 // 35B bypass: no gate.

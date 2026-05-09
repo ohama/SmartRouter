@@ -143,10 +143,20 @@ type QwenUpstreamClient(httpFactory: IHttpClientFactory, opts: IOptions<Upstream
         Lazy<Task<Result<string, RouterError>>>(
             fun () -> probeModelIdAsync httpFactory "upstream122b" opts.Value.Model122B)
 
-    let resolveProbe (target: ModelId) =
-        match target with
-        | Qwen35B  -> probe35b,  "upstream35b",  opts.Value.Model35B
-        | Qwen122B -> probe122b, "upstream122b", opts.Value.Model122B
+    let resolveClientName (target: ModelId) (stream: bool) =
+        match target, stream with
+        | Qwen35B,  false -> "upstream35b"
+        | Qwen35B,  true  -> "upstream35b-stream"
+        | Qwen122B, false -> "upstream122b"
+        | Qwen122B, true  -> "upstream122b-stream"
+
+    let resolveProbe (target: ModelId) (stream: bool) =
+        let clientName = resolveClientName target stream
+        let url, probe =
+            match target with
+            | Qwen35B  -> opts.Value.Model35B,  probe35b
+            | Qwen122B -> opts.Value.Model122B, probe122b
+        probe, clientName, url
 
     /// Non-streaming POST to upstream /v1/chat/completions.
     /// 1. Forces the lazy /v1/models probe to resolve the upstream local-path model id.
@@ -156,7 +166,7 @@ type QwenUpstreamClient(httpFactory: IHttpClientFactory, opts: IOptions<Upstream
     member _.CompleteAsync (req: RouterRequest) (decision: RoutingDecision) (ct: CancellationToken) : Task<Result<string, RouterError>> =
         task {
             let target = decision.Target
-            let probe, clientName, upstreamUrl = resolveProbe target
+            let probe, clientName, upstreamUrl = resolveProbe target false   // non-stream
 
             // 1. Resolve upstream model id (lazy probe — fires at most once per process per upstream)
             let! probeResult = probe.Value
@@ -236,7 +246,7 @@ type QwenUpstreamClient(httpFactory: IHttpClientFactory, opts: IOptions<Upstream
     member _.StreamAsync (req: RouterRequest) (decision: RoutingDecision) (ct: CancellationToken) : IAsyncEnumerable<Result<string, RouterError>> =
         taskSeq {
             let target = decision.Target
-            let probe, clientName, upstreamUrl = resolveProbe target
+            let probe, clientName, upstreamUrl = resolveProbe target true    // stream
 
             // 1. Resolve upstream model id (lazy probe — fires at most once per process per upstream).
             let! probeResult = probe.Value

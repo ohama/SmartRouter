@@ -225,7 +225,49 @@ let handler
             decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started None "unknown" (sprintf "error:%A" e) false)
 
         | Ok decision ->
+            // ── Phase 10: pre-flight + fallback rebind (BEFORE SSE headers / stream branch) ─
+            let healthProbe = ctx.RequestServices.GetRequiredService<IHealthProbe>()
+            let isGraphIndexing =
+                req.Task
+                |> Option.map (fun t -> t.Trim().ToLowerInvariant())
+                |> (=) (Some "graph_indexing")
+            let isGraphIndexingFallback =
+                decision.Target = Qwen122B
+                && isGraphIndexing
+                && not (healthProbe.IsReachable(Qwen122B))
 
+            if isGraphIndexingFallback then
+                // graph_indexing-must-fail: HTTP 503 + structured error JSON, BEFORE any SSE headers.
+                // fallback_used = false (this is a hard error, not a fallback).
+                ctx.Response.StatusCode  <- 503
+                ctx.Response.ContentType <- "application/json"
+                let body =
+                    {| error = {| message = "Task 'graph_indexing' requires Qwen122B which is currently unreachable; fallback policy does not apply for graph_indexing."
+                                  ``type`` = "model_unavailable"
+                                  correlation_id = correlationId |} |}
+                do! ctx.Response.WriteAsJsonAsync(body, jsonOptions, ctx.RequestAborted)
+                let reason = formatReason decision.Reason + ";graph_indexing_must_fail"
+                decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) reason false)
+                return ()   // EARLY-RETURN: skip the rest of the Ok arm
+            else
+                ()   // fall through to the rebind + existing body
+
+            // ── Phase 10: 35B reroute rebind (transparent fallback) ──────────────────
+            let decision =   // shadows the parameter
+                if decision.Target = Qwen122B
+                   && not isGraphIndexing
+                   && not (healthProbe.IsReachable(Qwen122B)) then
+                    Log.Warning(
+                        "ChatCompletions: 122B unreachable; rerouting task={Task} to 35B (fallback)",
+                        req.Task)
+                    { decision with
+                        Target     = Qwen35B
+                        Reason     = FallbackTo35B
+                        IsFallback = true }
+                else
+                    decision
+
+            // ── existing body UNCHANGED from here onwards ─────────────────────────────
             if req.Stream then
                 // ── SSE streaming branch ──────────────────────────────────────────────
                 // STRM-04 / PITFALL-6: Set all SSE headers BEFORE writing any body bytes.

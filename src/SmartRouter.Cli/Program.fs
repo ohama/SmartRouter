@@ -199,6 +199,8 @@ let main args =
             Stats.mapEndpoints app
             // Register GET /canary + POST /canary/{promote,rollback,enable} — Phase 9
             Canary.mapEndpoints app
+            // Register GET /health — Phase 10 (API-05)
+            SmartRouter.Cli.Endpoints.Health.mapEndpoints app
 
             app.Run()
             0
