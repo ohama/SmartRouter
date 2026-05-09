@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 ## Current Position
 
 Phase: 12 of 12 (Heuristic Routing Removal)
-Plan: 2 of 6 in current phase — COMPLETE ✓
-Status: Phase 12 Plan 2 COMPLETE. Cli rewired: configureRequestPipeline + configureWithoutMl split; routingAlgoStr gone; heuristic match arm gone; --routing-algorithm flag deleted; --retrain calls configureWithoutMl; appsettings.json cleaned. Cli + Core build green. Tests still broken (12-03/04/05 fix). SUMMARY: 12-02-SUMMARY.md
-Last activity: 2026-05-09 — Phase 12 Plan 2 (COMPLETE).
+Plan: 4 of 6 in current phase — COMPLETE ✓ (Wave 3, parallel track)
+Status: Phase 12 Plan 4 COMPLETE. MLRoutingTests.fs pruned: open Heuristic removed, 3 heuristic tests deleted (test count 12→9), all Routing:Algorithm config key entries removed, zero heuristic references remain. Build clean. SUMMARY: 12-04-SUMMARY.md
+Last activity: 2026-05-09 — Phase 12 Plan 4 (COMPLETE). Plans 2, 4 done; Plans 3, 5, 6 pending.
 
 Progress: [███████████████████████████░░░░] 37 of 41 plans
 
@@ -226,5 +226,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-05-09
-Stopped at: Phase 12 Plan 2 COMPLETE. Cli rewired: configureRequestPipeline + configureWithoutMl split; --routing-algorithm flag deleted; Cli + Core green. 3 commits: 2e33bf6, 18ccfd9, 65d624a.
+Stopped at: Phase 12 Plan 4 COMPLETE (Wave 3 parallel). MLRoutingTests.fs pruned: 3 heuristic tests deleted, open Heuristic removed, all Routing:Algorithm keys removed. 1 commit: e8bd311. Plans 12-03, 12-05 still pending (parallel Wave 3).
 Resume file: None
