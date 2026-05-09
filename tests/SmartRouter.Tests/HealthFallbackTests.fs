@@ -17,7 +17,9 @@ open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.DependencyInjection.Extensions
 open Microsoft.Extensions.Logging
+open Microsoft.Extensions.Options
 
 // ── Fake upstream ─────────────────────────────────────────────────────────────
 //
@@ -70,17 +72,14 @@ let private startTestRouter
     let testBuilder = WebApplication.CreateBuilder()
     testBuilder.WebHost.UseUrls("http://127.0.0.1:0") |> ignore
 
-    // MUST happen before configureServices — overrides bind here
+    // MUST happen before configureWithoutMl — overrides bind here
     (testBuilder.Configuration :> IConfigurationBuilder)
         .AddInMemoryCollection([
             // Upstreams — two separate ports
             KeyValuePair("Upstreams:Model35B",  sprintf "http://127.0.0.1:%d" model35bPort)
             KeyValuePair("Upstreams:Model122B", sprintf "http://127.0.0.1:%d" model122bPort)
-            // Routing — heuristic avoids ML.zip dependency
-            KeyValuePair("Routing:Algorithm",            "heuristic")
-            KeyValuePair("Routing:ComplexityThreshold", "3")
+            // Routing section — required for buildRoutingConfig + validateConfig to succeed
             KeyValuePair("Routing:TimeoutSeconds",       "300")
-            KeyValuePair("Routing:Keywords:0",           "recursive")
             // Task table — required for buildRoutingConfig + validateConfig
             KeyValuePair("Routing:TaskTable:graph_indexing:Model",           "122b")
             KeyValuePair("Routing:TaskTable:graph_indexing:Priority",        "high")
@@ -116,9 +115,105 @@ let private startTestRouter
         ])
     |> ignore
 
-    SmartRouter.Cli.CompositionRoot.configureServices
+    SmartRouter.Cli.CompositionRoot.configureWithoutMl
         testBuilder.Services
         testBuilder.Configuration
+    |> ignore
+
+    // Routing — test-stub algorithm avoids ML model file dependency.
+    // configureWithoutMl does NOT register RoutingAlgorithmRegistration, so this is the
+    // sole registration (no last-wins competition).
+    let testStubAlgorithm : SmartRouter.Core.Domain.RoutingAlgorithm =
+        fun _cfg _req ->
+            { Target       = SmartRouter.Core.Domain.Qwen35B
+              Priority     = SmartRouter.Core.Domain.Low
+              Reason       = SmartRouter.Core.Domain.ML
+              IsFallback   = false
+              ModelVersion = "test-stub" }
+
+    let testStubReg : SmartRouter.Cli.Adapters.RoutingAlgorithm.RoutingAlgorithmRegistration =
+        { Algorithm    = testStubAlgorithm
+          Name         = "ml"
+          ModelVersion = "test-stub" }
+
+    testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.RoutingAlgorithm.RoutingAlgorithmRegistration>(testStubReg)
+    |> ignore
+
+    testBuilder.Services.AddSingleton<SmartRouter.Core.Domain.RoutingAlgorithm>(
+        System.Func<IServiceProvider, SmartRouter.Core.Domain.RoutingAlgorithm>(fun sp ->
+            sp.GetRequiredService<SmartRouter.Cli.Adapters.RoutingAlgorithm.RoutingAlgorithmRegistration>().Algorithm))
+    |> ignore
+
+    // HealthOptions binding — required by HealthService ctor.
+    testBuilder.Services.Configure<SmartRouter.Cli.Adapters.HealthService.HealthOptions>(
+        testBuilder.Configuration.GetSection("Routing:Health"))
+    |> ignore
+
+    // HealthService triple-reg (D9): concrete singleton + IHealthProbe alias + AddHostedService.
+    // Phase 13-02 will add ILogger<HealthService> parameter — do NOT add NullLogger here (Phase 12).
+    testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.HealthService.HealthService>(fun sp ->
+        new SmartRouter.Cli.Adapters.HealthService.HealthService(
+            sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(),
+            sp.GetRequiredService<IOptions<SmartRouter.Cli.Adapters.QwenUpstreamClient.UpstreamOptions>>(),
+            sp.GetRequiredService<IOptions<SmartRouter.Cli.Adapters.HealthService.HealthOptions>>()))
+    |> ignore
+
+    testBuilder.Services.AddSingleton<SmartRouter.Core.Ports.IHealthProbe>(fun sp ->
+        sp.GetRequiredService<SmartRouter.Cli.Adapters.HealthService.HealthService>()
+            :> SmartRouter.Core.Ports.IHealthProbe)
+    |> ignore
+
+    testBuilder.Services.AddHostedService<SmartRouter.Cli.Adapters.HealthService.HealthService>(fun sp ->
+        sp.GetRequiredService<SmartRouter.Cli.Adapters.HealthService.HealthService>())
+    |> ignore
+
+    // QueueDispatcherOptions binding — required by QueueDispatcher ctor (MaxConcurrent122B validation).
+    testBuilder.Services.Configure<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcherOptions>(
+        testBuilder.Configuration.GetSection("Queue"))
+    |> ignore
+
+    // QwenUpstreamClient + QueueDispatcher — required by ChatCompletions handler.
+    testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient>(fun sp ->
+        SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient(
+            sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(),
+            sp.GetRequiredService<IOptions<SmartRouter.Cli.Adapters.QwenUpstreamClient.UpstreamOptions>>()))
+    |> ignore
+
+    testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher>(fun sp ->
+        SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher(
+            sp.GetRequiredService<SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient>()
+                :> SmartRouter.Core.Ports.IUpstreamClient,
+            sp.GetRequiredService<IOptions<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcherOptions>>().Value,
+            sp.GetRequiredService<SmartRouter.Core.Ports.IHealthProbe>()))
+    |> ignore
+
+    testBuilder.Services.AddSingleton<SmartRouter.Core.Ports.IUpstreamClient>(fun sp ->
+        sp.GetRequiredService<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher>()
+            :> SmartRouter.Core.Ports.IUpstreamClient)
+    |> ignore
+
+    testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.QueueDispatcher.IStatsProvider>(fun sp ->
+        sp.GetRequiredService<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher>()
+            :> SmartRouter.Cli.Adapters.QueueDispatcher.IStatsProvider)
+    |> ignore
+
+    // IModelVersionProvider — required by ChatCompletions.handler (reads per-request).
+    testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.ModelVersionProvider.ModelVersionProvider>(fun _sp ->
+        SmartRouter.Cli.Adapters.ModelVersionProvider.ModelVersionProvider("test-stub"))
+    |> ignore
+
+    testBuilder.Services.AddSingleton<SmartRouter.Core.RetrainingPorts.IModelVersionProvider>(fun sp ->
+        sp.GetRequiredService<SmartRouter.Cli.Adapters.ModelVersionProvider.ModelVersionProvider>()
+            :> SmartRouter.Core.RetrainingPorts.IModelVersionProvider)
+    |> ignore
+
+    // ICanaryGate + ICanaryMetrics — required by ChatCompletions.handler.
+    testBuilder.Services.TryAddSingleton<SmartRouter.Core.CanaryPorts.ICanaryGate>(fun _sp ->
+        SmartRouter.Cli.Adapters.CanaryGate.NullCanaryGate() :> SmartRouter.Core.CanaryPorts.ICanaryGate)
+    |> ignore
+
+    testBuilder.Services.TryAddSingleton<SmartRouter.Cli.Adapters.CanaryMetrics.ICanaryMetrics>(fun _sp ->
+        SmartRouter.Cli.Adapters.CanaryMetrics.NoOpCanaryMetrics() :> SmartRouter.Cli.Adapters.CanaryMetrics.ICanaryMetrics)
     |> ignore
 
     let app = testBuilder.Build()
