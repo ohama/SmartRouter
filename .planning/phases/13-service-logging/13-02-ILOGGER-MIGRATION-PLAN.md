@@ -23,13 +23,20 @@ files_modified:
   - src/SmartRouter.Cli/Endpoints/ChatCompletions.fs
   - src/SmartRouter.Cli/CompositionRoot.fs
   - src/SmartRouter.Cli/Program.fs
+  - tests/SmartRouter.Tests/LoadTests.fs
+  - tests/SmartRouter.Tests/QueueTests.fs
+  - tests/SmartRouter.Tests/HealthFallbackTests.fs
+  - tests/SmartRouter.Tests/LoggingTests.fs
+  - tests/SmartRouter.Tests/HardCaseDatasetTests.fs
+  - tests/SmartRouter.Tests/RetrainingTests.fs
+  - tests/SmartRouter.Tests/MLClassifierTests.fs
 autonomous: true
 
 must_haves:
   truths:
-    - "All 15 adapters with type-based emission have a constructor parameter `(logger: ILogger<TypeName>)` and use `logger.LogX(...)` instead of `Serilog.Log.X(...)`"
-    - "All 4 module-based emission files (Validator, DatasetMerger, ModelBootstrapper, Retrainer) have functions accepting an `(logger: ILogger)` parameter (non-generic; SourceContext set explicitly via Log.ForContext if needed)"
-    - "ChatCompletions endpoint resolves ILogger<ChatCompletionsHandler> (or equivalent named scope) via HttpContext.RequestServices"
+    - "All 11 type-based adapter files (HealthService, CanaryService, RetrainingService, TeacherLabeler, HardCaseDatasetWriter, DecisionLogWriter, CanaryWatchdog, QueueDispatcher, QwenUpstreamClient, BgeM3Embedder, FailureDetector) have a constructor parameter `(logger: ILogger<TypeName>)` and use `logger.LogX(...)` instead of `Serilog.Log.X(...)`"
+    - "All 4 module-based emission files (Validator, DatasetMerger, ModelBootstrapper, Retrainer) have functions accepting an `(logger: ILogger)` parameter (non-generic; SourceContext set explicitly via Log.ForContext if needed); all callers in src/ AND tests/ pass the appropriate logger or NullLogger.Instance"
+    - "ChatCompletions endpoint resolves logger via `ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(\"ChatCompletions\")` — short SourceContext for grep-friendliness"
     - "CompositionRoot.fs and Program.fs continue to use static Serilog.Log.X for the few startup-time emissions where ILogger<T> isn't available — these are explicitly documented as exempt"
     - "DI auto-resolves ILogger<T> via the host's AddLogging() (already implicit when WebApplication is built); no explicit registration needed"
     - "open Serilog statements are reduced to the few files that legitimately need static Log access; Microsoft.Extensions.Logging is opened in adapter files using ILogger<T>"
@@ -233,42 +240,25 @@ dotnet build tests/SmartRouter.Tests/SmartRouter.Tests.fsproj 2>&1 | tail -3
 
 ChatCompletions is a function/handler, not a type. The handler is registered via `app.MapPost("/v1/chat/completions", handler)`. The handler receives `HttpContext` and resolves dependencies via `ctx.RequestServices.GetRequiredService<T>()`.
 
-```fsharp
-// In handler body:
-let logger = ctx.RequestServices.GetRequiredService<ILogger<obj>>()    // OR use a specific named type
-```
-
-Better pattern: define a marker type for SourceContext clarity:
+**Use `ILoggerFactory.CreateLogger("ChatCompletions")` (chosen pattern; do NOT use a marker type):**
 
 ```fsharp
 module SmartRouter.Cli.Endpoints.ChatCompletions
 
 open Microsoft.Extensions.Logging
 
-// Marker type — used only to give ChatCompletions a stable SourceContext.
-type private ChatCompletionsLogScope = ChatCompletionsLogScope
-
 let handle (ctx: HttpContext) : Task = task {
-    let logger = ctx.RequestServices.GetRequiredService<ILogger<ChatCompletionsLogScope>>()
+    let logger =
+        ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ChatCompletions")
     ...
     logger.LogInformation("Routing target={Target} reason={Reason} priority={Priority} stream=true", ...)
     ...
 }
 ```
 
-Resulting SourceContext: `SmartRouter.Cli.Endpoints.ChatCompletions+ChatCompletionsLogScope` — long but unique.
+Resulting SourceContext: `ChatCompletions` — short, grep-friendly, matches the convention used by 13-03 endpoint hits.
 
-Alternative: use `ILoggerFactory.CreateLogger("ChatCompletions")`:
-
-```fsharp
-let logger =
-    let factory = ctx.RequestServices.GetRequiredService<ILoggerFactory>()
-    factory.CreateLogger("ChatCompletions")
-```
-
-Cleaner SourceContext (`ChatCompletions`). Use this form for endpoint handlers.
-
-Apply to all 5 emissions in ChatCompletions.fs.
+Apply to all 5 emissions in ChatCompletions.fs. Resolve the logger ONCE at the top of the handler (not per-emission) to avoid repeated `GetRequiredService` calls; reuse the resolved `logger` across the function body.
   </action>
   <verify>
 ```bash
@@ -348,6 +338,23 @@ Caller (`CompositionRoot` after host build): `Validator.init (services.GetRequir
 **Recommendation: Option A.** Explicit, testable, no module-state. SourceContext slight loss but messages are self-describing.
 
 Apply Option A to all 4 files. Update all callers.
+
+**Caller enumeration (must update each):**
+
+| Module-based file | Caller files (must pass `logger` arg) |
+|---|---|
+| `Adapters/Validator.fs` | `Adapters/RetrainingService.fs` (calls `Validator.computeBaseline` and `Validator.validate`); `tests/RetrainingTests.fs` (calls Validator directly in some tests) |
+| `Adapters/DatasetMerger.fs` | `Adapters/RetrainingService.fs` (calls `DatasetMerger.merge` and `DatasetMerger.hardCaseToTrainSample`); `tests/RetrainingTests.fs` |
+| `Adapters/Retrainer.fs` | `Adapters/RetrainingService.fs` (calls `Retrainer.retrain`); `tests/RetrainingTests.fs` |
+| `Adapters/ModelBootstrapper.fs` | `CompositionRoot.fs` (calls `ensureEmbeddingFilesPresent`, `ensureDummyModel`, `computeModelVersion` at startup); `tests/MLClassifierTests.fs` if it calls ModelBootstrapper directly |
+
+For RetrainingService callers: pass the existing `logger: ILogger<RetrainingService>` directly (RetrainingService already has it from Task 1).
+
+For CompositionRoot callers (ModelBootstrapper): CompositionRoot retains static `Log.*` for the bootstrap window, so pass a temporary logger built from `services.BuildServiceProvider().GetRequiredService<ILoggerFactory>().CreateLogger("ModelBootstrapper")` OR factor the ModelBootstrapper calls into a function that runs after `app.Build()` instead of during `configureServices`. Executor judgement; document the choice.
+
+For test callers: pass `NullLogger.Instance` (non-generic).
+
+After updating, `dotnet build` must succeed. Verify by `grep -rn "ModelBootstrapper\.\|Validator\.\|DatasetMerger\.\|Retrainer\." src/ tests/` and inspect each call site has the logger argument.
   </action>
   <verify>
 ```bash

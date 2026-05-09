@@ -3,7 +3,7 @@ phase: 13-service-logging
 plan: 05
 type: execute
 wave: 4
-depends_on: ["13-02", "13-03"]
+depends_on: ["13-02", "13-03", "13-04"]
 files_modified:
   - src/SmartRouter.Cli/Adapters/LogRetentionService.fs (NEW)
   - src/SmartRouter.Cli/SmartRouter.Cli.fsproj
@@ -17,7 +17,7 @@ must_haves:
     - "src/SmartRouter.Cli/Adapters/LogRetentionService.fs exists; type LogRetentionService inherits BackgroundService; ExecuteAsync runs PeriodicTimer at configurable interval (default 60 minutes)"
     - "LogRetentionService prunes (a) operational logs older than RetentionDays from Logging:Directory; (b) decision JSONL older than DecisionLog:RetentionDays; (c) datasets/teacher-cap-*.json older than 7 days"
     - "LogRetentionService is registered in DI via configureRequestPipeline (NOT configureWithoutMl); triple-registration mirrors DecisionLogWriter (concrete + IInterface alias if any + AddHostedService)"
-    - "appsettings.json has Logging:RetentionDays (30) + DecisionLog:RetentionDays (90) + Logging:RetentionPollIntervalMinutes (60); Logging:Datasets:TeacherCapRetentionDays (7) — these all already locked in 13-01 + this plan adds anything missing"
+    - "appsettings.json has Logging:RetentionDays (30) and DecisionLog:RetentionDays (90) (added in 13-01); LogRetentionService PollIntervalMinutes (60), DatasetsDirectory (\"datasets\"), and TeacherCapRetentionDays (7) are hardcoded constants in CompositionRoot's Configure<LogRetentionOptions> action — operator can lift to appsettings.json in a future minor change if tunability proves necessary"
     - "Program.fs emits a startup banner via Log.Information(\"{Banner}\", ...) AFTER app.Build() but BEFORE app.Run(); banner includes port, model.version, canary state, queue config, teacher cap"
     - "Program.fs registers a shutdown banner via IHostApplicationLifetime.ApplicationStopping callback; emits in-flight count + queue depths"
     - "dotnet build clean; dotnet test green; LogRetentionService gracefully drains on StopAsync"
