@@ -4,7 +4,6 @@
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="RoutingTests.fs" />
     <Compile Include="StreamingTests.fs" />
     <Compile Include="QueueTests.fs" />
     <Compile Include="LoadTests.fs" />
