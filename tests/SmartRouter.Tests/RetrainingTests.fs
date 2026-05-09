@@ -129,17 +129,17 @@ let private writeBaselineModel (path: string) : unit =
     let _model = retrain nullLogger mlCtx trainView path 0.1f
     ()
 
-// ── In-memory Serilog sink ────────────────────────────────────────────────────
+// ── In-memory MEL logger ──────────────────────────────────────────────────────
 
-/// In-memory Serilog sink for asserting log lines fired during a test.
-/// Mirrors the CapturingSink pattern from LoggingTests.fs (Phase 5).
-type private CapturingSink(captured: System.Collections.Generic.List<string>) =
-    interface Serilog.Core.ILogEventSink with
-        member _.Emit(logEvent: Serilog.Events.LogEvent) =
-            // Render template+properties into a flat string for grep-style asserts.
-            let sw = new System.IO.StringWriter()
-            logEvent.RenderMessage(sw)
-            lock captured (fun () -> captured.Add(sw.ToString()))
+/// In-memory ILogger<T> that captures formatted log messages for assertion.
+/// Replaces the old Serilog CapturingSink now that adapters use ILogger<T> injection.
+type private CapturingLogger<'T>(captured: System.Collections.Generic.List<string>) =
+    interface Microsoft.Extensions.Logging.ILogger<'T> with
+        member _.IsEnabled(_) = true
+        member _.BeginScope(_) = { new IDisposable with member _.Dispose() = () }
+        member _.Log(level, eventId, state, exn, formatter) =
+            let msg = formatter.Invoke(state, exn)
+            lock captured (fun () -> captured.Add(msg))
 
 // ── Test 1 — RETRAIN-01 merger class balance ──────────────────────────────────
 
@@ -250,60 +250,51 @@ let private test4_concurrentTriggers =
     testCase "RETRAIN-05: concurrent RunNowAsync — exactly one acquires the semaphore; second trigger logs a skip" <| fun _ ->
         let dir = mkTempDir ()
         try
-            // Install capturing sink BEFORE service construction so all RetrainingService
-            // log events are recorded. Save and restore the prior global Logger to avoid
-            // bleeding into other tests (testSequenced means strict ordering, but defensive).
+            // CapturingLogger captures ILogger<RetrainingService> messages so we can assert
+            // on "starting retrain cycle" and "skipping trigger" without Serilog dependency.
             let captured = System.Collections.Generic.List<string>()
-            let priorLogger = Serilog.Log.Logger
-            try
-                Serilog.Log.Logger <-
-                    Serilog.LoggerConfiguration()
-                        .MinimumLevel.Debug()
-                        .WriteTo.Sink(CapturingSink(captured))
-                        .CreateLogger()
+            let capturingLogger = CapturingLogger<RetrainingService>(captured)
 
-                let opts = mkOptions dir
-                // Seed enough hard cases to actually run a retrain
-                let entries = Array.init 20 (fun i -> mkHardCaseEntry i (i % 2))
-                writeHardCases opts.HardCasePath entries
-                // Initial model required for baseline computation
-                writeBaselineModel opts.ModelPath
+            let opts = mkOptions dir
+            // Seed enough hard cases to actually run a retrain
+            let entries = Array.init 20 (fun i -> mkHardCaseEntry i (i % 2))
+            writeHardCases opts.HardCasePath entries
+            // Initial model required for baseline computation
+            writeBaselineModel opts.ModelPath
 
-                let provider = ModelVersionProvider("ml-test-initial")
-                let embedder = FakeEmbedder()
-                use service = new RetrainingService(opts, embedder :> IEmbedder, provider :> IModelVersionProvider, new RetrainLock() :> IRetrainLock, NullLogger<RetrainingService>.Instance)
+            let provider = ModelVersionProvider("ml-test-initial")
+            let embedder = FakeEmbedder()
+            use service = new RetrainingService(opts, embedder :> IEmbedder, provider :> IModelVersionProvider, new RetrainLock() :> IRetrainLock, capturingLogger)
 
-                // Drive both calls concurrently. With Wait(0), exactly one wins; the other
-                // returns immediately after logging a "skipping" Warning.
-                let t1 = service.RunNowAsync(CancellationToken.None)
-                let t2 = service.RunNowAsync(CancellationToken.None)
-                Task.WaitAll(t1, t2)
+            // Drive both calls concurrently. With Wait(0), exactly one wins; the other
+            // returns immediately after logging a "skipping" Warning.
+            let t1 = service.RunNowAsync(CancellationToken.None)
+            let t2 = service.RunNowAsync(CancellationToken.None)
+            Task.WaitAll(t1, t2)
 
-                // ── Existing positive checks ──────────────────────────────────────────
-                Expect.isTrue (File.Exists opts.ModelPath) "model file must exist after retrain"
-                let v = computeModelVersion opts.ModelPath
-                Expect.notEqual ("ml-" + v) "ml-test-initial" "version must have flipped from seed"
-                Expect.isTrue (File.Exists opts.StatePath) "state file must exist after exactly one successful retrain"
+            // ── Existing positive checks ──────────────────────────────────────────
+            Expect.isTrue (File.Exists opts.ModelPath) "model file must exist after retrain"
+            let v = computeModelVersion opts.ModelPath
+            Expect.notEqual ("ml-" + v) "ml-test-initial" "version must have flipped from seed"
+            Expect.isTrue (File.Exists opts.StatePath) "state file must exist after exactly one successful retrain"
 
-                // ── NEW: explicit skip-assertion — exactly one cycle started + the other
-                //        produced the "already in progress; skipping" Warning line.
-                //        Match the literal log strings emitted by RetrainingService:
-                //          start: "RetrainingService: starting retrain cycle"  (Information)
-                //          skip:  "RetrainingService: retrain already in progress; skipping trigger"  (Warning)
-                let starts =
-                    captured
-                    |> Seq.filter (fun m -> m.Contains "starting retrain cycle")
-                    |> Seq.length
-                let skips =
-                    captured
-                    |> Seq.filter (fun m -> m.Contains "skipping trigger")
-                    |> Seq.length
-                Expect.equal starts 1
-                    (sprintf "RETRAIN-05: exactly one retrain must run (got %d starts; %d skips)" starts skips)
-                Expect.isGreaterThan skips 0
-                    (sprintf "RETRAIN-05: second concurrent trigger must log a skip (got %d skips)" skips)
-            finally
-                Serilog.Log.Logger <- priorLogger
+            // ── NEW: explicit skip-assertion — exactly one cycle started + the other
+            //        produced the "already in progress; skipping" Warning line.
+            //        Match the literal log strings emitted by RetrainingService:
+            //          start: "RetrainingService: starting retrain cycle"  (Information)
+            //          skip:  "RetrainingService: retrain already in progress; skipping trigger"  (Warning)
+            let starts =
+                captured
+                |> Seq.filter (fun m -> m.Contains "starting retrain cycle")
+                |> Seq.length
+            let skips =
+                captured
+                |> Seq.filter (fun m -> m.Contains "skipping trigger")
+                |> Seq.length
+            Expect.equal starts 1
+                (sprintf "RETRAIN-05: exactly one retrain must run (got %d starts; %d skips)" starts skips)
+            Expect.isGreaterThan skips 0
+                (sprintf "RETRAIN-05: second concurrent trigger must log a skip (got %d skips)" skips)
         finally
             cleanupDir dir
 

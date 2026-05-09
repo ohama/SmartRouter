@@ -6,6 +6,7 @@ open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Hosting
 open Microsoft.Extensions.Options
+open Microsoft.Extensions.Logging
 open Serilog
 open SmartRouter.Cli.Adapters
 open SmartRouter.Cli.Adapters.CorrelationMiddleware
@@ -38,12 +39,13 @@ let main args =
                     let detector = host.Services.GetRequiredService<SmartRouter.Core.RetrainingPorts.IFailureDetector>()
                     let labeler  = host.Services.GetRequiredService<SmartRouter.Core.RetrainingPorts.ITeacherLabeler>()
                     let writer   = host.Services.GetRequiredService<SmartRouter.Core.RetrainingPorts.IHardCaseDatasetWriter>()
+                    let logger   = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Retrain")
                     let ct = System.Threading.CancellationToken.None
 
                     let hardCases =
                         detector.ExtractHardCases(ct).GetAwaiter().GetResult()
 
-                    Log.Information("Retrain: extracted {N} hard case(s)", List.length hardCases)
+                    logger.LogInformation("Retrain: extracted {N} hard case(s)", List.length hardCases)
 
                     let mutable labeled  = 0
                     let mutable skipped  = 0
@@ -51,7 +53,7 @@ let main args =
                     for hc in hardCases do
                         match hc.PromptText with
                         | None ->
-                            Log.Information(
+                            logger.LogInformation(
                                 "Retrain: skipping correlation_id={Cid} — prompt text not in logs (LOG-01 schema; Phase 8 BackgroundService passes inline)",
                                 hc.CorrelationId)
                             skipped <- skipped + 1
@@ -82,13 +84,13 @@ let main args =
                                 writer.AppendAsync(entry, ct).GetAwaiter().GetResult()
                                 labeled <- labeled + 1
                             | SmartRouter.Core.RetrainingPorts.Unparseable raw ->
-                                Log.Warning("Retrain: unparseable response for {Cid}: {Raw}", hc.CorrelationId, raw)
+                                logger.LogWarning("Retrain: unparseable response for {Cid}: {Raw}", hc.CorrelationId, raw)
                                 failed <- failed + 1
                             | SmartRouter.Core.RetrainingPorts.Skipped reason ->
-                                Log.Information("Retrain: skipped {Cid} — {Reason}", hc.CorrelationId, reason)
+                                logger.LogInformation("Retrain: skipped {Cid} — {Reason}", hc.CorrelationId, reason)
                                 skipped <- skipped + 1
                             | SmartRouter.Core.RetrainingPorts.Failed err ->
-                                Log.Warning("Retrain: failed {Cid} — {Err}", hc.CorrelationId, err)
+                                logger.LogWarning("Retrain: failed {Cid} — {Err}", hc.CorrelationId, err)
                                 failed <- failed + 1
 
                     if List.isEmpty hardCases then
