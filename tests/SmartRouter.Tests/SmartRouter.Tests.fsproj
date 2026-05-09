@@ -22,6 +22,8 @@
     <Compile Include="CanaryTests.fs" />
     <!-- Phase 10 -->
     <Compile Include="HealthFallbackTests.fs" />
+    <!-- Phase 11 -->
+    <Compile Include="ModelsTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
