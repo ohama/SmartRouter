@@ -33,6 +33,29 @@ let private parseLogLevel (raw: string) : LogEventLevel =
             "--log-level=%s invalid; valid: verbose|debug|information|warning|error|fatal (or vrb/dbg/info/warn/err/ftl aliases)"
             other
 
+/// Issue #3: parse --port flag (1024..65535). Returns None if absent.
+/// Caller is responsible for failing fast on out-of-range values.
+let private parsePortFromArgs (args: string array) : int option =
+    args
+    |> Array.tryFindIndex (fun a -> a = "--port" || a.StartsWith("--port="))
+    |> Option.map (fun idx ->
+        let raw =
+            if args.[idx].StartsWith("--port=") then
+                let v = args.[idx].["--port=".Length..]
+                if v = "" then failwith "--port= requires a value"
+                v
+            elif idx + 1 < args.Length then
+                let v = args.[idx + 1]
+                if v.StartsWith("--") then failwith "--port requires a value (e.g., 4001)"
+                v
+            else failwith "--port requires a value"
+        match System.Int32.TryParse(raw) with
+        | true, n when n >= 1024 && n <= 65535 -> n
+        | true, n ->
+            failwithf "--port=%d out of range; must be 1024..65535" n
+        | _ ->
+            failwithf "--port=%s is not a valid integer" raw)
+
 /// Detect --trace (migration guard) and apply --log-level if present.
 /// Called in BOTH the --retrain branch and the main Kestrel branch.
 let private applyLogLevelFromArgs (args: string array) : unit =
@@ -175,6 +198,18 @@ let main args =
                         dict [ "feature_management:feature_flags:0:conditions:client_filters:0:parameters:Audience:DefaultRolloutPercentage", string n ])
                 |> ignore
             | _ -> ()
+
+            // Issue #3: --port CLI override (precedence above appsettings.json).
+            // Inject into IConfiguration so the existing Kestrel:Endpoints:Http:Url binding
+            // picks it up. Bind address stays 127.0.0.1 (OPS-04 — no firewall surprises).
+            match parsePortFromArgs args with
+            | Some port ->
+                (builder.Configuration :> IConfigurationBuilder)
+                    .AddInMemoryCollection(
+                        dict [ "Kestrel:Endpoints:Http:Url", sprintf "http://127.0.0.1:%d" port ])
+                |> ignore
+                Log.Information("Listening port overridden to {Port} via --port CLI flag", port)
+            | None -> ()
 
             // Register all DI services: named HttpClients, IUpstreamClient, RoutingConfig
             CompositionRoot.configureServices builder.Services builder.Configuration
