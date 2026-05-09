@@ -502,7 +502,8 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
               DailyCallCap    = if opts.DailyCallCap   <= 0                    then 1000                            else opts.DailyCallCap
               TimeoutSeconds  = if opts.TimeoutSeconds <= 0                    then 30                              else opts.TimeoutSeconds
               DatasetsDir     = if String.IsNullOrWhiteSpace(opts.DatasetsDir) then "datasets"                      else opts.DatasetsDir }
-        TeacherLabeler(sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(), normalized))
+        TeacherLabeler(sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(), normalized,
+            sp.GetRequiredService<ILogger<TeacherLabeler>>()))
     |> ignore
 
     services.AddSingleton<ITeacherLabeler>(fun sp ->
@@ -847,7 +848,8 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
               DailyCallCap    = if opts.DailyCallCap   <= 0                    then 1000                            else opts.DailyCallCap
               TimeoutSeconds  = if opts.TimeoutSeconds <= 0                    then 30                              else opts.TimeoutSeconds
               DatasetsDir     = if String.IsNullOrWhiteSpace(opts.DatasetsDir) then "datasets"                      else opts.DatasetsDir }
-        TeacherLabeler(sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(), normalized))
+        TeacherLabeler(sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(), normalized,
+            sp.GetRequiredService<ILogger<TeacherLabeler>>()))
     |> ignore
 
     services.AddSingleton<ITeacherLabeler>(fun sp ->

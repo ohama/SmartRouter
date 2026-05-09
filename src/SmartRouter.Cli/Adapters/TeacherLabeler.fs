@@ -9,7 +9,7 @@ open System.Text.Json
 open System.Text.Json.Serialization
 open System.Threading
 open System.Threading.Tasks
-open Serilog
+open Microsoft.Extensions.Logging
 open SmartRouter.Core.RetrainingPorts
 
 /// Cli-only options bound from appsettings.json "TeacherLabeler" section.
@@ -50,7 +50,7 @@ let private capJsonOpts =
 /// Read the counter for today (UTC). If the file is missing or stale, returns
 /// a fresh counter at 0. Never throws — corrupt files reset to fresh state.
 /// Caller passes `cap` so freshly-rotated counter files carry the configured max.
-let private readCounter (datasetsDir: string) (todayUtc: string) (cap: int) : CapCounter =
+let private readCounter (logger: ILogger) (datasetsDir: string) (todayUtc: string) (cap: int) : CapCounter =
     try
         let path = Path.Combine(datasetsDir, sprintf "teacher-cap-%s.json" todayUtc)
         if File.Exists(path) then
@@ -61,17 +61,17 @@ let private readCounter (datasetsDir: string) (todayUtc: string) (cap: int) : Ca
         else
             { Date = todayUtc; Count = 0; Max = cap }
     with ex ->
-        Log.Warning(ex, "TeacherLabeler: failed to read cap counter file; resetting to 0")
+        logger.LogWarning(ex, "TeacherLabeler: failed to read cap counter file; resetting to 0")
         { Date = todayUtc; Count = 0; Max = cap }
 
-let private writeCounter (datasetsDir: string) (counter: CapCounter) : unit =
+let private writeCounter (logger: ILogger) (datasetsDir: string) (counter: CapCounter) : unit =
     try
         Directory.CreateDirectory(datasetsDir) |> ignore
         let path = Path.Combine(datasetsDir, sprintf "teacher-cap-%s.json" counter.Date)
         let json = JsonSerializer.Serialize(counter, capJsonOpts)
         File.WriteAllText(path, json)
     with ex ->
-        Log.Warning(ex, "TeacherLabeler: failed to persist cap counter")
+        logger.LogWarning(ex, "TeacherLabeler: failed to persist cap counter")
 
 // ── Response parsing ──────────────────────────────────────────────────────────
 
@@ -113,7 +113,7 @@ let private parseContent (content: string) : LabelResult =
 /// Routing through QueueDispatcher would starve real inference traffic of the 122B
 /// SemaphoreSlim(1) slot. The "teacher" named client is registered in Plan 07-05's
 /// CompositionRoot with AddResilienceHandler (3x retry on transient errors, 30s timeout).
-type TeacherLabeler(httpFactory: IHttpClientFactory, options: TeacherLabelerOptions) =
+type TeacherLabeler(httpFactory: IHttpClientFactory, options: TeacherLabelerOptions, logger: ILogger<TeacherLabeler>) =
 
     // Cache the prompt template after first successful read. None until loaded;
     // Some "" means we tried and the file was missing (cached miss → log once).
@@ -149,7 +149,7 @@ type TeacherLabeler(httpFactory: IHttpClientFactory, options: TeacherLabelerOpti
                         promptTemplate <- Some content
                         Some content
                     else
-                        Log.Warning(
+                        logger.LogWarning(
                             "TeacherLabeler: prompt template not found at {Path}; will skip all calls",
                             promptPath)
                         promptTemplate <- Some ""  // mark as cached-missing
@@ -219,9 +219,9 @@ type TeacherLabeler(httpFactory: IHttpClientFactory, options: TeacherLabelerOpti
             task {
                 // 1. Cost cap pre-check (FAIL-03)
                 let todayUtc = DateTime.UtcNow.ToString("yyyy-MM-dd")
-                let counter = readCounter datasetsDir todayUtc dailyCap
+                let counter = readCounter logger datasetsDir todayUtc dailyCap
                 if counter.Count >= dailyCap then
-                    Log.Warning(
+                    logger.LogWarning(
                         "TeacherLabeler: daily cost cap hit ({Count}/{Cap} for {Date}); skipping correlation_id={Cid}",
                         counter.Count, dailyCap, todayUtc, correlationId)
                     return Skipped (sprintf "daily call cap %d reached for %s" dailyCap todayUtc)
@@ -238,7 +238,7 @@ type TeacherLabeler(httpFactory: IHttpClientFactory, options: TeacherLabelerOpti
 
                 // 4. Increment counter BEFORE the call so cap accounting is robust to crashes
                 let nextCounter = { Date = todayUtc; Count = counter.Count + 1; Max = dailyCap }
-                writeCounter datasetsDir nextCounter
+                writeCounter logger datasetsDir nextCounter
 
                 // 5. Fire the HTTP call. The named HttpClient "teacher" (registered in
                 //    CompositionRoot Plan 07-05) carries the 30s Timeout + AddResilienceHandler
@@ -247,15 +247,15 @@ type TeacherLabeler(httpFactory: IHttpClientFactory, options: TeacherLabelerOpti
                 let! result = attemptOnce client body ct
                 match result with
                 | Labeled (label, _) ->
-                    Log.Information(
+                    logger.LogInformation(
                         "TeacherLabeler: labeled correlation_id={Cid} as {Label} (call {Count}/{Cap})",
                         correlationId, label, nextCounter.Count, dailyCap)
                 | Unparseable raw ->
-                    Log.Warning(
+                    logger.LogWarning(
                         "TeacherLabeler: unparseable response for correlation_id={Cid}: {Raw}",
                         correlationId, raw)
                 | Failed err ->
-                    Log.Warning(
+                    logger.LogWarning(
                         "TeacherLabeler: HTTP failure for correlation_id={Cid}: {Err}",
                         correlationId, err)
                 | Skipped _ -> ()  // unreachable here — Skipped only returned by cap check above
