@@ -6,6 +6,7 @@ open System.Threading
 open System.Threading.Tasks
 open Expecto
 open FSharp.Control
+open Microsoft.Extensions.Logging.Abstractions
 open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
 open SmartRouter.Cli.Adapters.QueueDispatcher
@@ -80,7 +81,7 @@ let tests =
             let latencyMs  = 50
             let n          = 20
             let fake       = LatencyFakeLoad(latencyMs)
-            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe)
+            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe, NullLogger<QueueDispatcher>.Instance)
             let dispatcher = qd :> IUpstreamClient
 
             let dec = mkDecision Qwen122B Low
@@ -116,7 +117,7 @@ let tests =
         ptestCaseAsync "mixed-priority burst respects priority order under load (CONC-02 + CONC-03 at scale)" <| async {
             let latencyMs  = 30
             let fake       = LatencyFakeLoad(latencyMs)
-            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe)
+            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe, NullLogger<QueueDispatcher>.Instance)
             let dispatcher = qd :> IUpstreamClient
             let order      = List<string>()
             let orderLck   = obj()

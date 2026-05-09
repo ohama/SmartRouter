@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Threading
 open Expecto
+open Microsoft.Extensions.Logging.Abstractions
 open SmartRouter.Cli.Adapters.FailureDetector
 open SmartRouter.Core.RetrainingPorts
 
@@ -25,7 +26,7 @@ let private makeJsonLine (correlationId: string) (fallbackUsed: bool) : string =
         correlationId fallback
 
 let private extractHardCases (dir: string) : HardCase list =
-    let detector = FailureDetector(dir) :> IFailureDetector
+    let detector = FailureDetector(dir, NullLogger<FailureDetector>.Instance) :> IFailureDetector
     detector.ExtractHardCases(CancellationToken.None).GetAwaiter().GetResult()
 
 let tests =

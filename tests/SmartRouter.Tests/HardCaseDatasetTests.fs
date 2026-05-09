@@ -6,6 +6,7 @@ open System.Text.Json
 open System.Threading
 open System.Threading.Tasks
 open Expecto
+open Microsoft.Extensions.Logging.Abstractions
 open SmartRouter.Cli.Adapters.HardCaseDatasetWriter
 open SmartRouter.Core.RetrainingPorts
 
@@ -35,7 +36,7 @@ let private mkEntry (cid: string) (hash: string) (label: int) : HardCaseEntry =
 /// Returns the (closed) lines from the file after StopAsync drains.
 let private runWith (path: string) (capacity: int) (act: IHardCaseDatasetWriter -> Task<unit>) : string list =
     let opts = { Path = path; ChannelCapacity = capacity }
-    let writer = new HardCaseDatasetWriter(opts)
+    let writer = new HardCaseDatasetWriter(opts, NullLogger<HardCaseDatasetWriter>.Instance)
     writer.StartAsync(CancellationToken.None).GetAwaiter().GetResult()
     try
         (act (writer :> IHardCaseDatasetWriter)).GetAwaiter().GetResult()
@@ -116,7 +117,7 @@ let tests =
                 try
                     let path = Path.Combine(dir, "ds.jsonl")
                     let opts = { Path = path; ChannelCapacity = 100 }
-                    let writer = new HardCaseDatasetWriter(opts)
+                    let writer = new HardCaseDatasetWriter(opts, NullLogger<HardCaseDatasetWriter>.Instance)
                     writer.StartAsync(CancellationToken.None).GetAwaiter().GetResult()
                     try
                         // Burst 10 entries

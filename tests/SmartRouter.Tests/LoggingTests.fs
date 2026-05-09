@@ -266,7 +266,8 @@ let private startTestRouter (fakePort: int) (logDir: string) : Task<WebApplicati
         testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient>(fun sp ->
             SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient(
                 sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(),
-                sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SmartRouter.Cli.Adapters.QwenUpstreamClient.UpstreamOptions>>()))
+                sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SmartRouter.Cli.Adapters.QwenUpstreamClient.UpstreamOptions>>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient>>()))
         |> ignore
 
         testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher>(fun sp ->
@@ -274,7 +275,8 @@ let private startTestRouter (fakePort: int) (logDir: string) : Task<WebApplicati
                 sp.GetRequiredService<SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient>()
                     :> SmartRouter.Core.Ports.IUpstreamClient,
                 sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcherOptions>>().Value,
-                sp.GetRequiredService<SmartRouter.Core.Ports.IHealthProbe>()))
+                sp.GetRequiredService<SmartRouter.Core.Ports.IHealthProbe>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher>>()))
         |> ignore
 
         testBuilder.Services.AddSingleton<SmartRouter.Core.Ports.IUpstreamClient>(fun sp ->

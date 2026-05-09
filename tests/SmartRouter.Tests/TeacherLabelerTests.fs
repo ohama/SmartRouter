@@ -12,6 +12,7 @@ open Microsoft.AspNetCore.Hosting.Server
 open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.Logging.Abstractions
 open SmartRouter.Cli.Adapters.TeacherLabeler
 open SmartRouter.Core.RetrainingPorts
 
@@ -71,7 +72,7 @@ let private mkLabeler (baseUrl: string) (promptPath: string) (datasetsDir: strin
         DailyCallCap    = cap
         TimeoutSeconds  = 5
         DatasetsDir     = datasetsDir }
-    TeacherLabeler(factory, opts) :> ITeacherLabeler
+    TeacherLabeler(factory, opts, NullLogger<TeacherLabeler>.Instance) :> ITeacherLabeler
 
 /// Write a minimal teacher prompt file at the given path.
 let private writePromptFile (path: string) =

@@ -11,6 +11,7 @@ open Microsoft.AspNetCore.Hosting
 open Microsoft.AspNetCore.Hosting.Server
 open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.Logging.Abstractions
 open Expecto
 open FSharp.Control
 open SmartRouter.Core.Domain
@@ -135,7 +136,7 @@ let tests =
         // ── Test 1: serialization (CONC-01) — gate fake to inspect each call individually ──
         testCaseAsync "five concurrent 122B requests serialize through SemaphoreSlim(1) (CONC-01)" <| async {
             let fake       = FakeUpstreamClient()
-            let dispatcher = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe) :> IUpstreamClient
+            let dispatcher = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe, NullLogger<QueueDispatcher>.Instance) :> IUpstreamClient
             let dec        = mkDecision Qwen122B Low
 
             let runOne () =
@@ -173,7 +174,7 @@ let tests =
         // Gate sequence: 0=occupy, 1=HIGH, 2=LOW
         testCaseAsync "high-priority 122B request preempts queued low-priority (CONC-02 / PITFALL-9)" <| async {
             let fake       = FakeUpstreamClient()
-            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe)
+            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe, NullLogger<QueueDispatcher>.Instance)
             let dispatcher = qd :> IUpstreamClient
             let order      = List<string>()
             let orderLck   = obj()
@@ -239,7 +240,7 @@ let tests =
             // even though more highs are queued. This is the starvation-prevention invariant.
             let opts       = { defaultOpts with FairnessK = 3 }
             let latency    = LatencyFake(30)        // auto-completing — no gate deadlock
-            let qd         = QueueDispatcher(latency, opts, alwaysReachableProbe)
+            let qd         = QueueDispatcher(latency, opts, alwaysReachableProbe, NullLogger<QueueDispatcher>.Instance)
             let dispatcher = qd :> IUpstreamClient
             let order      = List<string>()
             let orderLck   = obj()
@@ -307,7 +308,7 @@ let tests =
         // ── Test 4: PITFALL-8 cancellation while still QUEUED (pre-dequeue) ──
         testCaseAsync "PITFALL-8 cancellation while queued does NOT leak the semaphore (CONC-05)" <| async {
             let fake       = FakeUpstreamClient()
-            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe)
+            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe, NullLogger<QueueDispatcher>.Instance)
             let dispatcher = qd :> IUpstreamClient
             use cts        = new CancellationTokenSource()
 
@@ -355,7 +356,7 @@ let tests =
         // The semaphore must end at CurrentCount=1 with no leak.
         testCaseAsync "PITFALL-8 cancellation AFTER dequeue mid-acquire releases the slot cleanly" <| async {
             let fake       = FakeUpstreamClient()
-            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe)
+            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe, NullLogger<QueueDispatcher>.Instance)
             let dispatcher = qd :> IUpstreamClient
             use victimCts  = new CancellationTokenSource()
 
@@ -402,7 +403,7 @@ let tests =
             // FakeUpstreamClient with no released gates — every call hangs forever
             let fake       = FakeUpstreamClient()
             // Short timeout so the test runs quickly
-            let qd         = QueueDispatcher(fake, { defaultOpts with PerRequestTimeoutSeconds = 1 }, alwaysReachableProbe)
+            let qd         = QueueDispatcher(fake, { defaultOpts with PerRequestTimeoutSeconds = 1 }, alwaysReachableProbe, NullLogger<QueueDispatcher>.Instance)
             let dispatcher = qd :> IUpstreamClient
 
             let! result =
@@ -421,7 +422,7 @@ let tests =
         // ── Test 7: 35B bypass (CONC-04) ──
         testCaseAsync "35B requests bypass the queue and run concurrently (CONC-04)" <| async {
             let fake       = FakeUpstreamClient()
-            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe)
+            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe, NullLogger<QueueDispatcher>.Instance)
             let dispatcher = qd :> IUpstreamClient
 
             // Fire five 35B calls concurrently — they must all start before any release
@@ -450,7 +451,7 @@ let tests =
         // ── Test 8: IStatsProvider snapshot reflects live queue state (in-process) ──
         testCaseAsync "IStatsProvider.GetSnapshot reflects live queue state (OBS-02)" <| async {
             let fake       = FakeUpstreamClient()
-            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe)
+            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe, NullLogger<QueueDispatcher>.Instance)
             let stats      = qd :> IStatsProvider
             let dispatcher = qd :> IUpstreamClient
 
@@ -517,7 +518,7 @@ let tests =
         // Pattern matches StreamingTests.fs — same in-process Kestrel approach.
         testCaseAsync "GET /stats returns 200 with snake_case JSON wire shape (API-07)" <| async {
             let fake = FakeUpstreamClient()
-            let qd   = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe)
+            let qd   = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe, NullLogger<QueueDispatcher>.Instance)
 
             // Build a minimal in-process app: register the QueueDispatcher as
             // IStatsProvider in DI, then map the Stats endpoint.

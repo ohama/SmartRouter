@@ -150,12 +150,12 @@ let private startTestRouter
     |> ignore
 
     // HealthService triple-reg (D9): concrete singleton + IHealthProbe alias + AddHostedService.
-    // Phase 13-02 will add ILogger<HealthService> parameter — do NOT add NullLogger here (Phase 12).
     testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.HealthService.HealthService>(fun sp ->
         new SmartRouter.Cli.Adapters.HealthService.HealthService(
             sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(),
             sp.GetRequiredService<IOptions<SmartRouter.Cli.Adapters.QwenUpstreamClient.UpstreamOptions>>(),
-            sp.GetRequiredService<IOptions<SmartRouter.Cli.Adapters.HealthService.HealthOptions>>()))
+            sp.GetRequiredService<IOptions<SmartRouter.Cli.Adapters.HealthService.HealthOptions>>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SmartRouter.Cli.Adapters.HealthService.HealthService>>()))
     |> ignore
 
     testBuilder.Services.AddSingleton<SmartRouter.Core.Ports.IHealthProbe>(fun sp ->
@@ -176,7 +176,8 @@ let private startTestRouter
     testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient>(fun sp ->
         SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient(
             sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(),
-            sp.GetRequiredService<IOptions<SmartRouter.Cli.Adapters.QwenUpstreamClient.UpstreamOptions>>()))
+            sp.GetRequiredService<IOptions<SmartRouter.Cli.Adapters.QwenUpstreamClient.UpstreamOptions>>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient>>()))
     |> ignore
 
     testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher>(fun sp ->
@@ -184,7 +185,8 @@ let private startTestRouter
             sp.GetRequiredService<SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient>()
                 :> SmartRouter.Core.Ports.IUpstreamClient,
             sp.GetRequiredService<IOptions<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcherOptions>>().Value,
-            sp.GetRequiredService<SmartRouter.Core.Ports.IHealthProbe>()))
+            sp.GetRequiredService<SmartRouter.Core.Ports.IHealthProbe>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher>>()))
     |> ignore
 
     testBuilder.Services.AddSingleton<SmartRouter.Core.Ports.IUpstreamClient>(fun sp ->
