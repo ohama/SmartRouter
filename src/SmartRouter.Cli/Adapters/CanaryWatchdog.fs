@@ -4,7 +4,7 @@ open System
 open System.Threading
 open System.Threading.Tasks
 open Microsoft.Extensions.Hosting
-open Serilog
+open Microsoft.Extensions.Logging
 open SmartRouter.Cli.Adapters.CanaryState
 open SmartRouter.Cli.Adapters.CanaryMetrics
 
@@ -27,7 +27,7 @@ type CanaryOptions =
 ///
 /// AutoRollbackEnabled defaults to false until Phase 10 (CONTEXT.md Lock 1) — production
 /// trigger stays disabled even though the metric is computed and logged.
-type CanaryWatchdog(metrics: ICanaryMetrics, canaryState: ICanaryState, options: CanaryOptions) =
+type CanaryWatchdog(metrics: ICanaryMetrics, canaryState: ICanaryState, options: CanaryOptions, logger: ILogger<CanaryWatchdog>) =
     inherit BackgroundService()
 
     override _.ExecuteAsync(stoppingToken: CancellationToken) =
@@ -47,7 +47,7 @@ type CanaryWatchdog(metrics: ICanaryMetrics, canaryState: ICanaryState, options:
                         let canaryRate,   canaryCount   = metrics.FallbackRate(true,  float windowSecs)
                         let delta = canaryRate - baselineRate
 
-                        Log.Verbose(
+                        logger.LogTrace(
                             "CanaryWatchdog: baseline_count={BC} baseline_fb={BR:F4} canary_count={CC} canary_fb={CR:F4} delta={D:F4}",
                             baselineCount, baselineRate, canaryCount, canaryRate, delta)
 
@@ -59,12 +59,12 @@ type CanaryWatchdog(metrics: ICanaryMetrics, canaryState: ICanaryState, options:
                                     "auto-rollback: canary_fb=%.4f baseline_fb=%.4f delta=%.4f > threshold=%.4f (baseline_n=%d)"
                                     canaryRate baselineRate delta options.AutoRollbackThreshold baselineCount
                             canaryState.SetPercentage(0, reason)
-                            Log.Warning(
+                            logger.LogWarning(
                                 "CanaryWatchdog: AUTO-ROLLBACK fired. canary_fb_rate={C:F4} baseline_fb_rate={B:F4} delta={D:F4} threshold={T:F2} baseline_count={N}",
                                 canaryRate, baselineRate, delta, options.AutoRollbackThreshold, baselineCount)
                 with
                 | :? OperationCanceledException as oce ->
                     System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(oce).Throw()
                 | ex ->
-                    Log.Error(ex, "CanaryWatchdog: poll loop exception (continuing)")
+                    logger.LogError(ex, "CanaryWatchdog: poll loop exception (continuing)")
         }

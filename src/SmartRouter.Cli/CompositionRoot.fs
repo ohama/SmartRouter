@@ -621,7 +621,8 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
               AutoRollbackThreshold        = if obj.ReferenceEquals(opts, null) || opts.AutoRollbackThreshold <= 0.0 then 0.10 else opts.AutoRollbackThreshold
               AutoRollbackEnabled          = if obj.ReferenceEquals(opts, null) then false else opts.AutoRollbackEnabled
               MinBaselineSampleSize        = if obj.ReferenceEquals(opts, null) || opts.MinBaselineSampleSize <= 0 then 50 else opts.MinBaselineSampleSize }
-        new CanaryWatchdog(m, s, normalized))
+        new CanaryWatchdog(m, s, normalized,
+            sp.GetRequiredService<ILogger<CanaryWatchdog>>()))
         |> ignore
     services.AddHostedService<CanaryWatchdog>(fun sp -> sp.GetRequiredService<CanaryWatchdog>())
         |> ignore
