@@ -9,6 +9,7 @@ open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.DependencyInjection.Extensions
+open Microsoft.Extensions.Logging
 open Microsoft.Extensions.ML
 open Microsoft.Extensions.Options
 open Microsoft.FeatureManagement
@@ -241,7 +242,8 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         new HealthService(
             sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetRequiredService<IOptions<UpstreamOptions>>(),
-            sp.GetRequiredService<IOptions<HealthOptions>>()))
+            sp.GetRequiredService<IOptions<HealthOptions>>(),
+            sp.GetRequiredService<ILogger<HealthService>>()))
     |> ignore
 
     services.AddSingleton<IHealthProbe>(fun sp ->

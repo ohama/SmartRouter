@@ -7,8 +7,8 @@ open System.Runtime.ExceptionServices
 open System.Threading
 open System.Threading.Tasks
 open Microsoft.Extensions.Hosting
+open Microsoft.Extensions.Logging
 open Microsoft.Extensions.Options
-open Serilog
 open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
 open SmartRouter.Cli.Adapters.QwenUpstreamClient   // UpstreamOptions
@@ -22,7 +22,8 @@ type HealthOptions =
 type HealthService
     ( httpFactory : IHttpClientFactory
     , upstreamOpts : IOptions<UpstreamOptions>
-    , healthOpts   : IOptions<HealthOptions> ) =
+    , healthOpts   : IOptions<HealthOptions>
+    , logger       : ILogger<HealthService> ) =
     inherit BackgroundService()
 
     // (reachable, lastProbeUtc). Initial: reachable=true, lastProbe=MinValue (startup grace).
@@ -52,26 +53,26 @@ type HealthService
             ExceptionDispatchInfo.Capture(oce).Throw()
         | ex ->
             success <- false
-            Log.Debug(ex, "HealthService: probe for {Target} threw", target)
+            logger.LogDebug(ex, "HealthService: probe for {Target} threw", target)
 
         let now = DateTimeOffset.UtcNow
         if success then
             failures.[target] <- 0
             state.[target] <- (true, now)
-            Log.Debug("HealthService: {Target} reachable", target)
+            logger.LogDebug("HealthService: {Target} reachable", target)
         else
             let newCount = failures.AddOrUpdate(target, 1, fun _ c -> c + 1)
             let isUnreachable = newCount >= threshold ()
             if isUnreachable then
                 state.[target] <- (false, now)
-                Log.Warning(
+                logger.LogWarning(
                     "HealthService: {Target} marked UNREACHABLE after {Count} consecutive failures",
                     target, newCount)
             else
                 // Update timestamp but keep reachable=true (under-threshold)
                 let prevReachable = match state.TryGetValue(target) with true, (r, _) -> r | _ -> true
                 state.[target] <- (prevReachable, now)
-                Log.Information(
+                logger.LogInformation(
                     "HealthService: {Target} probe failed ({Count}/{Threshold}); not yet unreachable",
                     target, newCount, threshold ())
     }
@@ -100,7 +101,7 @@ type HealthService
             let v = healthOpts.Value.PollingIntervalSeconds
             if v <= 0 then 10 else v
         let interval = TimeSpan.FromSeconds(float intervalSeconds)
-        Log.Information(
+        logger.LogInformation(
             "HealthService starting — probing every {Sec}s, threshold={T}",
             intervalSeconds, threshold ())
 
@@ -113,7 +114,7 @@ type HealthService
         | :? OperationCanceledException as oce ->
             ExceptionDispatchInfo.Capture(oce).Throw()
         | ex ->
-            Log.Warning(ex, "HealthService: initial probe pass threw")
+            logger.LogWarning(ex, "HealthService: initial probe pass threw")
 
         use timer = new PeriodicTimer(interval)
         let mutable running = true
@@ -129,7 +130,7 @@ type HealthService
                 running <- false
                 ExceptionDispatchInfo.Capture(oce).Throw()
             | ex ->
-                Log.Warning(ex, "HealthService: probe loop iteration threw; will retry next tick")
+                logger.LogWarning(ex, "HealthService: probe loop iteration threw; will retry next tick")
 
-        Log.Information("HealthService stopping")
+        logger.LogInformation("HealthService stopping")
     }
