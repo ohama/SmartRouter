@@ -602,15 +602,21 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
 
     // CanaryGate — plain AddSingleton OVERRIDES the (1.0) NullCanaryGate fallback via
     // last-registration-wins for GetRequiredService<ICanaryGate>.
+    //
+    // Issue #2: `IVariantFeatureManager` from Microsoft.FeatureManagement is registered
+    // as Scoped. Resolving a scoped service from this singleton's captured root provider
+    // fails ASP.NET Core's `ValidateScopes` check (Development default) and surfaces as
+    // HTTP 500 on every chat-completion request. Pass `IServiceScopeFactory` (singleton-
+    // safe) instead; the gate creates a fresh scope per call and resolves the FM there.
     services.AddSingleton<ICanaryGate>(fun sp ->
-        let fm = sp.GetRequiredService<IVariantFeatureManager>()
+        let scopeFactory = sp.GetRequiredService<IServiceScopeFactory>()
         let st = sp.GetRequiredService<ICanaryState>()
         let opts = sp.GetRequiredService<IOptions<CanaryOptions>>().Value
         let path =
             if obj.ReferenceEquals(opts, null) || String.IsNullOrWhiteSpace(opts.CanaryModelPath)
             then "models/router-canary.zip"
             else opts.CanaryModelPath
-        FeatureManagementCanaryGate(fm, st, path) :> ICanaryGate)
+        FeatureManagementCanaryGate(scopeFactory, st, path) :> ICanaryGate)
         |> ignore
 
     // CanaryWatchdog — triple-reg (concrete + AddHostedService factory).
