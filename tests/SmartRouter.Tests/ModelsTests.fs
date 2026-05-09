@@ -107,12 +107,13 @@ let private startApp
         ])
     |> ignore
 
-    SmartRouter.Cli.CompositionRoot.configureServices
+    SmartRouter.Cli.CompositionRoot.configureWithoutMl
         testBuilder.Services
         testBuilder.Configuration
     |> ignore
 
-    // Override IHealthProbe with stub AFTER configureServices (last-registration-wins).
+    // Override IHealthProbe with stub AFTER configureWithoutMl (last-registration-wins).
+    // configureWithoutMl excludes HealthService registration; the stub provides IHealthProbe directly.
     testBuilder.Services.AddSingleton<IHealthProbe>(StubHealthProbe(reachable35, reachable122) :> IHealthProbe) |> ignore
 
     let app = testBuilder.Build()
