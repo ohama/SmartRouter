@@ -45,6 +45,7 @@ open SmartRouter.Cli.Adapters.CanaryWatchdog
 open SmartRouter.Cli.Adapters.CanaryService
 open SmartRouter.Cli.Adapters.RetrainLock
 open SmartRouter.Cli.Adapters.HealthService
+open SmartRouter.Cli.Adapters.LogRetentionService
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -694,6 +695,24 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
     services.AddHostedService<RetrainingService>(fun sp ->
         sp.GetRequiredService<RetrainingService>())
     |> ignore
+
+    // ── Phase 13: Log retention ───────────────────────────────────────────────
+    // PollIntervalMinutes (60), DatasetsDirectory ("datasets"), and TeacherCapRetentionDays (7)
+    // are hardcoded constants — operator can lift to appsettings.json in a future minor change.
+    // OperationalDirectory + OperationalRetentionDays read from Logging section (added 13-01).
+    // DecisionDirectory + DecisionRetentionDays read from DecisionLog section.
+    services.Configure<LogRetentionOptions>(fun (o: LogRetentionOptions) ->
+        let logging    = config.GetSection("Logging")
+        let decisionLog = config.GetSection("DecisionLog")
+        o.OperationalDirectory     <- logging.["Directory"]     |> Option.ofObj |> Option.defaultValue "logs/operational"
+        o.OperationalRetentionDays <- logging.["RetentionDays"] |> Option.ofObj |> Option.bind (fun s -> match Int32.TryParse(s) with | true, n -> Some n | _ -> None) |> Option.defaultValue 30
+        o.DecisionDirectory        <- decisionLog.["Directory"]     |> Option.ofObj |> Option.defaultValue "logs/decisions"
+        o.DecisionRetentionDays    <- decisionLog.["RetentionDays"] |> Option.ofObj |> Option.bind (fun s -> match Int32.TryParse(s) with | true, n -> Some n | _ -> None) |> Option.defaultValue 90
+        o.DatasetsDirectory        <- "datasets"  // hardcoded; lift to config if needed
+        o.TeacherCapRetentionDays  <- 7           // hardcoded; lift to config if needed
+        o.PollIntervalMinutes      <- 60          // hardcoded; lift to config if needed
+    ) |> ignore
+    services.AddHostedService<LogRetentionService>() |> ignore
 
     services
 
