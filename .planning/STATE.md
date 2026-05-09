@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 13 IN PROGRESS — 13-03 + 13-04 (parallel wave 3) both complete. Hot-path demotion, transition-only health logging, endpoint-hit DEBUG logs, and --log-level CLI flag all shipped. Ready for 13-05 (startup banner + LogRetentionService).
+**Current focus:** Phase 13 IN PROGRESS — 13-05 complete. Startup banner, shutdown banner, and LogRetentionService (60-min PeriodicTimer pruning operational logs/JSONL/teacher-cap) all shipped. Ready for 13-06 (final plan in Phase 13).
 
 ## Current Position
 
 Phase: 13 of 13 (Service Logging) — IN PROGRESS
-Plan: 4 of 6 in current phase — COMPLETE ✓ (13-03 and 13-04 both complete; parallel wave 3 done)
-Status: 13-03 complete. ChatCompletions hot-path demoted, HealthService transition-only, 4 endpoint-hit DEBUG logs added. Test baseline preserved: **62 passed + 16 ignored + 0 failed**.
-Last activity: 2026-05-09 — Completed 13-03-BEHAVIOR-CHANGES-PLAN.md.
+Plan: 5 of 6 in current phase — COMPLETE ✓ (13-05 complete; wave 4 done)
+Status: 13-05 complete. LogRetentionService (60-min PeriodicTimer, 3 pruning targets), startup banner (listen/model/canary/queue snapshot), shutdown banner (in-flight + queue depth via ApplicationStopping). Test baseline preserved: **62 passed + 16 ignored + 0 failed**.
+Last activity: 2026-05-09 — Completed 13-05-BANNERS-AND-RETENTION-PLAN.md.
 
-Progress: [██████████████████████████████████░░░░] 44 of 47 plans (Phases 1-12 complete; Phase 13: 4/6 done)
+Progress: [███████████████████████████████████░░░] 45 of 47 plans (Phases 1-12 complete; Phase 13: 5/6 done)
 
 ## Performance Metrics
 
@@ -234,6 +234,9 @@ Recent decisions affecting current work:
 - 13-02: Log.Verbose maps to logger.LogTrace (ILogger equivalent of Serilog Verbose level) — confirmed for CanaryWatchdog migration
 - 13-04: applyLogLevelFromArgs is module-level private helper called in BOTH --retrain and main Kestrel branches after Logging.configure; setLevel only meaningful after levelSwitch initialized
 - 13-04: "trace" alias in parseLogLevel maps to Verbose (operator convenience); distinct from --trace flag which fails with migration error
+- 13-05: [<CLIMutable>] alone is insufficient for Configure<T>(Action<T>) mutation pattern in F# — CLIMutable only helps reflection-based JSON binders; F# compiler enforces field immutability in source code. All 7 LogRetentionOptions fields declared mutable explicitly.
+- 13-05: Plan sample used QueueDispatcher.GetStats() (nonexistent) — actual API is IStatsProvider.GetSnapshot() returning StatsSnapshot with QueueDepth122BHigh/QueueDepth122BLow field names.
+- 13-05: LogRetentionService registered via AddHostedService<LogRetentionService>() (not triple-reg) — no IInterface consumer; DI needs only the hosted service leg. Options wired via Configure<LogRetentionOptions> action reading Logging + DecisionLog sections.
 
 ### Pending Todos
 
@@ -250,5 +253,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-09
-Stopped at: Completed 13-04-LOG-LEVEL-CLI-PLAN.md. parseLogLevel + applyLogLevelFromArgs added to Program.fs. --trace migration guard active. Both --retrain and main Kestrel branches honor --log-level. Build clean (0 warnings/errors). Test baseline 62+16+0 preserved. Key commit: e7f904f.
+Stopped at: Completed 13-05-BANNERS-AND-RETENTION-PLAN.md. LogRetentionService (60-min PeriodicTimer, 3 pruning targets) + startup banner (port/model/canary/queue/log.dir) + shutdown banner (ApplicationStopping, in-flight + queue depth). Build clean (0 warnings/errors). Test baseline 62+16+0 preserved. Key commits: 54bd24a, ae76295, fba82d1.
 Resume file: None
