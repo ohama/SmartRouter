@@ -31,10 +31,9 @@ type TaskType =
 type RoutingReason =
     | ExplicitModelOverride of requestedAlias: string
     | ExplicitTask          of taskType: TaskType
-    | Heuristic             of score: int
     | Default
     | ML
-    | FallbackTo35B   // NEW Phase 10: 122B unavailable, rerouted to 35B
+    | FallbackTo35B   // Phase 10: 122B unavailable, rerouted to 35B
 
 /// LLM wire message (same shape as blueCode; needed by IUpstreamClient port).
 type MessageRole = System | User | Assistant
@@ -89,14 +88,12 @@ type RoutingDecision =
 /// The Cli layer (plan 01-03) constructs this from appsettings.json and
 /// injects it into routeRequest at composition time (ARCH-01 preserved).
 type RoutingConfig =
-    { ComplexityThreshold : int
-      Keywords            : string list
-      TaskTable           : Map<string, ModelId * Priority>
+    { TaskTable   : Map<string, ModelId * Priority>
       /// ML routing threshold: P(Qwen122B) ≥ this value → 122B (Phase 6).
-      /// Heuristic algorithm ignores this field; only ML reads it.
-      MlThreshold         : float32 }
+      /// ML reads this; routes to 122B when P >= MlThreshold.
+      MlThreshold : float32 }
 
 /// Function type for pluggable routing algorithms.
-/// Both Heuristic.applyHeuristic and ML.applyML conform to this shape.
+/// ML.applyML conforms to this shape.
 /// Returns RoutingDecision (NOT Result) — error paths owned by tryTaskTable upstream.
 type RoutingAlgorithm = RoutingConfig -> RouterRequest -> RoutingDecision
