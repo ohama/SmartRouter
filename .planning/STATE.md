@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 12 COMPLETE — Heuristic Routing Removal verified 7/7 must-haves. Ready for Phase 13 (Service Logging).
+**Current focus:** Phase 13 IN PROGRESS — Service Logging foundation complete (13-01). Dual sink live, IConfiguration wired. Ready for 13-02 (ILogger<T> migration).
 
 ## Current Position
 
-Phase: 12 of 13 (Heuristic Routing Removal) — COMPLETE ✓
-Plan: 6 of 6 in current phase + ModelsTests gap-closure — COMPLETE ✓
-Status: Phase 12 COMPLETE + verifier passed (7/7 must-haves). Source greps all 0 hits (applyHeuristic / scoreComplexity / canonicalKeywords / Heuristic DU case / "heuristic" string / --routing-algorithm / Routing.Algorithm key). configureServices split into configureRequestPipeline + configureWithoutMl. ModelsTests fixed via gap-closure commit 748bb79 (configureWithoutMl pattern). archive/heuristic-baseline branch + v0.5-heuristic-baseline tag preserved. New baseline: **62 passed + 16 ignored + 0 failed** (down from Phase 11's 86+17 due to RoutingTests deletion + MLRoutingTests prune — user-decided Q5=전체 삭제). VERIFICATION: 12-VERIFICATION.md
-Last activity: 2026-05-09 — Phase 12 verifier (PASSED 7/7).
+Phase: 13 of 13 (Service Logging) — IN PROGRESS
+Plan: 1 of 6 in current phase — COMPLETE ✓
+Status: 13-01 foundation complete. Serilog dual-sink (Console stderr OBS-04 + rolling File), ReadFrom.Configuration, new output template with [{correlation_id}] default, appsettings.json Override table + Logging:Directory/RetentionDays + DecisionLog:RetentionDays. Program.fs IConfiguration wired. Test baseline preserved: **62 passed + 16 ignored + 0 failed**.
+Last activity: 2026-05-09 — Completed 13-01-FOUNDATION-PLAN.md.
 
-Progress: [████████████████████████████████░░░░░░] 41 of 47 plans (Phases 1-12 complete; Phase 13 pending = 6 plans)
+Progress: [█████████████████████████████████░░░░░] 42 of 47 plans (Phases 1-12 complete; Phase 13: 1/6 done)
 
 ## Performance Metrics
 
@@ -220,6 +220,13 @@ Recent decisions affecting current work:
 - ROADMAP SC#2 wording note: ROADMAP says "restart within 5 seconds" but ThrottleInterval=30 (locked from operator's qwen plist convention) means actual restart latency is ~30-35s. README §12.1 documents the actual 30s timing. Operator may flip to ThrottleInterval=5 in deploy/com.ohama.smart-router.plist if 30s is unacceptable — single-line edit, no code change required.
 - 10-VERIFICATION (verifier scored 30/30 must-haves): Phase 10 goal fully achieved. ChatCompletions pre-flight at lines 229-268 (BEFORE SSE headers); QueueDispatcher dual-layer fallback at lines 242-261 + 313-339 (CompleteAsync + StreamAsync); HealthService 135 lines with ConcurrentDictionary + PeriodicTimer + ExceptionDispatchInfo.Capture at all 3 OCE points; ARCH-01 invariant preserved (only IHealthProbe BCL-only port added to Core); REL-01..04 + API-05 + TEST-05 all marked Complete in REQUIREMENTS.md. ML feedback loop is now self-sustaining: real upstream failures → fallback fires → fallback_used=true in JSONL → FailureDetector → TeacherLabeler → Retraining loop. Three human-verification items deferred (live mlx_lm.server downtime detection, real Hermes Agent fallback round-trip, AutoRollback under production load) — non-blocking; require live upstream.
 
+- 13-01: Serilog.Sinks.File pinned at 7.0.0 (latest stable; plan suggested 6.0.0); Serilog.Settings.Configuration at 10.0.0 (plan suggested 9.0.0); both resolved cleanly
+- 13-01: configure(IConfiguration) moved AFTER WebApplication.CreateBuilder — IConfiguration needed for Logging:Directory read; pre-init crash window uses eprintfn + Log.Fatal dual write
+- 13-01: File path pattern: Path.Combine(logDir, "smart-router-.log") → Serilog RollingInterval.Day appends date token → smart-router-20260509.log / smart-router-20260509_001.log (50MB rollover)
+- 13-01: OBS-04 invariant preserved: Console sink standardErrorFromLevel=Verbose unchanged; file sink is purely additive
+- 13-01: Enrich.WithProperty("correlation_id", "-") registered BEFORE WriteTo sinks — ensures [-] renders in background logs; LogContext.PushProperty overrides at request scope (CorrelationMiddleware)
+- 13-02 executor note: Phase 12-05 stated "Phase 13-02 executor must add NullLogger<HealthService> + NullLogger<QueueDispatcher> at manual instantiation sites in StreamingTests/LoggingTests/HealthFallbackTests when those ctor params are added"
+
 ### Pending Todos
 
 - ModelsTests.fs migration to configureWithoutMl (MODELS-01/02/03 currently erroring with IEmbedder)
@@ -235,5 +242,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-09
-Stopped at: Phase 12 Plan 6 COMPLETE (Wave 4 complete). All heuristic code removed. Phase-level greps all pass. New baseline: 59 passed + 16 ignored + 3 errored (MODELS pre-existing). 3 commits: afddc84, cdbc742, 5dd2e4e.
+Stopped at: Completed 13-01-FOUNDATION-PLAN.md. Dual-sink Serilog live. Test baseline 62+16+0 preserved. 4 task commits: d72a4b2, 79ed99b, 4f04c88, 463404a.
 Resume file: None
