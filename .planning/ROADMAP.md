@@ -217,11 +217,12 @@ Plans:
   2. After a simulated crash (kill -9 on the router process), launchd restarts it automatically within 5 seconds.
   3. `GET /v1/models` returns a deduplicated list that includes model entries from both upstream servers.
   4. The README explains the routing decision pipeline (heuristic + ML), how to switch algorithms, how to tune the heuristic threshold and keyword list, how to interpret DecisionLog, how to connect Hermes, how to connect Graphify, the canary workflow, and the launchd restart procedure — a new operator can follow the steps without asking for clarification.
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 11-01: Implement /v1/models endpoint (proxy both upstreams, deduplicate by id); configure dotnet publish (-r osx-arm64 --self-contained); write com.ohama.smart-router.plist with absolute dotnet path
-- [ ] 11-02: Write README (architecture overview, routing rules incl. heuristic + ML + canary, threshold tuning, debugging, Hermes integration, Graphify integration, launchd restart procedure, retraining loop operations)
+- [ ] 11-01-MODELS-ENDPOINT-PLAN.md — GET /v1/models endpoint (parallel fetch + IHealthProbe gating + JsonElement.Clone() lifetime guard + dedupe by id) + 3 integration tests; reuses existing health-probe named HttpClient (no new DI)
+- [ ] 11-02-LAUNCHD-OPS-PLAN.md — deploy/com.ohama.smart-router.plist (mirrors qwen36-35b convention exactly) + scripts/deploy.sh (framework-dependent dotnet publish to ~/llm-system/services/smart-router/) + scripts/install-launchd.sh (copies plist; prints manual UAT steps)
+- [ ] 11-03-README-PLAN.md — README.md at repo root (~800 lines, 13 sections covering routing pipeline, ML feedback loops, configuration, all 8 endpoints, DecisionLog schema, Hermes + Graphify integration, canary workflow, launchd setup, troubleshooting)
 
 ## Progress
 
@@ -240,4 +241,4 @@ Phases execute in numeric order: 1 → 2 → 3 → **(ML arc)** 4 → 5 → 6 �
 | 8. Retraining Loop | 3/3 | ✓ Complete | 2026-05-08 |
 | 9. Canary Deployment | 3/3 | ✓ Complete | 2026-05-09 |
 | 10. Health + Fallback + graph_indexing No-Fallback | 3/3 | ✓ Complete (was Phase 4) | 2026-05-09 |
-| 11. Deployment + Documentation | 0/2 | Not started (was Phase 6) | - |
+| 11. Deployment + Documentation | 0/3 | Plans authored (was Phase 6) | - |
