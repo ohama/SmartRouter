@@ -42,6 +42,9 @@ type HealthService
         if t < 1 then 1 else t
 
     let probeOne (target: ModelId) (baseUrl: string) (ct: CancellationToken) = task {
+        // Capture previous reachable state before the probe so we can detect transitions.
+        let prevReachable = match state.TryGetValue(target) with true, (r, _) -> r | _ -> true
+
         let mutable success = false
         try
             let client = httpFactory.CreateClient("health-probe")
@@ -59,20 +62,29 @@ type HealthService
         if success then
             failures.[target] <- 0
             state.[target] <- (true, now)
-            logger.LogDebug("HealthService: {Target} reachable", target)
+            // Emit at INFO only on down→up transition; steady-state DEBUG only.
+            match prevReachable with
+            | false ->
+                logger.LogInformation("HealthService: {Target} reachable (transitioned from down)", target)
+            | true ->
+                logger.LogDebug("HealthService: {Target} still reachable", target)
         else
             let newCount = failures.AddOrUpdate(target, 1, fun _ c -> c + 1)
             let isUnreachable = newCount >= threshold ()
             if isUnreachable then
                 state.[target] <- (false, now)
-                logger.LogWarning(
-                    "HealthService: {Target} marked UNREACHABLE after {Count} consecutive failures",
-                    target, newCount)
+                // Emit at WARN only on up→down transition; steady-state DEBUG only.
+                match prevReachable with
+                | true ->
+                    logger.LogWarning(
+                        "HealthService: {Target} unreachable (transitioned from up) after {Count} consecutive failures",
+                        target, newCount)
+                | false ->
+                    logger.LogDebug("HealthService: {Target} still unreachable ({Count} failures)", target, newCount)
             else
-                // Update timestamp but keep reachable=true (under-threshold)
-                let prevReachable = match state.TryGetValue(target) with true, (r, _) -> r | _ -> true
+                // Under-threshold failures: update timestamp, keep reachable=true.
                 state.[target] <- (prevReachable, now)
-                logger.LogInformation(
+                logger.LogDebug(
                     "HealthService: {Target} probe failed ({Count}/{Threshold}); not yet unreachable",
                     target, newCount, threshold ())
     }
