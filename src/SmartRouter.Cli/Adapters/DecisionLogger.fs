@@ -34,6 +34,7 @@ let formatReason (reason: RoutingReason) : string =
     | Heuristic score             -> sprintf "heuristic:score=%d" score
     | Default                     -> "default"
     | ML                          -> "ml"
+    | FallbackTo35B               -> "fallback_to_35b"   // NEW Phase 10
 
 /// One JSONL line per routing decision.
 /// Cli-only — pure F# record, no Core references beyond Domain.
