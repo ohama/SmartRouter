@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 13 IN PROGRESS — 13-04 CLI --log-level flag complete. 13-03 (behavior changes) running in parallel. Ready for 13-05 (startup banner + LogRetentionService).
+**Current focus:** Phase 13 IN PROGRESS — 13-03 + 13-04 (parallel wave 3) both complete. Hot-path demotion, transition-only health logging, endpoint-hit DEBUG logs, and --log-level CLI flag all shipped. Ready for 13-05 (startup banner + LogRetentionService).
 
 ## Current Position
 
 Phase: 13 of 13 (Service Logging) — IN PROGRESS
 Plan: 4 of 6 in current phase — COMPLETE ✓ (13-03 and 13-04 both complete; parallel wave 3 done)
-Status: 13-04 complete. parseLogLevel + applyLogLevelFromArgs added to Program.fs. --trace migration guard live. Both --retrain and main Kestrel branches honor --log-level. Test baseline preserved: **62 passed + 16 ignored + 0 failed**.
-Last activity: 2026-05-09 — Completed 13-04-LOG-LEVEL-CLI-PLAN.md.
+Status: 13-03 complete. ChatCompletions hot-path demoted, HealthService transition-only, 4 endpoint-hit DEBUG logs added. Test baseline preserved: **62 passed + 16 ignored + 0 failed**.
+Last activity: 2026-05-09 — Completed 13-03-BEHAVIOR-CHANGES-PLAN.md.
 
 Progress: [██████████████████████████████████░░░░] 44 of 47 plans (Phases 1-12 complete; Phase 13: 4/6 done)
 
