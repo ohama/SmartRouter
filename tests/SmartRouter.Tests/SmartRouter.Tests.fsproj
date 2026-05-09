@@ -27,6 +27,8 @@
     <Compile Include="LogRotationTests.fs" />
     <!-- Issue #8: production DI graph integration tests -->
     <Compile Include="ProductionDiTests.fs" />
+    <!-- Issue #12: ML.makeApplyML reads IModelVersionProvider live (post-retrain) -->
+    <Compile Include="MLLiveVersionTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>

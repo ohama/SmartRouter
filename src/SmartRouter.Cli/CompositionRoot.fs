@@ -349,11 +349,14 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         Func<IServiceProvider, RoutingAlgorithmRegistration>(fun sp ->
             // ML branch — resolve adapters once; close over them in the makeApplyML factory.
             // Phase 9 Plan 09-02: real FeatureManagementCanaryGate + dual-classifier dispatch.
+            // Issue #12: makeApplyML now takes IModelVersionProvider directly so the closure
+            // reads live versions per call (was: closed-over strings, never updated).
             let opts               = sp.GetRequiredService<IOptions<RoutingOptions>>().Value
             let embedder           = sp.GetRequiredService<IEmbedder>()
             let baselineClassifier = sp.GetRequiredKeyedService<IClassifier>("baseline")
             let canaryClassifier   = sp.GetRequiredKeyedService<IClassifier>("canary")
             let canaryGate         = sp.GetRequiredService<ICanaryGate>()
+            let vp                 = sp.GetRequiredService<IModelVersionProvider>()
             let mlPath             = opts.ML.ModelPath
             let baselineVersion    = sprintf "ml-%s" (computeModelVersion mlPath)
             let canaryOpts2        = sp.GetRequiredService<IOptions<CanaryOptions>>().Value
@@ -364,16 +367,17 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
                 if File.Exists(canaryPath)
                 then sprintf "ml-%s-canary" (computeModelVersion canaryPath)
                 else ""
-            // Update the IModelVersionProvider so /canary GET reflects current canary version.
-            let vp = sp.GetRequiredService<IModelVersionProvider>()
+            // Seed the provider with the on-disk values so the first request observes them
+            // before any retrain / canary swap fires. Subsequent updates from
+            // RetrainingService and CanaryService flow through unchanged.
+            vp.Update(baselineVersion)
             vp.UpdateCanary(canaryVersion)
             { Algorithm    = SmartRouter.Core.ML.makeApplyML
                                 embedder
                                 baselineClassifier
                                 canaryClassifier
                                 canaryGate
-                                baselineVersion
-                                canaryVersion
+                                vp
               Name         = "ml"
               ModelVersion = baselineVersion }))
     |> ignore

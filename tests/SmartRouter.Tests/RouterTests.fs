@@ -29,6 +29,7 @@ let rootTests : Test list =
         SmartRouter.Tests.ModelsTests.tests           // Phase 11
         SmartRouter.Tests.LogRotationTests.tests      // Phase 13
         SmartRouter.Tests.ProductionDiTests.tests     // Issue #8
+        SmartRouter.Tests.MLLiveVersionTests.tests    // Issue #12
     ]
 
 [<EntryPoint>]

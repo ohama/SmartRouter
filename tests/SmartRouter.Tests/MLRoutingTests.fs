@@ -58,8 +58,17 @@ let tests : Test =
                     member _.IsCanaryAsync(_, _) =
                         System.Threading.Tasks.Task.FromResult(false) }
 
+            // Issue #12: makeApplyML now takes IModelVersionProvider (live read) instead of
+            // captured strings. Inline stub returns "baseline-v1" baseline + "" canary.
+            let stubVp =
+                { new SmartRouter.Core.RetrainingPorts.IModelVersionProvider with
+                    member _.CurrentVersion = "baseline-v1"
+                    member _.CanaryVersion  = ""
+                    member _.Update(_)      = ()
+                    member _.UpdateCanary(_)= () }
+
             // score below threshold → 35B
-            let lowAlgo = SmartRouter.Core.ML.makeApplyML fakeEmb (mkClassifier 0.3f) (mkClassifier 0.3f) nullGate "baseline-v1" ""
+            let lowAlgo = SmartRouter.Core.ML.makeApplyML fakeEmb (mkClassifier 0.3f) (mkClassifier 0.3f) nullGate stubVp
             let dLow = lowAlgo cfg req
             Expect.equal dLow.Target Qwen35B  "score 0.3 < 0.5 → 35B"
             Expect.equal dLow.Reason ML        "Reason = ML"
@@ -67,7 +76,7 @@ let tests : Test =
             Expect.equal dLow.IsFallback false "IsFallback = false"
 
             // score at/above threshold → 122B
-            let highAlgo = SmartRouter.Core.ML.makeApplyML fakeEmb (mkClassifier 0.8f) (mkClassifier 0.8f) nullGate "baseline-v1" ""
+            let highAlgo = SmartRouter.Core.ML.makeApplyML fakeEmb (mkClassifier 0.8f) (mkClassifier 0.8f) nullGate stubVp
             let dHigh = highAlgo cfg req
             Expect.equal dHigh.Target Qwen122B "score 0.8 ≥ 0.5 → 122B"
             Expect.equal dHigh.Reason ML       "Reason = ML"
