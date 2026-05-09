@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 
 ## Current Position
 
-Phase: 10 of 11 (Health/Fallback + graph_indexing no-fallback) — COMPLETE ✓
-Plan: 3 of 3 in current phase — COMPLETE ✓
-Status: Phase 10 COMPLETE. Tests: 83 passed + 17 ignored + 0 failed (net +5 from HLTH-04..08). All 5 ROADMAP success criteria for Phase 10 covered by integration tests. SUMMARY: .planning/phases/10-health-fallback-and-graph-indexing-no-fallback/10-03-SUMMARY.md
-Last activity: 2026-05-09 — Phase 10 Plan 3 (COMPLETE). Phase 10 fully done.
+Phase: 11 of 11 (Deployment + Docs) — In progress
+Plan: 1 of 3 in current phase — COMPLETE ✓
+Status: Phase 11 Plan 1 COMPLETE. Tests: 86 passed + 17 ignored + 0 failed (net +3 from MODELS-01..03). GET /v1/models endpoint live with IHealthProbe gating + dedupe + JsonElement.Clone() guard. SUMMARY: .planning/phases/11-deployment-documentation/11-01-SUMMARY.md
+Last activity: 2026-05-09 — Phase 11 Plan 1 (COMPLETE).
 
-Progress: [████████████████████████] 32 of ~32 plans (all phases 1-10 complete; phase 11 deployment+docs remaining)
+Progress: [████████████████████████░░] 33 of ~35 plans (phases 1-11 in progress; 11-01 done; 11-02 plist+scripts and 11-03 README remaining)
 
 ## Performance Metrics
 
@@ -192,6 +192,11 @@ Recent decisions affecting current work:
 - 10-03: HLTH-06 elapsed threshold is >= 400ms (not >= 1000ms) — Polly ±50% jitter on 1s base can produce ~500ms; 400ms proves retry happened without flaking on high-jitter runs
 - 10-03: HLTH-05 body read uses ResponseHeadersRead + exception catch — Kestrel early-return 503 closes TCP before chunked terminal frame; status code 503 is the authoritative assertion
 - 10-03: All 5 HLTH tests pass: 83 passed, 17 ignored, 0 failed (net +5 from Phase 9 baseline of 78). Phase 10 COMPLETE.
+- 11-01: /v1/models endpoint reuses existing health-probe HttpClient + IHealthProbe gating (no new named client; no new DI registrations)
+- 11-01: JsonElement.Clone() called before `use doc` exits — Lock 14 silent-corruption guard (non-negotiable; without it JsonElements become invalid memory references)
+- 11-01: Both-upstreams-down returns 200 + empty data array (Lock 11; mirrors /stats graceful-degradation; 503 reserved for actual server errors)
+- 11-01: 3 integration tests use StubHealthProbe last-registration-wins DI override (no FakeHealthProbe service replacement; deterministic without probe-cycle timing)
+- 11-01: Pure-Core invariant preserved (no src/SmartRouter.Core/ changes); 83→86 passed, 17 ignored unchanged
 - 10-VERIFICATION (verifier scored 30/30 must-haves): Phase 10 goal fully achieved. ChatCompletions pre-flight at lines 229-268 (BEFORE SSE headers); QueueDispatcher dual-layer fallback at lines 242-261 + 313-339 (CompleteAsync + StreamAsync); HealthService 135 lines with ConcurrentDictionary + PeriodicTimer + ExceptionDispatchInfo.Capture at all 3 OCE points; ARCH-01 invariant preserved (only IHealthProbe BCL-only port added to Core); REL-01..04 + API-05 + TEST-05 all marked Complete in REQUIREMENTS.md. ML feedback loop is now self-sustaining: real upstream failures → fallback fires → fallback_used=true in JSONL → FailureDetector → TeacherLabeler → Retraining loop. Three human-verification items deferred (live mlx_lm.server downtime detection, real Hermes Agent fallback round-trip, AutoRollback under production load) — non-blocking; require live upstream.
 
 ### Pending Todos
@@ -206,6 +211,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-09
-Stopped at: Phase 10 COMPLETE — 3/3 plans + verifier 30/30 must-haves passed; REL-01..REL-04 + API-05 + TEST-05 marked Complete in REQUIREMENTS.md; build clean; 83 pass + 17 ignored, 0 failed (without embed models) / 90 + 10 (with embed models). Next: Phase 11 (Deployment + Docs) — last phase before milestone v1.0.
+Last session: 2026-05-09T03:35:13Z
+Stopped at: Phase 11 Plan 1 COMPLETE — GET /v1/models endpoint + 3 integration tests; build clean; 86 pass + 17 ignored, 0 failed (without embed models) / 93 + 10 (with embed models). Next: Phase 11 Wave 2 — 11-02 (launchd plist + ops scripts) and 11-03 (README) — file-disjoint, safe to run parallel.
 Resume file: None
