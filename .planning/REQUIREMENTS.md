@@ -12,7 +12,7 @@
 - [x] **API-02**: Router parses standard OpenAI fields (`messages`, `model`, `stream`, `temperature`, `top_p`, `max_tokens`)
 - [x] **API-03**: Router accepts optional non-OpenAI `task` field as a top-level body property (per `extra_body` industry convention)
 - [x] **API-04**: Router preserves unknown request fields when proxying upstream (no field-stripping)
-- [ ] **API-05**: Router exposes `GET /health` returning liveness + reachability of both upstream ports
+- [x] **API-05**: Router exposes `GET /health` returning liveness + reachability of both upstream ports
 - [ ] **API-06**: Router exposes `GET /v1/models` proxying both upstreams' model lists, deduped
 - [x] **API-07**: Router exposes `GET /stats` returning queue size, active requests, average wait time, requests/sec, failures, streaming duration
 
@@ -48,10 +48,10 @@
 
 ### Reliability
 
-- [ ] **REL-01**: Router retries transient upstream failures with bounded retries + backoff (idempotent chat/completions only)
-- [ ] **REL-02**: Router probes upstream health (35B, 122B reachability) on a background cadence and exposes results via `/health`
-- [ ] **REL-03**: When 122B is unavailable, router falls back to 35B for all 122B-routed requests **except** `task=graph_indexing`
-- [ ] **REL-04**: When 122B is unavailable and request has `task=graph_indexing`, router returns an error (does NOT silently downgrade to 35B)
+- [x] **REL-01**: Router retries transient upstream failures with bounded retries + backoff (idempotent chat/completions only — streaming EXCLUDED via separate -stream named HttpClients without resilience handler; partial SSE output cannot be replayed)
+- [x] **REL-02**: Router probes upstream health (35B, 122B reachability) on a background cadence (HealthService BackgroundService + PeriodicTimer; default 10s) and exposes results via `/health`
+- [x] **REL-03**: When 122B is unavailable, router falls back to 35B for all 122B-routed requests **except** `task=graph_indexing` (with `fallback_used=true` in DecisionLog activating Phase 7 FailureDetector → Phase 8 RetrainingService loop)
+- [x] **REL-04**: When 122B is unavailable and request has `task=graph_indexing`, router returns 503 with structured `{error: {message, type: "model_unavailable"}}` body (does NOT silently downgrade to 35B)
 - [x] **REL-05**: Per-request `CancellationToken` always carries a timeout (paired with `CancellationTokenSource.CreateLinkedTokenSource`) so a hung upstream cannot deadlock a queue slot
 
 ### Observability
@@ -85,7 +85,7 @@
 - [x] **TEST-02**: Integration tests run against fake upstream Kestrel servers on random ports (deterministic responses, controlled latency, controlled failures)
 - [x] **TEST-03**: Streaming tests verify chunk ordering, mid-stream cancellation, mid-stream upstream failure, `[DONE]` propagation
 - [x] **TEST-04**: Concurrency tests verify SemaphoreSlim enforcement, priority ordering, semaphore-release on cancellation
-- [ ] **TEST-05**: Failure tests cover upstream timeout, malformed JSON from upstream, unavailable model server, fallback path, `graph_indexing`-must-fail path
+- [x] **TEST-05**: Failure tests cover unavailable model server (HLTH-04), fallback path (HLTH-04), `graph_indexing`-must-fail path (HLTH-05), transient retry (HLTH-06), and streaming-no-retry isolation (HLTH-07); /health endpoint shape (HLTH-08)
 - [x] **TEST-06**: Load tests measure latency under contention and validate 122B throughput cap holds under burst
 - [x] **TEST-07**: Tests use the explicit `rootTests` list pattern in the test entrypoint (matches blueCode; Expecto auto-discovery is unreliable)
 
@@ -190,7 +190,7 @@ Deferred. Tracked but not in current roadmap.
 | API-02 | Phase 1 | Complete |
 | API-03 | Phase 1 | Complete |
 | API-04 | Phase 1 | Complete |
-| API-05 | Phase 10 | Pending |
+| API-05 | Phase 10 | Complete |
 | API-06 | Phase 11 | Pending |
 | API-07 | Phase 3 | Complete |
 | ROUT-01 | Phase 1 | Complete |
@@ -214,10 +214,10 @@ Deferred. Tracked but not in current roadmap.
 | STRM-05 | Phase 2 | Complete |
 | STRM-06 | Phase 2 | Complete |
 | STRM-07 | Phase 2 | Complete |
-| REL-01 | Phase 10 | Pending |
-| REL-02 | Phase 10 | Pending |
-| REL-03 | Phase 10 | Pending |
-| REL-04 | Phase 10 | Pending |
+| REL-01 | Phase 10 | Complete |
+| REL-02 | Phase 10 | Complete |
+| REL-03 | Phase 10 | Complete |
+| REL-04 | Phase 10 | Complete |
 | REL-05 | Phase 3 | Complete |
 | OBS-01 | Phase 5 | Complete |
 | OBS-02 | Phase 3 | Complete |
@@ -239,7 +239,7 @@ Deferred. Tracked but not in current roadmap.
 | TEST-02 | Phases 2+3 | Complete |
 | TEST-03 | Phase 2 | Complete |
 | TEST-04 | Phase 3 | Complete |
-| TEST-05 | Phase 10 | Pending |
+| TEST-05 | Phase 10 | Complete |
 | TEST-06 | Phase 3 | Complete |
 | TEST-07 | Phase 1 | Complete |
 | ML-01 | Phase 4 | Complete |

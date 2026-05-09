@@ -192,6 +192,7 @@ Recent decisions affecting current work:
 - 10-03: HLTH-06 elapsed threshold is >= 400ms (not >= 1000ms) — Polly ±50% jitter on 1s base can produce ~500ms; 400ms proves retry happened without flaking on high-jitter runs
 - 10-03: HLTH-05 body read uses ResponseHeadersRead + exception catch — Kestrel early-return 503 closes TCP before chunked terminal frame; status code 503 is the authoritative assertion
 - 10-03: All 5 HLTH tests pass: 83 passed, 17 ignored, 0 failed (net +5 from Phase 9 baseline of 78). Phase 10 COMPLETE.
+- 10-VERIFICATION (verifier scored 30/30 must-haves): Phase 10 goal fully achieved. ChatCompletions pre-flight at lines 229-268 (BEFORE SSE headers); QueueDispatcher dual-layer fallback at lines 242-261 + 313-339 (CompleteAsync + StreamAsync); HealthService 135 lines with ConcurrentDictionary + PeriodicTimer + ExceptionDispatchInfo.Capture at all 3 OCE points; ARCH-01 invariant preserved (only IHealthProbe BCL-only port added to Core); REL-01..04 + API-05 + TEST-05 all marked Complete in REQUIREMENTS.md. ML feedback loop is now self-sustaining: real upstream failures → fallback fires → fallback_used=true in JSONL → FailureDetector → TeacherLabeler → Retraining loop. Three human-verification items deferred (live mlx_lm.server downtime detection, real Hermes Agent fallback round-trip, AutoRollback under production load) — non-blocking; require live upstream.
 
 ### Pending Todos
 
@@ -206,5 +207,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-05-09
-Stopped at: Phase 10 Plan 3 COMPLETE — HealthFallbackTests.fs (HLTH-04..08). Build: 0/0. Tests: 83 passed + 17 ignored + 0 failed. Phase 10 fully done. Next: Phase 11 (Deployment + Docs).
+Stopped at: Phase 10 COMPLETE — 3/3 plans + verifier 30/30 must-haves passed; REL-01..REL-04 + API-05 + TEST-05 marked Complete in REQUIREMENTS.md; build clean; 83 pass + 17 ignored, 0 failed (without embed models) / 90 + 10 (with embed models). Next: Phase 11 (Deployment + Docs) — last phase before milestone v1.0.
 Resume file: None
