@@ -5,7 +5,7 @@ open System.IO
 open System.Threading
 open System.Threading.Tasks
 open Microsoft.Extensions.Hosting   // IHostedService
-open Serilog
+open Microsoft.Extensions.Logging
 open SmartRouter.Core.RetrainingPorts
 open SmartRouter.Cli.Adapters.CanaryState
 open SmartRouter.Cli.Adapters.CanaryMetrics
@@ -55,7 +55,8 @@ type CanaryService(
     retrainLock      : IRetrainLock,
     options          : CanaryOptions,
     baselineModelPath: string,
-    previousModelPath: string) =
+    previousModelPath: string,
+    logger           : ILogger<CanaryService>) =
 
     // ── IHostedService state: own a FileSystemWatcher for the canary model file ──
     //
@@ -73,12 +74,12 @@ type CanaryService(
             if File.Exists(options.CanaryModelPath) then
                 let v = sprintf "ml-%s-canary" (computeModelVersion options.CanaryModelPath)
                 versionProvider.UpdateCanary(v)
-                Log.Information("CanaryService: canary file mutation observed; canary_version={V}", v)
+                logger.LogInformation("CanaryService: canary file mutation observed; canary_version={V}", v)
             else
                 versionProvider.UpdateCanary("")
-                Log.Information("CanaryService: canary file removed; canary_version cleared")
+                logger.LogInformation("CanaryService: canary file removed; canary_version cleared")
         with ex ->
-            Log.Warning(ex, "CanaryService: failed to handle canary file mutation (continuing)")
+            logger.LogWarning(ex, "CanaryService: failed to handle canary file mutation (continuing)")
 
     interface ICanaryService with
         member _.GetStatusAsync(_ct: CancellationToken) =
@@ -109,7 +110,7 @@ type CanaryService(
                 else
                     match retrainLock.TryAcquire(0) with
                     | None ->
-                        Log.Warning("CanaryService: promote skipped — retrain in progress")
+                        logger.LogWarning("CanaryService: promote skipped — retrain in progress")
                         return RetrainInProgress
                     | Some lockHandle ->
                         use _ = lockHandle
@@ -128,22 +129,22 @@ type CanaryService(
                             versionProvider.UpdateCanary("")   // canary is now baseline; clear canary version
                             // The watchdog continues; new requests bucket against the (still-zero canary file) gate.
                             // ICanaryGate.File.Exists check now returns false → all traffic to baseline.
-                            Log.Information("CanaryService: PROMOTE complete; new baseline_version={V}", newVersion)
+                            logger.LogInformation("CanaryService: PROMOTE complete; new baseline_version={V}", newVersion)
                             return Promoted newVersion
                         with
                         | ex ->
-                            Log.Error(ex, "CanaryService: promote failed")
+                            logger.LogError(ex, "CanaryService: promote failed")
                             return Failed (string ex)
             }
 
         member _.RollbackAsync(reason: string) =
             state.SetPercentage(0, if String.IsNullOrEmpty(reason) then "operator-rollback" else reason)
-            Log.Warning("CanaryService: ROLLBACK fired (reason={R})", reason)
+            logger.LogWarning("CanaryService: ROLLBACK fired (reason={R})", reason)
 
         member _.EnableAsync(percentage: int) =
             let clamped = max 0 (min 100 percentage)
             state.SetPercentage(clamped, sprintf "operator-enable %d%%" clamped)
-            Log.Information("CanaryService: ENABLE percentage={P}", clamped)
+            logger.LogInformation("CanaryService: ENABLE percentage={P}", clamped)
 
     interface IHostedService with
         member _.StartAsync(_ct: CancellationToken) =
@@ -166,14 +167,14 @@ type CanaryService(
                     // Fire once at startup so versionProvider reflects current file state immediately,
                     // not just on subsequent mutations.
                     onCanaryFileMutation ()
-                    Log.Information(
+                    logger.LogInformation(
                         "CanaryService: FileSystemWatcher armed dir={Dir} pattern={Pat}",
                         dir, fileName)
                 with ex ->
                     // Non-fatal: router still boots; canary_version updates only at promote-time
                     // (the version was always populated by the (1.2) RoutingAlgorithmRegistration
                     // factory at startup). Watcher failure is logged + tolerated.
-                    Log.Warning(ex, "CanaryService: failed to arm FileSystemWatcher (canary version will lag until restart)")
+                    logger.LogWarning(ex, "CanaryService: failed to arm FileSystemWatcher (canary version will lag until restart)")
             } :> Task
 
         member _.StopAsync(_ct: CancellationToken) =
@@ -184,7 +185,7 @@ type CanaryService(
                         w.EnableRaisingEvents <- false
                         w.Dispose()
                     with ex ->
-                        Log.Warning(ex, "CanaryService: error disposing FileSystemWatcher (continuing shutdown)")
+                        logger.LogWarning(ex, "CanaryService: error disposing FileSystemWatcher (continuing shutdown)")
                     watcher <- None
                 | None -> ()
             } :> Task

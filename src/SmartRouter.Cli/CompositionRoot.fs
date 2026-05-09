@@ -648,7 +648,8 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         let previousPath =
             if obj.ReferenceEquals(retrainOpts, null) || String.IsNullOrWhiteSpace(retrainOpts.PreviousModelPath)
             then "models/router.zip.prev" else retrainOpts.PreviousModelPath
-        CanaryService(st, m, vp, rl, normalized, baselinePath, previousPath))
+        CanaryService(st, m, vp, rl, normalized, baselinePath, previousPath,
+            sp.GetRequiredService<ILogger<CanaryService>>()))
         |> ignore
     services.AddSingleton<ICanaryService>(fun sp -> sp.GetRequiredService<CanaryService>() :> ICanaryService) |> ignore
     // CanaryService is also IHostedService (owns FileSystemWatcher for router-canary.zip
