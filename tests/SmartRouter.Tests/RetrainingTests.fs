@@ -112,6 +112,9 @@ let private writeHardCases (path: string) (entries: HardCaseEntry[]) : unit =
         sw.WriteLine(JsonSerializer.Serialize(e, opts))
     sw.Flush()
 
+/// Shared NullLogger for direct module-function call sites in this test file.
+let private nullLogger = NullLogger.Instance :> Microsoft.Extensions.Logging.ILogger
+
 /// Write a baseline router.zip so Validator.computeBaseline has something to load.
 /// Trains on a balanced synthetic set so accuracy ~= reasonable baseline.
 let private writeBaselineModel (path: string) : unit =
@@ -123,7 +126,7 @@ let private writeBaselineModel (path: string) : unit =
     // Build both here so this baseline helper is self-contained.
     let mlCtx = MLContext(seed = Nullable<int>(42))
     let trainView = mlCtx.Data.LoadFromEnumerable(samples)
-    let _model = retrain mlCtx trainView path 0.1f
+    let _model = retrain nullLogger mlCtx trainView path 0.1f
     ()
 
 // ── In-memory Serilog sink ────────────────────────────────────────────────────
@@ -149,7 +152,7 @@ let private test1_mergerClassBalance =
                            (Array.init 475 (fun i -> mkSample (i + 1000) true))
                            (Array.init 25 (fun i -> mkSample (i + 2000) false))
         let rng = Random(42)
-        let merged = merge oldSamples newSamples rng
+        let merged = merge nullLogger oldSamples newSamples rng
 
         let total = float merged.Length
         let class1 = merged |> Array.filter (fun s -> s.Label) |> Array.length |> float
@@ -167,7 +170,7 @@ let private test2_mergerBootstrap =
     testCase "RETRAIN-01: DatasetMerger with old=[||] returns new samples without scaling" <| fun _ ->
         let newSamples = Array.init 100 (fun i -> mkSample i (i % 2 = 0))
         let rng = Random(42)
-        let merged = merge [||] newSamples rng
+        let merged = merge nullLogger [||] newSamples rng
 
         Expect.equal merged.Length newSamples.Length
             "bootstrap (old=[||]) must return same count as new samples (no 70/30 scaling)"
@@ -199,10 +202,10 @@ let private test3_validatorGate =
             let acceptSamples = Array.init 100 (fun i -> mkSample (i + 6000) (i % 2 = 0))
             let mlCtxA = MLContext(seed = Nullable<int>(42))
             let dvA = mlCtxA.Data.LoadFromEnumerable(acceptSamples)
-            let _modelA = retrain mlCtxA dvA (modelPath + ".accept.tmp.zip") 0.1f
+            let _modelA = retrain nullLogger mlCtxA dvA (modelPath + ".accept.tmp.zip") 0.1f
             // Per-context held-out view so baseline + candidate comparison is fair (Lock 5)
             let heldOutDV_A = mlCtxA.Data.LoadFromEnumerable(heldOut)
-            let baselineAccA, baselineFbRateA = computeBaseline mlCtxA modelPath heldOutDV_A
+            let baselineAccA, baselineFbRateA = computeBaseline nullLogger mlCtxA modelPath heldOutDV_A
             let resultA = validate mlCtxA _modelA heldOutDV_A baselineAccA baselineFbRateA
             match resultA with
             | Accepted (acc, fb) ->
@@ -217,9 +220,9 @@ let private test3_validatorGate =
             let rejectSamples = Array.init 50 (fun i -> mkSample (i + 7000) true)   // all positive
             let mlCtxB = MLContext(seed = Nullable<int>(42))
             let dvB = mlCtxB.Data.LoadFromEnumerable(rejectSamples)
-            let _modelB = retrain mlCtxB dvB (modelPath + ".reject.tmp.zip") 0.1f
+            let _modelB = retrain nullLogger mlCtxB dvB (modelPath + ".reject.tmp.zip") 0.1f
             let heldOutDV_B = mlCtxB.Data.LoadFromEnumerable(heldOut)
-            let baselineAccB, baselineFbRateB = computeBaseline mlCtxB modelPath heldOutDV_B
+            let baselineAccB, baselineFbRateB = computeBaseline nullLogger mlCtxB modelPath heldOutDV_B
             let resultB = validate mlCtxB _modelB heldOutDV_B baselineAccB baselineFbRateB
             match resultB with
             | Rejected reason ->
@@ -227,7 +230,7 @@ let private test3_validatorGate =
                 // Write the rejection log; verify a JSONL line lands. Use Case B's baseline values
                 // because that's the gate the candidate actually failed against.
                 let rejLog = Path.Combine(dir, "rejections.jsonl")
-                writeRejectionLog rejLog reason baselineAccB baselineFbRateB rejectSamples.Length
+                writeRejectionLog nullLogger rejLog reason baselineAccB baselineFbRateB rejectSamples.Length
                 Expect.isTrue (File.Exists rejLog) "rejection log file must exist"
                 let lines = File.ReadAllLines(rejLog)
                 Expect.isGreaterThan lines.Length 0 "rejection log must have >= 1 line"

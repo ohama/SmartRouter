@@ -4,9 +4,9 @@ open System
 open System.IO
 open System.Text
 open System.Text.Json
+open Microsoft.Extensions.Logging
 open Microsoft.ML
 open Microsoft.ML.Data
-open Serilog
 open SmartRouter.Cli.Adapters.Retrainer
 open SmartRouter.Cli.Adapters.MlNetClassifier   // RouteInput (read-back schema)
 
@@ -26,13 +26,14 @@ type ValidationResult =
 /// — meaning "no baseline; any working model passes" — and logs Warning.
 
 let computeBaseline
+    (logger     : ILogger)
     (mlContext  : MLContext)
     (modelPath  : string)
     (heldOutDV  : IDataView)
     : float * float =
 
     if not (File.Exists modelPath) then
-        Log.Warning("Validator.computeBaseline: {ModelPath} missing; using neutral baseline (acc=0, fbRate=1)", modelPath)
+        logger.LogWarning("Validator.computeBaseline: {ModelPath} missing; using neutral baseline (acc=0, fbRate=1)", modelPath)
         0.0, 1.0
     else
         let mutable schemaUsed = Unchecked.defaultof<DataViewSchema>
@@ -85,6 +86,7 @@ let validate
 /// Atomic via FileMode.Append + sw.Flush() (matches DecisionLogWriter pattern).
 
 let writeRejectionLog
+    (logger            : ILogger)
     (rejectionLogPath  : string)
     (reason            : string)
     (baselineAcc       : float)
@@ -111,6 +113,6 @@ let writeRejectionLog
     use writer = new StreamWriter(stream, Encoding.UTF8)
     writer.WriteLine(line)
     writer.Flush()
-    Log.Warning(
+    logger.LogWarning(
         "Validator: rejected new model — {Reason} (baselineAcc={BAcc}, baselineFbRate={BFb})",
         reason, baselineAcc, baselineFbRate)

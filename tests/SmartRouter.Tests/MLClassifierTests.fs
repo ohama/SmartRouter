@@ -6,6 +6,7 @@ open System.Threading
 open Expecto
 open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.ML
+open Microsoft.Extensions.Logging.Abstractions
 open SmartRouter.Cli.Adapters.MlNetClassifier
 open SmartRouter.Cli.Adapters.ModelBootstrapper
 
@@ -21,6 +22,8 @@ let private cleanupDir (dir: string) =
         if Directory.Exists dir then Directory.Delete(dir, recursive = true)
     with _ -> ()
 
+let private nullLogger = NullLogger.Instance :> Microsoft.Extensions.Logging.ILogger
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 let tests : Test =
@@ -33,12 +36,12 @@ let tests : Test =
                 let modelPath = Path.Combine(dir, "router.zip")
                 Expect.isFalse (File.Exists modelPath) "precondition: file does not exist"
 
-                ensureDummyModel modelPath
+                ensureDummyModel nullLogger modelPath
                 Expect.isTrue  (File.Exists modelPath) "after first call: file exists"
                 let firstSize = (FileInfo modelPath).Length
 
                 // Second call is a no-op (already exists)
-                ensureDummyModel modelPath
+                ensureDummyModel nullLogger modelPath
                 let secondSize = (FileInfo modelPath).Length
                 Expect.equal firstSize secondSize "idempotent: second call did not rewrite the file"
             finally
@@ -49,7 +52,7 @@ let tests : Test =
             let dir = mkTempDir ()
             try
                 let modelPath = Path.Combine(dir, "router.zip")
-                ensureDummyModel modelPath
+                ensureDummyModel nullLogger modelPath
 
                 // Build a minimal DI container that registers the pool against the temp model
                 let services = ServiceCollection()
@@ -81,7 +84,7 @@ let tests : Test =
             let dir = mkTempDir ()
             try
                 let modelPath = Path.Combine(dir, "router.zip")
-                ensureDummyModel modelPath
+                ensureDummyModel nullLogger modelPath
 
                 let v = computeModelVersion modelPath
                 Expect.equal v.Length 8 "8 hex chars (4 bytes of SHA-256)"

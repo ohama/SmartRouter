@@ -131,8 +131,8 @@ type RetrainingService(
             logger.LogInformation("RetrainingService: starting retrain cycle")
 
             // 1. Read inputs
-            let hardCaseEntries = readHardCases options.HardCasePath
-            let oldEntries      = readTrainingSet options.TrainingSetPath
+            let hardCaseEntries = readHardCases logger options.HardCasePath
+            let oldEntries      = readTrainingSet logger options.TrainingSetPath
             logger.LogInformation(
                 "RetrainingService: read {Hard} hard cases + {Old} old training samples",
                 hardCaseEntries.Length, oldEntries.Length)
@@ -148,7 +148,7 @@ type RetrainingService(
 
             // 3. Merge with seeded RNG (reproducible ordering)
             let rng = Random(options.HeldOutRandomSeed)
-            let merged = merge oldSamples newSamples rng
+            let merged = merge logger oldSamples newSamples rng
 
             if merged.Length < 4 then
                 logger.LogWarning(
@@ -173,12 +173,12 @@ type RetrainingService(
             // 6. Train candidate on split.TrainSet ONLY (NOT the full dataView).
             //    Candidate file lives next to the target; cleaned up on rejection.
             let candidatePath = options.ModelPath + ".candidate.zip"
-            let model = retrain mlContext split.TrainSet candidatePath options.L2Regularization
+            let model = retrain logger mlContext split.TrainSet candidatePath options.L2Regularization
 
             // 7. Compute baseline on the SAME split.TestSet (load existing router.zip + evaluate).
             //    Same split for both candidate AND baseline -> fair comparison.
             let baselineAcc, baselineFbRate =
-                computeBaseline mlContext options.ModelPath split.TestSet
+                computeBaseline logger mlContext options.ModelPath split.TestSet
 
             // 8. Validate candidate on split.TestSet against baseline metrics.
             let result = validate mlContext model split.TestSet baselineAcc baselineFbRate
@@ -235,6 +235,7 @@ type RetrainingService(
                     "RetrainingService: validation rejected — {Reason}; router.zip unchanged",
                     reason)
                 writeRejectionLog
+                    logger
                     options.RejectionLogPath
                     reason
                     baselineAcc

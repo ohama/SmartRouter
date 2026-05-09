@@ -291,8 +291,11 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
     // The --retrain offline path calls configureWithoutMl which skips this entire block.
     let mlOpts = config.GetSection("Routing:ML").Get<MlOptions>()
     if not (obj.ReferenceEquals(mlOpts, null)) then
-        ensureEmbeddingFilesPresent mlOpts.EmbeddingModelPath mlOpts.TokenizerPath
-        ensureDummyModel mlOpts.ModelPath
+        // Bootstrap calls run at startup before the DI container is built.
+        // Use NullLogger here — the startup Serilog static sink captures fatal errors.
+        let bootLogger = Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance :> Microsoft.Extensions.Logging.ILogger
+        ensureEmbeddingFilesPresent bootLogger mlOpts.EmbeddingModelPath mlOpts.TokenizerPath
+        ensureDummyModel bootLogger mlOpts.ModelPath
 
         let canaryOpts = config.GetSection("Canary").Get<CanaryOptions>()
         let canaryModelPath =

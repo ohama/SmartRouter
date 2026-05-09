@@ -2,13 +2,13 @@ module SmartRouter.Cli.Adapters.ModelBootstrapper
 
 open System
 open System.IO
+open Microsoft.Extensions.Logging
 open Microsoft.ML
-open Serilog
 open SmartRouter.Cli.Adapters.MlNetClassifier   // RouteInput schema
 
 /// Hard-fail if embedding model files are missing. Must be called BEFORE
 /// BgeM3Embedder is constructed to give the operator a clear error message.
-let ensureEmbeddingFilesPresent (onnxPath: string) (tokenizerPath: string) : unit =
+let ensureEmbeddingFilesPresent (logger: ILogger) (onnxPath: string) (tokenizerPath: string) : unit =
     let missing = [
         if not (File.Exists onnxPath)      then yield onnxPath
         if not (File.Exists tokenizerPath) then yield tokenizerPath
@@ -19,17 +19,17 @@ let ensureEmbeddingFilesPresent (onnxPath: string) (tokenizerPath: string) : uni
             sprintf
                 "Required ML embedding files missing: %s. Run scripts/download-models.sh and retry."
                 lines
-        // Log Fatal so it shows up clearly even if unchecked exceptions get swallowed mid-host
-        Log.Fatal("{Message}", msg)
+        // Log Critical so it shows up clearly even if unchecked exceptions get swallowed mid-host
+        logger.LogCritical("{Message}", msg)
         raise (FileNotFoundException(msg))
 
 /// Idempotent: writes models/router.zip ONLY if missing.
 /// Generates 200 random 1024-dim samples with balanced labels and trains an LR
 /// model. Routing will be ~50/50 until Phase 7-8 retrain on real data.
 /// Atomic write via temp+rename so PredictionEnginePool's watcher never sees partial.
-let ensureDummyModel (modelPath: string) : unit =
+let ensureDummyModel (logger: ILogger) (modelPath: string) : unit =
     if not (File.Exists modelPath) then
-        Log.Warning(
+        logger.LogWarning(
             "No ML classifier model found at {ModelPath}. Generating random dummy 1024-dim model. " +
             "Routing will be ~50/50 until Phase 7-8 generate real training data.",
             modelPath)
@@ -56,7 +56,7 @@ let ensureDummyModel (modelPath: string) : unit =
         mlContext.Model.Save(model, dataView.Schema, tmp)
         if File.Exists modelPath then File.Delete modelPath
         File.Move(tmp, modelPath)
-        Log.Information("Dummy classifier model written to {ModelPath}", modelPath)
+        logger.LogInformation("Dummy classifier model written to {ModelPath}", modelPath)
 
 /// Compute model_version: SHA-256 of router.zip, first 8 hex chars (4 bytes).
 /// Returns "unknown" if file missing — should not happen post-ensureDummyModel.

@@ -2,9 +2,9 @@ module SmartRouter.Cli.Adapters.Retrainer
 
 open System
 open System.IO
+open Microsoft.Extensions.Logging
 open Microsoft.ML
 open Microsoft.ML.Data
-open Serilog
 
 /// ML.NET training schema. [<CLIMutable>] required — ML.NET uses reflection-based prop set.
 /// Same shape as MlNetClassifier.RouteInput so saved model schema matches the live pool.
@@ -34,6 +34,7 @@ type TrainSample =
 /// PredictionEnginePool sees a missing file.
 
 let retrain
+    (logger            : ILogger)
     (mlContext         : MLContext)
     (trainView         : IDataView)
     (modelPath         : string)
@@ -56,6 +57,6 @@ let retrain
     mlContext.Model.Save(model, trainView.Schema, tmp)
     // Atomic — single rename(2) syscall on Unix; PredictionEnginePool's watcher reloads.
     File.Move(tmp, modelPath, overwrite = true)
-    Log.Information("Retrainer: model written to {ModelPath}", modelPath)
+    logger.LogInformation("Retrainer: model written to {ModelPath}", modelPath)
 
     model

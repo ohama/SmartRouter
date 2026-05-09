@@ -5,7 +5,7 @@ open System.IO
 open System.Text
 open System.Text.Json
 open System.Text.Json.Serialization
-open Serilog
+open Microsoft.Extensions.Logging
 open SmartRouter.Core.RetrainingPorts
 open SmartRouter.Cli.Adapters.Retrainer   // TrainSample lives here (compile order: Retrainer.fs precedes DatasetMerger.fs)
 
@@ -23,7 +23,7 @@ let private jsonOpts =
 // Returns [||] when file is absent (first-retrain bootstrap path).
 // Malformed lines are logged Warning and skipped (mirrors HardCaseDatasetWriter.seedDedupe).
 
-let readHardCases (path: string) : HardCaseEntry[] =
+let readHardCases (logger: ILogger) (path: string) : HardCaseEntry[] =
     if not (File.Exists path) then
         [||]
     else
@@ -37,7 +37,7 @@ let readHardCases (path: string) : HardCaseEntry[] =
                     let entry = JsonSerializer.Deserialize<HardCaseEntry>(line, jsonOpts)
                     entries.Add(entry)
                 with ex ->
-                    Log.Warning(ex, "DatasetMerger: skipping malformed line in {Path}", path)
+                    logger.LogWarning(ex, "DatasetMerger: skipping malformed line in {Path}", path)
             line <- reader.ReadLine()
         entries.ToArray()
 
@@ -46,8 +46,8 @@ let readHardCases (path: string) : HardCaseEntry[] =
 // Same shape as readHardCases but for datasets/training-set.jsonl.
 // Returns [||] when file is absent (first retrain — bootstrap case from CONTEXT.md Lock 3).
 
-let readTrainingSet (path: string) : HardCaseEntry[] =
-    readHardCases path  // identical schema; same FileShare; same dedupe-of-malformed semantics
+let readTrainingSet (logger: ILogger) (path: string) : HardCaseEntry[] =
+    readHardCases logger path  // identical schema; same FileShare; same dedupe-of-malformed semantics
 
 // ── hardCaseToTrainSample ─────────────────────────────────────────────────────
 //
@@ -69,13 +69,13 @@ let hardCaseToTrainSample (embed: string -> float32[]) (entry: HardCaseEntry) : 
 //   new samples (post-rebalance) — do NOT inject synthetic noise.
 // CONTEXT.md Lock: ratio >=30% each class; rebalance via oversample-with-replacement.
 
-let private rebalance (samples: TrainSample[]) (rng: Random) : TrainSample[] =
+let private rebalance (logger: ILogger) (samples: TrainSample[]) (rng: Random) : TrainSample[] =
     let class1 = samples |> Array.filter (fun s -> s.Label)
     let class0 = samples |> Array.filter (fun s -> not s.Label)
     if class0.Length = 0 || class1.Length = 0 then
         // Pathological: only one class present — return as-is and log.
         // Validator will reject the resulting model.
-        Log.Warning(
+        logger.LogWarning(
             "DatasetMerger: only one class present (class0={C0}, class1={C1}); cannot rebalance",
             class0.Length, class1.Length)
         samples
@@ -86,7 +86,7 @@ let private rebalance (samples: TrainSample[]) (rng: Random) : TrainSample[] =
             else Array.append arr (Array.init (n - arr.Length) (fun _ -> arr.[rng.Next(arr.Length)]))
         let bal0 = oversample class0 target
         let bal1 = oversample class1 target
-        Log.Information(
+        logger.LogInformation(
             "DatasetMerger: rebalanced minority class via oversampling — class0 {C0in}->{C0out}, class1 {C1in}->{C1out}",
             class0.Length, bal0.Length, class1.Length, bal1.Length)
         Array.append bal0 bal1 |> Array.sortBy (fun _ -> rng.Next())
@@ -102,6 +102,7 @@ let private classBalanceOk (samples: TrainSample[]) : bool =
         r0 >= 0.30 && r1 >= 0.30
 
 let merge
+    (logger     : ILogger)
     (oldSamples : TrainSample[])
     (newSamples : TrainSample[])
     (rng        : Random)
@@ -109,13 +110,13 @@ let merge
 
     // ── Bootstrap path: no "old" dataset (first retrain). ────────────────────
     if oldSamples.Length = 0 then
-        Log.Information(
+        logger.LogInformation(
             "DatasetMerger: no existing training set found; using {N} new samples as bootstrap (70/30 split skipped)",
             newSamples.Length)
         if classBalanceOk newSamples then
             newSamples |> Array.sortBy (fun _ -> rng.Next())
         else
-            rebalance newSamples rng
+            rebalance logger newSamples rng
 
     // ── Standard path: 70/30 merge. ──────────────────────────────────────────
     else
@@ -138,9 +139,9 @@ let merge
         if classBalanceOk merged then
             merged |> Array.sortBy (fun _ -> rng.Next())
         else
-            Log.Warning(
+            logger.LogWarning(
                 "DatasetMerger: class balance violated after 70/30 merge (class0/class1 ratios <30%); rebalancing")
-            rebalance merged rng
+            rebalance logger merged rng
 
 // ── saveTrainingSet ───────────────────────────────────────────────────────────
 //
