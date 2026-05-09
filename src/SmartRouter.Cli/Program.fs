@@ -201,6 +201,8 @@ let main args =
             Canary.mapEndpoints app
             // Register GET /health — Phase 10 (API-05)
             SmartRouter.Cli.Endpoints.Health.mapEndpoints app
+            // Register GET /v1/models — Phase 11 (parallel fetch + dedupe + IHealthProbe gating)
+            SmartRouter.Cli.Endpoints.Models.mapEndpoints app
 
             app.Run()
             0
