@@ -35,6 +35,14 @@ let private defaultOpts =
       MaxConcurrent122B        = 1
       PerRequestTimeoutSeconds = 60 }
 
+/// Always-reachable health probe stub for test construction sites.
+/// Makes the Phase 10 fallback policy a no-op (all upstreams appear reachable).
+let private alwaysReachableProbe : IHealthProbe =
+    { new IHealthProbe with
+        member _.IsReachable _ = true
+        member _.IsReachableAsync target _ct = Task.FromResult(true)
+        member _.LastProbedAt _ = DateTimeOffset.MinValue }
+
 /// Latency-driven fake — every call sleeps `latencyMs`, then returns Ok.
 /// No external gates needed; the run completes deterministically in ~ N * latencyMs.
 /// Re-declared here (private) to avoid pulling in the entire QueueTests module.
@@ -72,7 +80,7 @@ let tests =
             let latencyMs  = 50
             let n          = 20
             let fake       = LatencyFakeLoad(latencyMs)
-            let qd         = QueueDispatcher(fake, defaultOpts)
+            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe)
             let dispatcher = qd :> IUpstreamClient
 
             let dec = mkDecision Qwen122B Low
@@ -108,7 +116,7 @@ let tests =
         ptestCaseAsync "mixed-priority burst respects priority order under load (CONC-02 + CONC-03 at scale)" <| async {
             let latencyMs  = 30
             let fake       = LatencyFakeLoad(latencyMs)
-            let qd         = QueueDispatcher(fake, defaultOpts)
+            let qd         = QueueDispatcher(fake, defaultOpts, alwaysReachableProbe)
             let dispatcher = qd :> IUpstreamClient
             let order      = List<string>()
             let orderLck   = obj()
