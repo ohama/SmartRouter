@@ -53,6 +53,68 @@ This file is read by Claude Code at the start of every session in this repositor
 
 The README sync rule applies to README.md only. Planning artifacts (`.planning/STATE.md`, `.planning/ROADMAP.md`, `.planning/REQUIREMENTS.md`, `.planning/phases/**/*.md`) follow their own GSD workflow — they are updated by the gsd-planner / gsd-executor / gsd-verifier agents, not by this rule. If a phase delivers a behavior that the README documents, both the planning artifacts AND the README must be updated, but they are independent updates with independent rationales.
 
+## Issue handling rules (mandatory)
+
+When responding to a GitHub issue (or any tracked bug report), commit-number traceability is REQUIRED. Three patterns:
+
+### 1. Issue resolved — reply with commit number(s)
+
+After fixing an issue and pushing the fix, post a comment on the issue that includes the commit hash(es) that resolved it. Use the short SHA (7+ chars). If multiple commits contributed, list all of them.
+
+```
+Fixed in commit abc1234 (and follow-up def5678).
+
+Root cause: <one-sentence summary>
+Fix: <what changed>
+
+Closing this issue.
+```
+
+The commit number is non-negotiable — it gives the reporter a way to verify the fix landed in the branch they're tracking and lets future readers cross-reference the issue with the diff.
+
+### 2. Unable to reproduce — request detailed reproduction info
+
+If the issue cannot be reproduced from the original report, do NOT close it as "works for me" or guess at the cause. Instead, post a comment requesting the specific information needed to reproduce. Be concrete about what's missing.
+
+Reproduction-info checklist (ask for whichever items are missing):
+
+- Exact router version / commit hash the reporter is running (`dotnet SmartRouter.Cli.dll --version` if such a flag exists, or the contents of `~/llm-system/services/smart-router/.git/HEAD`)
+- macOS version + arch (`sw_vers` + `uname -m`)
+- mlx_lm.server version + which Qwen model files are loaded
+- Exact request body that triggers the issue (full JSON, sanitized of any sensitive content)
+- Whether the issue reproduces with `--log-level=debug` enabled (and the relevant debug-level log lines)
+- The `correlation_id` of a failing request (from `logs/decisions/YYYY-MM-DD.jsonl` or operational log)
+- The relevant excerpt from `logs/operational/smart-router-{Date}.log` (or `~/llm-system/services/logs/smart-router.err` for launchd) covering the failing request
+- Whether `/health` and `/stats` show anything anomalous at the time of failure
+- The `appsettings.json` in use (with any custom keys highlighted)
+
+Phrase the comment as a direct request, not a refusal. The goal is to unblock the reporter, not to push back.
+
+### 3. Issue already resolved — reply with the resolving commit number
+
+If the issue describes a problem that has been fixed by a prior commit (e.g., the reporter was on an older version, or a separate fix coincidentally addressed the same bug), do NOT just close as "stale". Find the commit that resolved it (`git log --grep`, `git blame`, or recall from session context) and post a comment with that commit number plus a short explanation.
+
+```
+Already resolved in commit abc1234 (Phase N — <plan name>).
+
+The change <one-sentence summary of what changed>. If you upgrade to that
+commit or later, this issue should not reproduce. Please verify and reopen
+if you still see the behavior on the current master.
+
+Closing.
+```
+
+The commit number is again non-negotiable — without it, the reporter cannot tell whether their version contains the fix.
+
+### Workflow when working an issue
+
+1. Read the issue. Identify the version / commit the reporter is on (if known).
+2. Try to reproduce against current master. If reproduces → fix → commit → push → reply with pattern 1.
+3. If does NOT reproduce on master:
+   - Check git log for an obvious resolving commit (`git log --grep="<keyword>"`, `git log --all -- <relevant-file>`). If found, reply with pattern 3.
+   - Otherwise, reply with pattern 2 (request reproduction info).
+4. Never close an issue as "works for me" without either a resolving-commit reference or a specific information request.
+
 ## Other project conventions
 
 These are documented elsewhere; this section is a quick reference.
