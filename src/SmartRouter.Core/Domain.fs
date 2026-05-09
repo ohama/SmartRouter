@@ -34,6 +34,7 @@ type RoutingReason =
     | Heuristic             of score: int
     | Default
     | ML
+    | FallbackTo35B   // NEW Phase 10: 122B unavailable, rerouted to 35B
 
 /// LLM wire message (same shape as blueCode; needed by IUpstreamClient port).
 type MessageRole = System | User | Assistant

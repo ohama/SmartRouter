@@ -42,7 +42,21 @@ type IClock =
 /// Defined in Ports.fs so it can be injected into the Health endpoint
 /// without creating a dependency on the adapter assembly.
 type IHealthProbe =
+    /// Synchronous fast-path: reads cached probe state. No IO.
+    /// Used by QueueDispatcher and ChatCompletions on the request hot path —
+    /// blocking on a Task here would deadlock under load.
+    abstract member IsReachable :
+        target : ModelId
+        -> bool
+
+    /// Async variant for callers that prefer async context.
     abstract member IsReachableAsync :
         target : ModelId
         -> ct   : CancellationToken
         -> Task<bool>
+
+    /// Timestamp of last probe attempt. Returns DateTimeOffset.MinValue if
+    /// the probe has never run (startup grace period).
+    abstract member LastProbedAt :
+        target : ModelId
+        -> DateTimeOffset
