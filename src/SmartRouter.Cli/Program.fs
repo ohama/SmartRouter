@@ -31,15 +31,9 @@ let main args =
                                .SetBasePath(System.IO.Directory.GetCurrentDirectory())
                                .AddJsonFile("appsettings.json", optional = false)
                     |> ignore
-                // Override Routing.Algorithm to "heuristic" for the offline retrain path.
-                // The retrain pipeline needs IFailureDetector + ITeacherLabeler + IHardCaseDatasetWriter
-                // only — it does not route requests and does not need IEmbedder/IClassifier.
-                // Without this override, configureServices's ML block calls ensureEmbeddingFilesPresent,
-                // which hard-fails when models/embed/* files have not been downloaded yet.
-                (retrainBuilder.Configuration :> IConfigurationBuilder)
-                    .AddInMemoryCollection(dict [ "Routing:Algorithm", "heuristic" ])
-                |> ignore
-                CompositionRoot.configureServices retrainBuilder.Services retrainBuilder.Configuration |> ignore
+                // configureWithoutMl skips IEmbedder/IClassifier/RoutingAlgorithmRegistration/ML model checks.
+                // The retrain pipeline needs IFailureDetector + ITeacherLabeler + IHardCaseDatasetWriter only.
+                CompositionRoot.configureWithoutMl retrainBuilder.Services retrainBuilder.Configuration |> ignore
                 use host = retrainBuilder.Build()
                 do host.StartAsync().GetAwaiter().GetResult()
                 try
@@ -114,47 +108,9 @@ let main args =
             // Wire Serilog as the ASP.NET host logger
             builder.Host.UseSerilog() |> ignore
 
-            // Parse --routing-algorithm CLI flag (last-wins). Supports:
-            //   --routing-algorithm=ml        (equals form)
-            //   --routing-algorithm ml        (space form)
-            // Reject empty/invalid values at startup before any service registration.
-            let routingAlgorithmOverride : string option =
-                args
-                |> Array.tryFindIndexBack (fun a ->
-                    a = "--routing-algorithm" || a.StartsWith("--routing-algorithm="))
-                |> Option.map (fun idx ->
-                    let arg = args.[idx]
-                    if arg.StartsWith("--routing-algorithm=") then
-                        let v = arg.["--routing-algorithm=".Length..]
-                        if v = "" then
-                            failwith "--routing-algorithm= requires a value (heuristic or ml)"
-                        v
-                    elif idx + 1 < args.Length then
-                        let v = args.[idx + 1]
-                        if v.StartsWith("--") then
-                            failwith "--routing-algorithm requires a value (heuristic or ml)"
-                        v
-                    else
-                        failwith "--routing-algorithm requires a value (heuristic or ml)")
-
-            // Validate the value and inject into configuration BEFORE configureServices.
-            match routingAlgorithmOverride with
-            | None -> ()
-            | Some v ->
-                match v with
-                | "heuristic" | "ml" -> ()
-                | other ->
-                    failwithf
-                        "--routing-algorithm=%s is invalid; valid values: heuristic, ml"
-                        other
-                (builder.Configuration :> IConfigurationBuilder)
-                    .AddInMemoryCollection(
-                        dict [ "Routing:Algorithm", v ])
-                |> ignore
-
             // Phase 9 Lock 13: keep Canary.PercentageEnabled in sync with feature_management's
             // DefaultRolloutPercentage so operator edits to one section reflect in the other at startup.
-            // Skip silently if Canary section absent (heuristic mode default).
+            // Skip silently if Canary section absent from appsettings.json.
             let canaryPctRaw = builder.Configuration.["Canary:PercentageEnabled"]
             match System.Int32.TryParse(if isNull canaryPctRaw then "" else canaryPctRaw) with
             | true, n when n >= 0 && n <= 100 ->
