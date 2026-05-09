@@ -13,7 +13,7 @@
 - [x] **API-03**: Router accepts optional non-OpenAI `task` field as a top-level body property (per `extra_body` industry convention)
 - [x] **API-04**: Router preserves unknown request fields when proxying upstream (no field-stripping)
 - [x] **API-05**: Router exposes `GET /health` returning liveness + reachability of both upstream ports
-- [ ] **API-06**: Router exposes `GET /v1/models` proxying both upstreams' model lists, deduped
+- [x] **API-06**: Router exposes `GET /v1/models` proxying both upstreams' model lists, deduped (id-only first-seen-wins; 200 + empty data array when both unreachable; reuses Phase 10 health-probe HttpClient + IHealthProbe gating)
 - [x] **API-07**: Router exposes `GET /stats` returning queue size, active requests, average wait time, requests/sec, failures, streaming duration
 
 ### Routing
@@ -73,9 +73,9 @@
 
 ### Operability
 
-- [ ] **OPS-01**: launchd plist (`com.ohama.smart-router.plist`) auto-starts the router and supervises restart, mirroring `com.ohama.qwen122b.plist` shape
-- [ ] **OPS-02**: launchd plist references the dotnet runtime by absolute path (PATH unavailable to launchd at load time)
-- [ ] **OPS-03**: README documents architecture, routing rules, threshold tuning, debugging, Hermes integration, Graphify integration
+- [x] **OPS-01**: launchd plist (`com.ohama.smart-router.plist`) auto-starts the router and supervises restart, mirroring the operator's `com.ohama.qwen36-35b.plist` + `com.ohama.qwen122b.plist` convention exactly (KeepAlive=`<true/>`, ThrottleInterval=30, RunAtLoad=`<true/>`, 4-space XML); ships at `deploy/com.ohama.smart-router.plist` + `scripts/install-launchd.sh` for operator-driven install
+- [x] **OPS-02**: launchd plist references the dotnet runtime by absolute path `/opt/homebrew/bin/dotnet` (PATH unavailable to launchd at load time)
+- [x] **OPS-03**: README.md at repo root (1020 lines, 14 sections) documents What This Is / Architecture / Quickstart / Routing Pipeline (heuristic + ML, 7 task types) / ML Feedback Loop (Loop A + Loop B + canary) / Configuration Reference / Endpoints (all 8) / Debugging (DecisionLog schema) / Hermes Integration / Graphify Integration / Operations (launchd + canary + retraining) / Troubleshooting / Further Reading
 - [x] **OPS-04**: Router binds explicitly to `127.0.0.1` (not `0.0.0.0`, not just `localhost`) to avoid Mac firewall surprises
 - [x] **OPS-05**: `appsettings.json` captures all tunables (model URLs, threshold, keyword list, task table, timeouts, retry policy)
 
@@ -191,7 +191,7 @@ Deferred. Tracked but not in current roadmap.
 | API-03 | Phase 1 | Complete |
 | API-04 | Phase 1 | Complete |
 | API-05 | Phase 10 | Complete |
-| API-06 | Phase 11 | Pending |
+| API-06 | Phase 11 | Complete |
 | API-07 | Phase 3 | Complete |
 | ROUT-01 | Phase 1 | Complete |
 | ROUT-02 | Phase 1 | Complete |
@@ -230,9 +230,9 @@ Deferred. Tracked but not in current roadmap.
 | ARCH-05 | Phase 1 | Complete |
 | ARCH-06 | Phase 1 | Complete |
 | ARCH-07 | Phase 1 | Complete |
-| OPS-01 | Phase 11 | Pending |
-| OPS-02 | Phase 11 | Pending |
-| OPS-03 | Phase 11 | Pending |
+| OPS-01 | Phase 11 | Complete |
+| OPS-02 | Phase 11 | Complete |
+| OPS-03 | Phase 11 | Complete |
 | OPS-04 | Phase 1 | Complete |
 | OPS-05 | Phase 1 | Complete |
 | TEST-01 | Phases 1+3 | Complete |

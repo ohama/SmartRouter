@@ -206,6 +206,8 @@ Recent decisions affecting current work:
 - 11-02: WorkingDirectory /Users/ohama/llm-system/services/smart-router — relative paths in appsettings.json (models/, datasets/, prompts/, logs/) resolve from this root
 - 11-02: install-launchd.sh does NOT auto-execute launchctl load (Lock 21) — manual UAT step on host since SC#1+SC#2 require live macOS launchd interaction; script prints next-steps heredoc with $ prompt prefix
 - 11-02: Framework-dependent publish (PublishTrimmed=false — ML.NET reflection breaks under trimming; operator already has .NET 10 runtime); EnvironmentVariables adds HOME + ASPNETCORE_ENVIRONMENT (qwen plists only need PATH)
+- 11-VERIFICATION (verifier scored 22/22 automated must-haves; status=human_needed): Phase 11 structurally complete. Models.fs reuses health-probe HttpClient + IHealthProbe.IsReachable gating + JsonElement.Clone() guard + id-only dedupe; plist mirrors operator's qwen36-35b/qwen122b convention exactly (plutil -lint clean); install-launchd.sh does NOT auto-execute launchctl load (heredoc only); README 1020 lines, 14 sections, all 25 required terms present. API-06 + OPS-01..03 marked Complete in REQUIREMENTS.md. Three deferred host-UAT items (ROADMAP SC#1/SC#2/SC#3) — require live macOS host with launchd + running mlx_lm servers; non-blocking for milestone v1.0 readiness because they are operator-driven verification of artifacts that have already been built and structurally validated.
+- ROADMAP SC#2 wording note: ROADMAP says "restart within 5 seconds" but ThrottleInterval=30 (locked from operator's qwen plist convention) means actual restart latency is ~30-35s. README §12.1 documents the actual 30s timing. Operator may flip to ThrottleInterval=5 in deploy/com.ohama.smart-router.plist if 30s is unacceptable — single-line edit, no code change required.
 - 10-VERIFICATION (verifier scored 30/30 must-haves): Phase 10 goal fully achieved. ChatCompletions pre-flight at lines 229-268 (BEFORE SSE headers); QueueDispatcher dual-layer fallback at lines 242-261 + 313-339 (CompleteAsync + StreamAsync); HealthService 135 lines with ConcurrentDictionary + PeriodicTimer + ExceptionDispatchInfo.Capture at all 3 OCE points; ARCH-01 invariant preserved (only IHealthProbe BCL-only port added to Core); REL-01..04 + API-05 + TEST-05 all marked Complete in REQUIREMENTS.md. ML feedback loop is now self-sustaining: real upstream failures → fallback fires → fallback_used=true in JSONL → FailureDetector → TeacherLabeler → Retraining loop. Three human-verification items deferred (live mlx_lm.server downtime detection, real Hermes Agent fallback round-trip, AutoRollback under production load) — non-blocking; require live upstream.
 
 ### Pending Todos
@@ -220,7 +222,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-09T03:51:00Z
-Stopped at: Phase 11 Plan 2 COMPLETE — deploy/com.ohama.smart-router.plist + scripts/deploy.sh + scripts/install-launchd.sh shipped. All 3 Phase 11 plans now complete. ALL 35 PLANS ACROSS ALL PHASES COMPLETE. Build clean; 86 pass + 17 ignored.
+Last session: 2026-05-09
+Stopped at: Phase 11 COMPLETE (3/3 plans + verifier 22/22 automated must-haves passed; API-06 + OPS-01..03 marked Complete in REQUIREMENTS.md). All 35 plans across all 11 phases complete. Build clean; 86 pass + 17 ignored / 93 + 10 with embeddings. Three host-UAT items deferred (operator-driven: launchctl load on host, kill -9 timing, live /v1/models against running mlx_lm servers). Milestone v1.0 ready for completion.
 Resume file: None
 Resume file: None
