@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 ## Current Position
 
 Phase: 12 of 12 (Heuristic Routing Removal)
-Plan: 3 of 6 in current phase — COMPLETE ✓ (Wave 3, parallel track)
-Status: Phase 12 Plan 3 COMPLETE. RoutingTests.fs deleted (22 heuristic tests gone), fsproj Compile entry removed, RouterTests.rootTests entry removed. Build green. SUMMARY: 12-03-SUMMARY.md. Plans 2, 3, 4, 5 done; Plan 6 pending.
-Last activity: 2026-05-09 — Phase 12 Plan 3 (COMPLETE).
+Plan: 5 of 6 in current phase — COMPLETE ✓ (Wave 3 complete: 12-03 + 12-04 + 12-05)
+Status: Phase 12 Plan 5 COMPLETE. StreamingTests + LoggingTests + HealthFallbackTests migrated to configureWithoutMl + test-stub RoutingAlgorithmRegistration. 18 tests pass (8+5+5). ModelsTests broken pre-existing. Wave 3 done. Plan 6 pending. SUMMARY: 12-05-SUMMARY.md
+Last activity: 2026-05-09 — Phase 12 Plan 5 (COMPLETE).
 
 Progress: [███████████████████████████░░░░] 37 of 41 plans
 
@@ -209,6 +209,10 @@ Recent decisions affecting current work:
 - 12-02: Q1=B split pattern — configureRequestPipeline (unconditional ML wiring, production HTTP path) + configureWithoutMl (offline retrain subset: HTTP factories + DecisionLogWriter + retrain ports + ModelVersionProvider placeholder; no IEmbedder/IClassifier/RoutingAlgorithmRegistration/HealthService/CanaryService/RetrainingService BackgroundService)
 - 12-02: BgeM3EmbedderOptions does not exist as a type — BgeM3Embedder constructor takes onnxPath/tokenizerPath/maxTokens directly; configureWithoutMl omits the non-existent IOptions binding
 - 12-02: configureServices backwards-compat alias = configureRequestPipeline; removed in 12-05 after test fixture migration to configureWithoutMl
+- 12-05: option(b) for HealthFallbackTests — configureWithoutMl + manual HealthService triple-reg + QueueDispatcher with real IHealthProbe; keeps fallback wiring without triggering ensureEmbeddingFilesPresent
+- 12-05: ICanaryMetrics lives in SmartRouter.Cli.Adapters.CanaryMetrics (NOT Core.CanaryPorts); test fixtures must reference the Cli namespace
+- 12-05: QueueDispatcherOptions must be manually bound via services.Configure<QueueDispatcherOptions> in each fixture that manually registers QueueDispatcher (configureWithoutMl excludes it)
+- 12-05: Phase 13-02 executor must add NullLogger<HealthService> + NullLogger<QueueDispatcher> at manual instantiation sites in StreamingTests/LoggingTests/HealthFallbackTests when those ctor params are added
 - 11-VERIFICATION (verifier scored 22/22 automated must-haves; status=human_needed): Phase 11 structurally complete. Models.fs reuses health-probe HttpClient + IHealthProbe.IsReachable gating + JsonElement.Clone() guard + id-only dedupe; plist mirrors operator's qwen36-35b/qwen122b convention exactly (plutil -lint clean); install-launchd.sh does NOT auto-execute launchctl load (heredoc only); README 1020 lines, 14 sections, all 25 required terms present. API-06 + OPS-01..03 marked Complete in REQUIREMENTS.md. Three deferred host-UAT items (ROADMAP SC#1/SC#2/SC#3) — require live macOS host with launchd + running mlx_lm servers; non-blocking for milestone v1.0 readiness because they are operator-driven verification of artifacts that have already been built and structurally validated.
 - ROADMAP SC#2 wording note: ROADMAP says "restart within 5 seconds" but ThrottleInterval=30 (locked from operator's qwen plist convention) means actual restart latency is ~30-35s. README §12.1 documents the actual 30s timing. Operator may flip to ThrottleInterval=5 in deploy/com.ohama.smart-router.plist if 30s is unacceptable — single-line edit, no code change required.
 - 10-VERIFICATION (verifier scored 30/30 must-haves): Phase 10 goal fully achieved. ChatCompletions pre-flight at lines 229-268 (BEFORE SSE headers); QueueDispatcher dual-layer fallback at lines 242-261 + 313-339 (CompleteAsync + StreamAsync); HealthService 135 lines with ConcurrentDictionary + PeriodicTimer + ExceptionDispatchInfo.Capture at all 3 OCE points; ARCH-01 invariant preserved (only IHealthProbe BCL-only port added to Core); REL-01..04 + API-05 + TEST-05 all marked Complete in REQUIREMENTS.md. ML feedback loop is now self-sustaining: real upstream failures → fallback fires → fallback_used=true in JSONL → FailureDetector → TeacherLabeler → Retraining loop. Three human-verification items deferred (live mlx_lm.server downtime detection, real Hermes Agent fallback round-trip, AutoRollback under production load) — non-blocking; require live upstream.
@@ -226,5 +230,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-05-09
-Stopped at: Phase 12 Plan 4 COMPLETE (Wave 3 parallel). MLRoutingTests.fs pruned: 3 heuristic tests deleted, open Heuristic removed, all Routing:Algorithm keys removed. 1 commit: e8bd311. Plans 12-03, 12-05 still pending (parallel Wave 3).
+Stopped at: Phase 12 Plan 5 COMPLETE (Wave 3 complete). StreamingTests + LoggingTests + HealthFallbackTests migrated to configureWithoutMl + test-stub. 18/18 tests pass. 3 commits: 57e61a6, 59d56b2, 85b5403.
 Resume file: None
