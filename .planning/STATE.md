@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 
 ## Current Position
 
-Phase: 11 of 11 (Deployment + Docs) — COMPLETE ✓
-Plan: 3 of 3 in current phase — ALL COMPLETE ✓
-Status: Phase 11 ALL PLANS COMPLETE. 11-01 (/v1/models endpoint), 11-02 (launchd plist + deploy scripts), 11-03 (README.md) all done. Tests: 86 pass + 17 ignored + 0 failed. SUMMARIES: 11-01-SUMMARY.md, 11-02-LAUNCHD-OPS-SUMMARY.md, 11-03-README-SUMMARY.md
-Last activity: 2026-05-09 — Phase 11 Plan 2 (COMPLETE). All 3 plans in Phase 11 done.
+Phase: 12 of 12 (Heuristic Routing Removal)
+Plan: 1 of 6 in current phase — COMPLETE ✓
+Status: Phase 12 Plan 1 COMPLETE. Core deletion done: Heuristic.fs deleted, RoutingReason.Heuristic removed, RoutingConfig.Keywords/ComplexityThreshold removed, canonicalKeywords removed, formatReason cleaned. Core builds green. Cli broken (expected — 12-02 finishes). SUMMARY: 12-01-SUMMARY.md
+Last activity: 2026-05-09 — Phase 12 Plan 1 (COMPLETE).
 
-Progress: [██████████████████████████] 35 of 35 plans (ALL PHASES 1-11 COMPLETE)
+Progress: [██████████████████████████░░░░░] 36 of 41 plans
 
 ## Performance Metrics
 
@@ -223,6 +223,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-05-09
-Stopped at: Phase 11 COMPLETE (3/3 plans + verifier 22/22 automated must-haves passed; API-06 + OPS-01..03 marked Complete in REQUIREMENTS.md). All 35 plans across all 11 phases complete. Build clean; 86 pass + 17 ignored / 93 + 10 with embeddings. Three host-UAT items deferred (operator-driven: launchctl load on host, kill -9 timing, live /v1/models against running mlx_lm servers). Milestone v1.0 ready for completion.
-Resume file: None
+Stopped at: Phase 12 Plan 1 COMPLETE. Core deletion done; Cli broken as expected (12-02 addresses). 4 commits: f710667, a6b1312, 20bedc4, 978b72f.
 Resume file: None
