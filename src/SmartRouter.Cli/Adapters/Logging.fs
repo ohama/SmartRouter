@@ -1,37 +1,59 @@
 module SmartRouter.Cli.Adapters.Logging
 
 open System
+open System.IO
+open Microsoft.Extensions.Configuration
 open Serilog
 open Serilog.Core
 open Serilog.Events
 
-/// Module-level switch controlling Serilog's minimum level. Mutable post-
-/// configure() — Program.fs flips it to Debug when --trace is set (CLI-07).
-/// Default: Information (suppresses Log.Debug step-level events).
-/// Research § Pattern 4 + Pitfall 7: must be a module-level binding so the
-/// call to configure() below can reference it; mutating after startup is
-/// the whole point of LoggingLevelSwitch.
+/// Module-level switch controlling Serilog's minimum level.
+/// CLI --log-level (Phase 13, plan 13-04) flips this; default Information.
 let levelSwitch: LoggingLevelSwitch = LoggingLevelSwitch(LogEventLevel.Information)
 
-/// Initialize the static Serilog Log.Logger. Must run ONCE at process start
-/// BEFORE any Log.* call — Serilog's default logger is a silent no-op.
-///
-/// Configuration:
-///   - Minimum level: CONTROLLED BY levelSwitch (default Information;
-///     Program flips to Debug for --trace).
-///   - Sink: Console, but stderr for ALL events (standardErrorFromLevel =
-///     Verbose) — keeps log output off stdout where Spectre and printfn live
-///     (OBS-02 / research § Pattern 6).
-let configure () : unit =
+/// Output template — request-scope logs render [{correlation_id}], background logs render [-].
+let private outputTemplate =
+    "{Timestamp:yyyy-MM-ddTHH:mm:ss.fffzzz} [{Level:u3}] {SourceContext} [{correlation_id}] {Message:lj}{NewLine}{Exception}"
+
+/// Initialize the static Serilog Log.Logger from IConfiguration.
+/// Reads appsettings.json:Serilog (MinimumLevel.Default + Override).
+/// LoggingLevelSwitch overrides config — used by CLI --log-level (Plan 13-04).
+/// Two sinks: Console (stderr from Verbose; kept for tail -f OBS-04) + File (rolling daily).
+let configure (config: IConfiguration) : unit =
+    let logDir =
+        let raw = config.["Logging:Directory"]
+        if String.IsNullOrWhiteSpace(raw) then "logs/operational" else raw
+
+    Directory.CreateDirectory(logDir) |> ignore
+
+    let filePath = Path.Combine(logDir, "smart-router-.log")
+
     Log.Logger <-
         LoggerConfiguration()
+            .ReadFrom.Configuration(config)
             .MinimumLevel.ControlledBy(levelSwitch)
+            .Enrich.FromLogContext()
+            .Enrich.WithProperty("correlation_id", "-")
             .WriteTo.Console(
-                standardErrorFromLevel = System.Nullable<LogEventLevel>(LogEventLevel.Verbose),
-                outputTemplate = "[{Level:u3}] {Message:lj}{NewLine}{Exception}"
+                standardErrorFromLevel = Nullable<LogEventLevel>(LogEventLevel.Verbose),
+                outputTemplate = outputTemplate
+            )
+            .WriteTo.File(
+                path = filePath,
+                rollingInterval = RollingInterval.Day,
+                fileSizeLimitBytes = Nullable<int64>(50_000_000L),
+                rollOnFileSizeLimit = true,
+                retainedFileCountLimit = Nullable<int>(30),
+                flushToDiskInterval = Nullable<TimeSpan>(TimeSpan.FromSeconds(2.0)),
+                shared = false,
+                outputTemplate = outputTemplate
             )
             .CreateLogger()
 
-/// Flush and dispose the global logger. Call in Program.fs before exit to
-/// ensure all pending events are written.
+/// Runtime level override (called by Program.fs when --log-level is parsed).
+/// Plan 13-04 wires the CLI parser to this.
+let setLevel (level: LogEventLevel) : unit =
+    levelSwitch.MinimumLevel <- level
+
+/// Flush + dispose. Call before process exit.
 let shutdown () : unit = Log.CloseAndFlush()
