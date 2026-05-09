@@ -39,7 +39,7 @@ if [[ ! -x "$DOTNET" ]]; then
 fi
 echo "[deploy] dotnet:      $($DOTNET --version)"
 
-# Framework-dependent publish (CONTEXT L4 — NOT self-contained, NOT trimmed).
+# Framework-dependent publish (CONTEXT L4 — NOT trimmed, runs against the installed .NET runtime).
 # ML.NET reflection breaks under trimming; do NOT enable trimming or single-file
 # bundling unless you have audited every reflection site.
 "$DOTNET" publish "$REPO_ROOT/src/SmartRouter.Cli/SmartRouter.Cli.fsproj" \
