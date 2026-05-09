@@ -38,9 +38,12 @@
     <!-- Phase 9 — Canary deployment (Task 2 — watcher adapters) -->
     <Compile Include="Adapters/CanaryWatchdog.fs" />
     <Compile Include="Adapters/CanaryService.fs" />
+    <!-- Phase 10 — Health probing -->
+    <Compile Include="Adapters/HealthService.fs" />
     <Compile Include="Endpoints/ChatCompletions.fs" />
     <Compile Include="Endpoints/Stats.fs" />
     <Compile Include="Endpoints/Canary.fs" />
+    <Compile Include="Endpoints/Health.fs" />
     <Compile Include="CompositionRoot.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
