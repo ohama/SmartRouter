@@ -6,12 +6,50 @@ open Microsoft.Extensions.Logging
 open Microsoft.ML
 open SmartRouter.Cli.Adapters.MlNetClassifier   // RouteInput schema
 
+/// Issue #9: resolve a relative model path CWD-independently. Tries, in order:
+///   1. The path as given (absolute → use as-is; relative → CWD-relative).
+///   2. Path joined to AppContext.BaseDirectory (the binary's directory).
+///   3. Walk up to 5 levels of parents from AppContext.BaseDirectory looking for
+///      a `models/` sibling that contains the relative path.
+///
+/// First existing file wins. If none exist, returns the original path so the
+/// caller's existing missing-file diagnostic still fires with a recognizable
+/// path. Works for both file paths and directory-prefixed paths.
+let resolveModelPath (configPath: string) : string =
+    if Path.IsPathRooted(configPath) then
+        configPath
+    else
+        // 3. Walk up parents of AppContext.BaseDirectory looking for `models/`.
+        //    Typical depth: bin/Debug/net10.0/ → up 3 to project dir → up 1 to src/ → up 1 to repo root.
+        let walkUp =
+            let mutable dir = DirectoryInfo(AppContext.BaseDirectory)
+            [ for _ in 1 .. 5 do
+                if not (isNull dir) then
+                    yield Path.Combine(dir.FullName, configPath)
+                    dir <- dir.Parent ]
+        let candidates =
+            // 1. CWD-relative (back-compat for launchd / explicit cd-into-repo-root flows)
+            // 2. Binary-relative (covers `dotnet run --project src/SmartRouter.Cli` from repo root,
+            //    where CWD ends up at src/SmartRouter.Cli/ but bin/Debug/net10.0/ is the actual base)
+            [ Path.GetFullPath(configPath)
+              Path.Combine(AppContext.BaseDirectory, configPath) ]
+            @ walkUp
+        candidates
+        |> List.tryFind File.Exists
+        |> Option.defaultValue (Path.GetFullPath(configPath))
+
 /// Hard-fail if embedding model files are missing. Must be called BEFORE
 /// BgeM3Embedder is constructed to give the operator a clear error message.
+///
+/// As of issue #9, paths are resolved CWD-independently via `resolveModelPath`
+/// — operators running `dotnet run --project src/SmartRouter.Cli` from the repo
+/// root no longer need a symlink to make `models/` resolvable.
 let ensureEmbeddingFilesPresent (logger: ILogger) (onnxPath: string) (tokenizerPath: string) : unit =
+    let onnx      = resolveModelPath onnxPath
+    let tokenizer = resolveModelPath tokenizerPath
     let missing = [
-        if not (File.Exists onnxPath)      then yield onnxPath
-        if not (File.Exists tokenizerPath) then yield tokenizerPath
+        if not (File.Exists onnx)      then yield onnxPath
+        if not (File.Exists tokenizer) then yield tokenizerPath
     ]
     if not (List.isEmpty missing) then
         let lines = String.concat ", " missing
