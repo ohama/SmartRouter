@@ -4,6 +4,7 @@ open System
 open System.Collections.Generic
 open System.IO
 open System.Net.Http
+open System.Threading.Tasks
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
@@ -42,6 +43,7 @@ open SmartRouter.Cli.Adapters.CanaryGate
 open SmartRouter.Cli.Adapters.CanaryWatchdog
 open SmartRouter.Cli.Adapters.CanaryService
 open SmartRouter.Cli.Adapters.RetrainLock
+open SmartRouter.Cli.Adapters.HealthService
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -167,18 +169,88 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
         .Configure<CanaryOptions>(config.GetSection("Canary"))     // NEW Phase 9
         |> ignore
 
-    // Named HttpClients per upstream — 300s timeout covers 122B cold starts (CONC-07 / PITFALL-12)
-    services.AddHttpClient("upstream35b", fun c ->
-        let upstreamOpts = config.GetSection("Upstreams").Get<UpstreamOptions>()
-        c.BaseAddress <- Uri(upstreamOpts.Model35B)
-        c.Timeout     <- TimeSpan.FromSeconds(300.0))
+    // ── Phase 10: 5 named HttpClients via .ConfigureHttpClient chain form ────────
+    // The 2-arg AddHttpClient(name, fun c -> ...) form is FORBIDDEN in F# — silent BaseAddress
+    // failure pitfall (see documentation/howto/wire-fsharp-namedhttpclient-with-configurehttpclient.md).
+    // All five clients use the AddHttpClient(name).ConfigureHttpClient(...) chain form.
+
+    let buildUpstreamRetry () =
+        let opts = HttpRetryStrategyOptions()
+        opts.MaxRetryAttempts <- 3
+        opts.BackoffType      <- DelayBackoffType.Exponential
+        opts.Delay            <- TimeSpan.FromSeconds(1.0)
+        opts.ShouldHandle     <-
+            Func<RetryPredicateArguments<HttpResponseMessage>, ValueTask<bool>>(fun args ->
+                let retry =
+                    match args.Outcome.Exception with
+                    | :? HttpRequestException -> true
+                    | :? TaskCanceledException -> true
+                    | null ->
+                        let resp = args.Outcome.Result
+                        not (isNull resp) && int resp.StatusCode >= 500
+                    | _ -> false
+                ValueTask.FromResult(retry))
+        opts
+
+    let upstreamOptsLazy = config.GetSection("Upstreams").Get<UpstreamOptions>()
+
+    // upstream35b — non-streaming, with retry (300s timeout for 122B cold starts CONC-07)
+    services.AddHttpClient("upstream35b")
+        .ConfigureHttpClient(fun c ->
+            c.BaseAddress <- Uri(upstreamOptsLazy.Model35B)
+            c.Timeout     <- TimeSpan.FromSeconds(300.0))
+        .AddResilienceHandler("upstream35b-pipeline", fun (builder: ResiliencePipelineBuilder<HttpResponseMessage>) ->
+            builder.AddRetry(buildUpstreamRetry ()) |> ignore)
         |> ignore
 
-    services.AddHttpClient("upstream122b", fun c ->
-        let upstreamOpts = config.GetSection("Upstreams").Get<UpstreamOptions>()
-        c.BaseAddress <- Uri(upstreamOpts.Model122B)
-        c.Timeout     <- TimeSpan.FromSeconds(300.0))
+    // upstream122b — non-streaming, with retry
+    services.AddHttpClient("upstream122b")
+        .ConfigureHttpClient(fun c ->
+            c.BaseAddress <- Uri(upstreamOptsLazy.Model122B)
+            c.Timeout     <- TimeSpan.FromSeconds(300.0))
+        .AddResilienceHandler("upstream122b-pipeline", fun (builder: ResiliencePipelineBuilder<HttpResponseMessage>) ->
+            builder.AddRetry(buildUpstreamRetry ()) |> ignore)
         |> ignore
+
+    // upstream35b-stream — streaming, NO retry (SSE not idempotent — partial output cannot be retried)
+    services.AddHttpClient("upstream35b-stream")
+        .ConfigureHttpClient(fun c ->
+            c.BaseAddress <- Uri(upstreamOptsLazy.Model35B)
+            c.Timeout     <- TimeSpan.FromSeconds(300.0))
+        |> ignore
+
+    // upstream122b-stream — streaming, NO retry
+    services.AddHttpClient("upstream122b-stream")
+        .ConfigureHttpClient(fun c ->
+            c.BaseAddress <- Uri(upstreamOptsLazy.Model122B)
+            c.Timeout     <- TimeSpan.FromSeconds(300.0))
+        |> ignore
+
+    // health-probe — short timeout, NO retry, NO BaseAddress (probe URL is absolute per D8)
+    services.AddHttpClient("health-probe")
+        .ConfigureHttpClient(fun c ->
+            c.Timeout <- TimeSpan.FromSeconds(5.0))
+        |> ignore
+
+    // Bind Routing.Health → HealthOptions
+    services.Configure<HealthOptions>(config.GetSection("Routing:Health")) |> ignore
+
+    // HealthService triple-reg (D9): concrete singleton + IHealthProbe alias + AddHostedService.
+    // Same instance for all three roles — DO NOT use three separate factory lambdas.
+    services.AddSingleton<HealthService>(fun sp ->
+        new HealthService(
+            sp.GetRequiredService<IHttpClientFactory>(),
+            sp.GetRequiredService<IOptions<UpstreamOptions>>(),
+            sp.GetRequiredService<IOptions<HealthOptions>>()))
+    |> ignore
+
+    services.AddSingleton<IHealthProbe>(fun sp ->
+        sp.GetRequiredService<HealthService>() :> IHealthProbe)
+    |> ignore
+
+    services.AddHostedService<HealthService>(fun sp ->
+        sp.GetRequiredService<HealthService>())
+    |> ignore
 
     // RoutingConfig as a DI singleton — built once at composition time from RoutingOptions.
     // The endpoint retrieves this and passes it into Routing.routeRequest. THIS is the wiring
@@ -343,10 +415,12 @@ let configureServices (services: IServiceCollection) (config: IConfiguration) : 
 
     // QueueDispatcher wraps QwenUpstreamClient — registered as concrete singleton plus
     // two interface registrations (IUpstreamClient for the endpoint; IStatsProvider for /stats).
+    // Phase 10: third constructor argument IHealthProbe for fallback policy (D14).
     services.AddSingleton<QueueDispatcher>(fun sp ->
         QueueDispatcher(
             sp.GetRequiredService<QwenUpstreamClient>() :> IUpstreamClient,
-            sp.GetRequiredService<IOptions<QueueDispatcherOptions>>().Value))
+            sp.GetRequiredService<IOptions<QueueDispatcherOptions>>().Value,
+            sp.GetRequiredService<IHealthProbe>()))
         |> ignore
 
     services.AddSingleton<IUpstreamClient>(fun sp ->
