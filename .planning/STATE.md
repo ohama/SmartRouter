@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 ## Current Position
 
 Phase: 10 of 11 (Health/Fallback + graph_indexing no-fallback) — IN PROGRESS
-Plan: 1 of 3 in current phase — COMPLETE ✓
-Status: Phase 10 Plan 01 COMPLETE. Foundation: RoutingReason.FallbackTo35B DU case added; IHealthProbe extended with IsReachable (sync) + LastProbedAt; appsettings Routing.Health + AutoRollbackEnabled=true; DecisionLogger formatReason cascade updated. Build: 0/0. Tests: 78 pass + 17 ignored + 0 failed (baseline preserved). SUMMARY: .planning/phases/10-health-fallback-and-graph-indexing-no-fallback/10-01-SUMMARY.md
-Last activity: 2026-05-09 — Phase 10 Plan 1 (COMPLETE).
+Plan: 2 of 3 in current phase — COMPLETE ✓
+Status: Phase 10 Plan 02 COMPLETE. Implementation: HealthService BackgroundService + /health endpoint + 5 named HttpClients (chain form, retry on non-stream) + QueueDispatcher 3-arg fallback policy (CompleteAsync + StreamAsync) + ChatCompletions pre-flight 503 + shadow-rebind + 11 test construction sites updated. Build: 0/0. Tests: 78 pass + 17 ignored + 0 failed (baseline preserved). SUMMARY: .planning/phases/10-health-fallback-and-graph-indexing-no-fallback/10-02-SUMMARY.md
+Last activity: 2026-05-09 — Phase 10 Plan 2 (COMPLETE).
 
-Progress: [██████████████████████░] 30 of ~32 plans (phase 9 complete; phase 10 plan 1 of 3 complete)
+Progress: [███████████████████████░] 31 of ~32 plans (phase 9 complete; phase 10 plan 2 of 3 complete)
 
 ## Performance Metrics
 
@@ -182,6 +182,10 @@ Recent decisions affecting current work:
 - 10-01: appsettings.Routing.Health section (PollingIntervalSeconds=10, ConsecutiveFailureThreshold=1) per Lock 1+2; consumed by Plan 10-02 HealthService via IOptions binding
 - 10-01: Canary.AutoRollbackEnabled flipped from false to true — Phase 10 makes fallback_used signal real (REL-03 fires fallback_used=true); probe-blip risk damped by ConsecutiveFailureThreshold (raise to 2 in prod if flapping)
 - 10-01: MLRoutingTests.fs read-only confirmation passed — both match sites at lines 167+190 have | r -> failtestf catch-all arms; RoutingTests.fs match sites all have | r -> failtestf catch-alls; no test edits made (per CONTEXT D12)
+- 10-02 Task 1: HealthService BackgroundService probes /v1/models per upstream every PollingIntervalSeconds (default 10s); ConsecutiveFailureThreshold=1 default; ConcurrentDictionary state; ExceptionDispatchInfo.Capture for OCE through task{} await points; triple-reg DI; IsReachableAsync is curried (target -> ct -> Task<bool>) NOT tupled
+- 10-02 Task 2a: 5 named HttpClients via .ConfigureHttpClient chain (forbidden 2-arg form replaced); -stream clients have NO retry handler; non-stream clients use AddResilienceHandler with shouldHandle 5xx + transient (NOT 4xx); open System.Threading.Tasks required for ValueTask in retry predicate; HealthService() needs 'new' keyword (BackgroundService: IDisposable)
+- 10-02 Task 2b: QueueDispatcher fallback in BOTH CompleteAsync + StreamAsync (taskSeq yield-and-terminate); QwenUpstreamClient.resolveProbe stream-aware (4-way map: target x bool); ChatCompletions Option B early-return + shadow-rebind (NOT wrap-in-else); 5+ existing decisionLogger.Log calls auto-pickup fallback flag from rebound shadow variable
+- 10-02 Task 3: 11 test construction sites updated for QueueDispatcher 3-arg signature; alwaysReachableProbe stub used as default fake; AutoRollbackEnabled=true (10-01) now active; CanaryWatchdog rolling-60s metric becomes meaningful when REL-03 fires real fallback_used=true records
 
 ### Pending Todos
 
@@ -195,6 +199,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-09T00:34:37Z
-Stopped at: Phase 10 Plan 1 COMPLETE — foundation: FallbackTo35B DU + IHealthProbe sync extensions + appsettings Routing.Health + AutoRollbackEnabled=true. Build: 0/0. Tests: 78 pass + 17 ignored, 0 failed. Phase 10 Plan 2 (HealthService + DI + adapters + endpoint) is the next milestone gate.
+Last session: 2026-05-09T01:35:27Z
+Stopped at: Phase 10 Plan 2 COMPLETE — HealthService + /health endpoint + 5-named-HttpClient retry policy + QueueDispatcher/ChatCompletions fallback gates. Build: 0/0. Tests: 78 pass + 17 ignored, 0 failed. Phase 10 Plan 3 (HealthFallbackTests.fs) is the next milestone gate.
 Resume file: None
