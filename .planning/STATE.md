@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 ## Current Position
 
 Phase: 12 of 12 (Heuristic Routing Removal)
-Plan: 4 of 6 in current phase — COMPLETE ✓ (Wave 3, parallel track)
-Status: Phase 12 Plan 4 COMPLETE. MLRoutingTests.fs pruned: open Heuristic removed, 3 heuristic tests deleted (test count 12→9), all Routing:Algorithm config key entries removed, zero heuristic references remain. Build clean. SUMMARY: 12-04-SUMMARY.md
-Last activity: 2026-05-09 — Phase 12 Plan 4 (COMPLETE). Plans 2, 4 done; Plans 3, 5, 6 pending.
+Plan: 3 of 6 in current phase — COMPLETE ✓ (Wave 3, parallel track)
+Status: Phase 12 Plan 3 COMPLETE. RoutingTests.fs deleted (22 heuristic tests gone), fsproj Compile entry removed, RouterTests.rootTests entry removed. Build green. SUMMARY: 12-03-SUMMARY.md. Plans 2, 3, 4, 5 done; Plan 6 pending.
+Last activity: 2026-05-09 — Phase 12 Plan 3 (COMPLETE).
 
 Progress: [███████████████████████████░░░░] 37 of 41 plans
 
