@@ -16,6 +16,7 @@ open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.DependencyInjection.Extensions
 open Serilog
 open Serilog.Core
 open Serilog.Events
@@ -168,16 +169,13 @@ let private startTestRouter (fakePort: int) (logDir: string) : Task<WebApplicati
         let testBuilder = WebApplication.CreateBuilder()
         testBuilder.WebHost.UseUrls("http://127.0.0.1:0") |> ignore
 
-        // Configuration MUST be injected before configureServices reads it.
+        // Configuration MUST be injected before configureWithoutMl reads it.
         (testBuilder.Configuration :> IConfigurationBuilder)
             .AddInMemoryCollection([
                 KeyValuePair("Upstreams:Model35B",  sprintf "http://127.0.0.1:%d" fakePort)
                 KeyValuePair("Upstreams:Model122B", sprintf "http://127.0.0.1:%d" fakePort)
                 // Routing section — required for buildRoutingConfig + validateConfig to succeed
-                KeyValuePair("Routing:Algorithm",            "heuristic")
-                KeyValuePair("Routing:ComplexityThreshold", "3")
                 KeyValuePair("Routing:TimeoutSeconds",       "300")
-                KeyValuePair("Routing:Keywords:0",           "recursive")
                 KeyValuePair("Routing:TaskTable:graph_indexing:Model",           "122b")
                 KeyValuePair("Routing:TaskTable:graph_indexing:Priority",        "high")
                 KeyValuePair("Routing:TaskTable:compiler_debug:Model",           "122b")
@@ -208,7 +206,7 @@ let private startTestRouter (fakePort: int) (logDir: string) : Task<WebApplicati
             ])
         |> ignore
 
-        // Install the in-memory Serilog sink BEFORE configureServices fires.
+        // Install the in-memory Serilog sink BEFORE configureWithoutMl fires.
         // Logging.configure() is NOT called here — that would clobber the test sink.
         // testBuilder.Host.UseSerilog() (no-arg overload) reads from the static Log.Logger.
         let testLogger =
@@ -220,9 +218,92 @@ let private startTestRouter (fakePort: int) (logDir: string) : Task<WebApplicati
         Log.Logger <- testLogger
         testBuilder.Host.UseSerilog() |> ignore
 
-        SmartRouter.Cli.CompositionRoot.configureServices
+        SmartRouter.Cli.CompositionRoot.configureWithoutMl
             testBuilder.Services
             testBuilder.Configuration
+        |> ignore
+
+        // Routing — test-stub algorithm avoids ML model file dependency.
+        // configureWithoutMl does NOT register RoutingAlgorithmRegistration, so this is the
+        // sole registration (no last-wins competition).
+        let testStubAlgorithm : SmartRouter.Core.Domain.RoutingAlgorithm =
+            fun _cfg _req ->
+                { Target       = SmartRouter.Core.Domain.Qwen35B
+                  Priority     = SmartRouter.Core.Domain.Low
+                  Reason       = SmartRouter.Core.Domain.ML
+                  IsFallback   = false
+                  ModelVersion = "test-stub" }
+
+        let testStubReg : SmartRouter.Cli.Adapters.RoutingAlgorithm.RoutingAlgorithmRegistration =
+            { Algorithm    = testStubAlgorithm
+              Name         = "ml"
+              ModelVersion = "test-stub" }
+
+        testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.RoutingAlgorithm.RoutingAlgorithmRegistration>(testStubReg)
+        |> ignore
+
+        testBuilder.Services.AddSingleton<SmartRouter.Core.Domain.RoutingAlgorithm>(
+            System.Func<System.IServiceProvider, SmartRouter.Core.Domain.RoutingAlgorithm>(fun sp ->
+                sp.GetRequiredService<SmartRouter.Cli.Adapters.RoutingAlgorithm.RoutingAlgorithmRegistration>().Algorithm))
+        |> ignore
+
+        // IHealthProbe — stub (always reachable); required by QueueDispatcher ctor.
+        let alwaysReachable =
+            { new SmartRouter.Core.Ports.IHealthProbe with
+                member _.IsReachable(_target) = true
+                member _.IsReachableAsync _target _ct = System.Threading.Tasks.Task.FromResult(true)
+                member _.LastProbedAt(_target) = System.DateTimeOffset.MinValue }
+
+        testBuilder.Services.AddSingleton<SmartRouter.Core.Ports.IHealthProbe>(alwaysReachable)
+        |> ignore
+
+        // QueueDispatcherOptions binding — required by QueueDispatcher ctor (MaxConcurrent122B validation).
+        testBuilder.Services.Configure<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcherOptions>(
+            testBuilder.Configuration.GetSection("Queue"))
+        |> ignore
+
+        // QwenUpstreamClient + QueueDispatcher — required by ChatCompletions handler.
+        testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient>(fun sp ->
+            SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient(
+                sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(),
+                sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SmartRouter.Cli.Adapters.QwenUpstreamClient.UpstreamOptions>>()))
+        |> ignore
+
+        testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher>(fun sp ->
+            SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher(
+                sp.GetRequiredService<SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient>()
+                    :> SmartRouter.Core.Ports.IUpstreamClient,
+                sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcherOptions>>().Value,
+                sp.GetRequiredService<SmartRouter.Core.Ports.IHealthProbe>()))
+        |> ignore
+
+        testBuilder.Services.AddSingleton<SmartRouter.Core.Ports.IUpstreamClient>(fun sp ->
+            sp.GetRequiredService<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher>()
+                :> SmartRouter.Core.Ports.IUpstreamClient)
+        |> ignore
+
+        testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.QueueDispatcher.IStatsProvider>(fun sp ->
+            sp.GetRequiredService<SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher>()
+                :> SmartRouter.Cli.Adapters.QueueDispatcher.IStatsProvider)
+        |> ignore
+
+        // IModelVersionProvider — required by ChatCompletions.handler (reads per-request).
+        testBuilder.Services.AddSingleton<SmartRouter.Cli.Adapters.ModelVersionProvider.ModelVersionProvider>(fun _sp ->
+            SmartRouter.Cli.Adapters.ModelVersionProvider.ModelVersionProvider("test-stub"))
+        |> ignore
+
+        testBuilder.Services.AddSingleton<SmartRouter.Core.RetrainingPorts.IModelVersionProvider>(fun sp ->
+            sp.GetRequiredService<SmartRouter.Cli.Adapters.ModelVersionProvider.ModelVersionProvider>()
+                :> SmartRouter.Core.RetrainingPorts.IModelVersionProvider)
+        |> ignore
+
+        // ICanaryGate + ICanaryMetrics — required by ChatCompletions.handler.
+        testBuilder.Services.TryAddSingleton<SmartRouter.Core.CanaryPorts.ICanaryGate>(fun _sp ->
+            SmartRouter.Cli.Adapters.CanaryGate.NullCanaryGate() :> SmartRouter.Core.CanaryPorts.ICanaryGate)
+        |> ignore
+
+        testBuilder.Services.TryAddSingleton<SmartRouter.Cli.Adapters.CanaryMetrics.ICanaryMetrics>(fun _sp ->
+            SmartRouter.Cli.Adapters.CanaryMetrics.NoOpCanaryMetrics() :> SmartRouter.Cli.Adapters.CanaryMetrics.ICanaryMetrics)
         |> ignore
 
         let app = testBuilder.Build()
@@ -340,8 +421,8 @@ let tests : Test =
 
                     // Field 5: routing_algorithm (string)
                     Expect.equal (root.GetProperty("routing_algorithm").GetString())
-                                  "heuristic"
-                                  "routing_algorithm = heuristic (default config)"
+                                  "ml"
+                                  "routing_algorithm = ml (test-stub registration)"
 
                     // Field 6: routing_reason (non-empty string)
                     Expect.isFalse
@@ -363,8 +444,8 @@ let tests : Test =
 
                     // Field 10: model_version (string)
                     Expect.equal (root.GetProperty("model_version").GetString())
-                                  "heuristic-v1"
-                                  "model_version = heuristic-v1 for default config"
+                                  "test-stub"
+                                  "model_version = test-stub (test-stub registration)"
 
                     // Field 11: task_type (nullable string — property must exist; null is OK)
                     Expect.isTrue (root.TryGetProperty("task_type") |> fst)
