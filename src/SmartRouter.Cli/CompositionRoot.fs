@@ -677,7 +677,8 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
             normalized,
             sp.GetRequiredService<IEmbedder>(),
             sp.GetRequiredService<IModelVersionProvider>(),
-            sp.GetRequiredService<IRetrainLock>()))
+            sp.GetRequiredService<IRetrainLock>(),
+            sp.GetRequiredService<ILogger<RetrainingService>>()))
     |> ignore
 
     services.AddHostedService<RetrainingService>(fun sp ->

@@ -8,8 +8,8 @@ open System.Text.Json.Serialization
 open System.Threading
 open System.Threading.Tasks
 open Microsoft.Extensions.Hosting
+open Microsoft.Extensions.Logging
 open Microsoft.ML
-open Serilog
 open SmartRouter.Core.MLPorts
 open SmartRouter.Core.RetrainingPorts
 open SmartRouter.Cli.Adapters.DatasetMerger
@@ -54,14 +54,14 @@ let private stateJsonOpts =
     o.Converters.Add(JsonFSharpConverter())
     o
 
-let private readState (path: string) : RetrainState option =
+let private readState (logger: ILogger) (path: string) : RetrainState option =
     if not (File.Exists path) then None
     else
         try
             let text = File.ReadAllText(path, Encoding.UTF8)
             Some (JsonSerializer.Deserialize<RetrainState>(text, stateJsonOpts))
         with ex ->
-            Log.Warning(ex, "RetrainingService: malformed state file at {Path}; treating as missing", path)
+            logger.LogWarning(ex, "RetrainingService: malformed state file at {Path}; treating as missing", path)
             None
 
 let private writeState (path: string) (state: RetrainState) : unit =
@@ -97,7 +97,8 @@ type RetrainingService(
     options          : RetrainingOptions,
     embedder         : IEmbedder,
     versionProvider  : IModelVersionProvider,
-    retrainLock      : IRetrainLock) =                  // NEW Phase 9 (CONTEXT.md Lock 6)
+    retrainLock      : IRetrainLock,                    // NEW Phase 9 (CONTEXT.md Lock 6)
+    logger           : ILogger<RetrainingService>) =
     inherit BackgroundService()
 
     // Embed all hard-case entries (off the hot path; cancellable).
@@ -127,17 +128,17 @@ type RetrainingService(
     let runRetrain (stoppingToken: CancellationToken) : Task<unit> =
         task {
             let cycleStart = DateTimeOffset.UtcNow
-            Log.Information("RetrainingService: starting retrain cycle")
+            logger.LogInformation("RetrainingService: starting retrain cycle")
 
             // 1. Read inputs
             let hardCaseEntries = readHardCases options.HardCasePath
             let oldEntries      = readTrainingSet options.TrainingSetPath
-            Log.Information(
+            logger.LogInformation(
                 "RetrainingService: read {Hard} hard cases + {Old} old training samples",
                 hardCaseEntries.Length, oldEntries.Length)
 
             if hardCaseEntries.Length = 0 then
-                Log.Information("RetrainingService: no hard cases; skipping retrain cycle")
+                logger.LogInformation("RetrainingService: no hard cases; skipping retrain cycle")
                 return ()
             else
 
@@ -150,7 +151,7 @@ type RetrainingService(
             let merged = merge oldSamples newSamples rng
 
             if merged.Length < 4 then
-                Log.Warning(
+                logger.LogWarning(
                     "RetrainingService: merged set too small ({N} samples) for train/test split; skipping",
                     merged.Length)
                 return ()
@@ -184,7 +185,7 @@ type RetrainingService(
 
             match result with
             | Accepted (newAcc, newFbRate) ->
-                Log.Information(
+                logger.LogInformation(
                     "RetrainingService: validation passed (acc={Acc:F4} >= {BAcc:F4}; fbRate={Fb:F4} <= {BFb:F4})",
                     newAcc, baselineAcc, newFbRate, baselineFbRate)
 
@@ -225,12 +226,12 @@ type RetrainingService(
                 }
 
                 let elapsed = (DateTimeOffset.UtcNow - cycleStart).TotalSeconds
-                Log.Information(
+                logger.LogInformation(
                     "RetrainingService: retrain accepted in {Elapsed:F1}s; new model_version={Version}",
                     elapsed, newVersion)
 
             | Rejected reason ->
-                Log.Warning(
+                logger.LogWarning(
                     "RetrainingService: validation rejected — {Reason}; router.zip unchanged",
                     reason)
                 writeRejectionLog
@@ -259,7 +260,7 @@ type RetrainingService(
         task {
             match retrainLock.TryAcquire(0) with
             | None ->
-                Log.Warning("RetrainingService: retrain already in progress; skipping trigger")
+                logger.LogWarning("RetrainingService: retrain already in progress; skipping trigger")
             | Some lockHandle ->
                 use _ = lockHandle   // released on scope exit via IDisposable
                 try
@@ -268,7 +269,7 @@ type RetrainingService(
                 | :? OperationCanceledException as oce ->
                     System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(oce).Throw()
                 | ex ->
-                    Log.Error(ex, "RetrainingService: pipeline threw; model unchanged; will retry next tick")
+                    logger.LogError(ex, "RetrainingService: pipeline threw; model unchanged; will retry next tick")
         }
 
     /// Test seam: Plan 08-03 RETRAIN-04 end-to-end test calls this directly to
@@ -306,12 +307,12 @@ type RetrainingService(
                             else
                                 let currentCount = countJsonlLines options.HardCasePath
                                 let priorCount =
-                                    match readState options.StatePath with
+                                    match readState logger options.StatePath with
                                     | Some s -> s.hard_case_count_at_retrain
                                     | None   -> 0
                                 let delta = currentCount - priorCount
                                 if delta >= options.HardCaseCountTrigger then
-                                    Log.Information(
+                                    logger.LogInformation(
                                         "RetrainingService: count trigger fired ({Delta} >= {Threshold}); starting retrain",
                                         delta, options.HardCaseCountTrigger)
                                     do! tryRunRetrain stoppingToken
@@ -324,5 +325,5 @@ type RetrainingService(
                 ()
             with
             | :? OperationCanceledException -> ()
-            | ex -> Log.Error(ex, "RetrainingService: outer loop crashed")
+            | ex -> logger.LogError(ex, "RetrainingService: outer loop crashed")
         }
