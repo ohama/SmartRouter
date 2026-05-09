@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 13 IN PROGRESS — 13-05 complete. Startup banner, shutdown banner, and LogRetentionService (60-min PeriodicTimer pruning operational logs/JSONL/teacher-cap) all shipped. Ready for 13-06 (final plan in Phase 13).
+**Current focus:** Phase 13 COMPLETE — all 6 plans shipped. Dual-sink logging (Console stderr + rolling file), ILogger<T> migration, hot-path demotion, --log-level CLI, LogRetentionService, startup/shutdown banners, 14 new tests (LogRotationTests), README §9.6-9.9 operator guide. Final test count: 76 passed + 16 ignored + 0 failed.
 
 ## Current Position
 
-Phase: 13 of 13 (Service Logging) — IN PROGRESS
-Plan: 5 of 6 in current phase — COMPLETE ✓ (13-05 complete; wave 4 done)
-Status: 13-05 complete. LogRetentionService (60-min PeriodicTimer, 3 pruning targets), startup banner (listen/model/canary/queue snapshot), shutdown banner (in-flight + queue depth via ApplicationStopping). Test baseline preserved: **62 passed + 16 ignored + 0 failed**.
-Last activity: 2026-05-09 — Completed 13-05-BANNERS-AND-RETENTION-PLAN.md.
+Phase: 13 of 13 (Service Logging) — COMPLETE ✓
+Plan: 6 of 6 in current phase — COMPLETE ✓ (13-06 complete; all waves done)
+Status: All Phase 13 plans complete. 14 LogRotationTests (ISO-8601, [cid]/[-] rendering, SourceContext, Override filter, rolling size/day/retention, LogRetentionService pruning, --log-level, --trace migration). README §9.6-9.9 updated to reflect Phase 13 reality. **76 passed + 16 ignored + 0 failed**.
+Last activity: 2026-05-09 — Completed 13-06-TESTS-AND-DOCS-PLAN.md.
 
-Progress: [███████████████████████████████████░░░] 45 of 47 plans (Phases 1-12 complete; Phase 13: 5/6 done)
+Progress: [███████████████████████████████████████] 47 of 47 plans (ALL PHASES COMPLETE)
 
 ## Performance Metrics
 
