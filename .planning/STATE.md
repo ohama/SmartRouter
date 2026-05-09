@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 12 COMPLETE — Heuristic Routing Removal done. Ready for Phase 12 verification.
+**Current focus:** Phase 12 COMPLETE — Heuristic Routing Removal verified 7/7 must-haves. Ready for Phase 13 (Service Logging).
 
 ## Current Position
 
-Phase: 12 of 12 (Heuristic Routing Removal) — COMPLETE
-Plan: 6 of 6 in current phase — COMPLETE ✓ (Wave 4 complete: 12-06 cleanup + verification greps)
-Status: Phase 12 COMPLETE. All heuristic routing code removed. Phase-level greps all pass 0 hits. New baseline: 59 passed + 16 ignored + 3 errored (MODELS pre-existing IEmbedder, flagged for verifier). SUMMARY: 12-06-SUMMARY.md
-Last activity: 2026-05-09 — Phase 12 Plan 6 (COMPLETE).
+Phase: 12 of 13 (Heuristic Routing Removal) — COMPLETE ✓
+Plan: 6 of 6 in current phase + ModelsTests gap-closure — COMPLETE ✓
+Status: Phase 12 COMPLETE + verifier passed (7/7 must-haves). Source greps all 0 hits (applyHeuristic / scoreComplexity / canonicalKeywords / Heuristic DU case / "heuristic" string / --routing-algorithm / Routing.Algorithm key). configureServices split into configureRequestPipeline + configureWithoutMl. ModelsTests fixed via gap-closure commit 748bb79 (configureWithoutMl pattern). archive/heuristic-baseline branch + v0.5-heuristic-baseline tag preserved. New baseline: **62 passed + 16 ignored + 0 failed** (down from Phase 11's 86+17 due to RoutingTests deletion + MLRoutingTests prune — user-decided Q5=전체 삭제). VERIFICATION: 12-VERIFICATION.md
+Last activity: 2026-05-09 — Phase 12 verifier (PASSED 7/7).
 
-Progress: [████████████████████████████████] 38 of 41 plans
+Progress: [████████████████████████████████░░░░░░] 41 of 47 plans (Phases 1-12 complete; Phase 13 pending = 6 plans)
 
 ## Performance Metrics
 

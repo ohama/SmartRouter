@@ -45,8 +45,7 @@ The problem it solves: 122B is expensive in compute and slow to respond; 35B is 
          │  │ Routing.fs     │  │  ← 3-stage pure pipeline (no IO)
          │  │  1. model ovr  │  │
          │  │  2. task table │  │
-         │  │  3. heuristic/ │  │
-         │  │     ML          │  │
+         │  │  3. ML         │  │
          │  └────────────────┘  │
          │  QueueDispatcher     │  ← SemaphoreSlim cap: 1 in-flight 122B
          │  CanaryService       │  ← FileSystemWatcher on router-canary.zip
@@ -64,12 +63,11 @@ The problem it solves: 122B is expensive in compute and slow to respond; 35B is 
 
 Core (`src/SmartRouter.Core/`) has zero infrastructure references. Microsoft.ML, Serilog, HttpClient, ASP.NET Core, and FSharp.SystemTextJson are all confined to the Cli project (`src/SmartRouter.Cli/`). The hexagonal boundary is enforced at the project level — `SmartRouter.Core.fsproj` has no NuGet dependencies.
 
-### Routing algorithms
+### Routing algorithm
 
-Two algorithms are available; switch via the `Routing.Algorithm` config key:
+Stage 3 always runs the ML algorithm — embeds the prompt with bge-m3 int8 (ONNX) and feeds the 1024-dim vector to an ML.NET `LbfgsLogisticRegression` classifier trained on historical decisions. Confidence ≥ `Routing.ML.Threshold` (default `0.5`) routes to 122B; otherwise 35B. Requires `models/router.zip` and the ONNX files under `models/embed/`.
 
-- **heuristic** — keyword match against `Routing.Keywords` OR composite complexity score ≥ `Routing.ComplexityThreshold` → 122B; else 35B. Deterministic and fast; no model files required.
-- **ml** (default) — embeds the prompt with bge-m3 int8 (ONNX) and feeds the vector to an ML.NET `LbfgsLogisticRegression` classifier trained on historical decisions. Requires `models/router.zip` and the ONNX files under `models/embed/`.
+A single-shape `RoutingAlgorithm` function-type alias (`RoutingConfig -> RouterRequest -> RoutingDecision`) lives in Core for future extensibility; only the ML implementation ships in v1. Heuristic routing was retired in Phase 12 — historical snapshot at `archive/heuristic-baseline` branch + `v0.5-heuristic-baseline` tag.
 
 ### Two feedback loops
 
@@ -170,9 +168,9 @@ Stage 2: task table
     → no task field          → continue.
     │
     ▼
-Stage 3: heuristic OR ML (based on Routing.Algorithm config)
-    Heuristic: keyword match OR complexity score ≥ threshold → 122B; else 35B
-    ML:        bge-m3 embedding → LbfgsLogisticRegression → confidence ≥ 0.5 → 122B
+Stage 3: ML classifier
+    bge-m3 int8 embedding (1024-dim) → LbfgsLogisticRegression
+    confidence ≥ Routing.ML.Threshold (default 0.5) → 122B; else 35B
 ```
 
 ### 5.2 Task table
@@ -189,39 +187,34 @@ All seven task types map to a model and a queue priority. Priority determines qu
 | `retrieval`           | 35B    | low      |                               |
 | `summary`             | 35B    | low      |                               |
 
-### 5.3 Heuristic vs ML
+### 5.3 ML classifier
 
-The `Routing.Algorithm` key in `appsettings.json` switches the stage-3 algorithm. Valid values: `"ml"` (default) or `"heuristic"`.
+Stage 3 runs the ML pipeline:
 
-**Heuristic logic** (`src/SmartRouter.Core/Heuristic.fs`):
-- Computes a composite score: keyword hits + length buckets (>2000 chars = +1, >4000 = +2, >8000 = +4) + message count (>3 = +1, >6 = +2) + code block presence (+1).
-- Score ≥ `Routing.ComplexityThreshold` (default: `3`) → 122B Low; else → 35B Low.
-- Tie (score equals threshold) → 35B (latency-first).
+1. **Embed** — Prompt text is concatenated and embedded by bge-m3 int8 (ONNX, loaded from `Routing.ML.EmbeddingModelPath`). The result is a 1024-dim L2-normalized float vector.
+2. **Classify** — The vector is fed to an ML.NET `LbfgsLogisticRegression` classifier loaded from `Routing.ML.ModelPath` via `PredictionEnginePool` (with `watchForChanges:true` so retrained models are picked up atomically).
+3. **Threshold** — `confidence ≥ Routing.ML.Threshold` (default: `0.5`) routes to 122B; otherwise 35B. Reason is `RoutingReason.ML`.
 
-**ML logic**:
-- Prompt text is embedded with bge-m3 int8 (ONNX, loaded from `Routing.ML.EmbeddingModelPath`).
-- The embedding vector is fed to the loaded `LbfgsLogisticRegression` classifier at `Routing.ML.ModelPath`.
-- Confidence ≥ `Routing.ML.Threshold` (default: `0.5`) → 122B; else → 35B.
-- Falls back to heuristic if the model file is missing or the embedding fails.
+If `models/router.zip` is missing at startup, a dummy classifier with random 1024-dim weights is auto-generated so cold-start doesn't throw — Loop B (retraining) replaces it with a real model from the first labeled hard cases. Embedding model files (`models/embed/bge-m3-int8.onnx` and `models/embed/sentencepiece.bpe.model`) must be present; the router fails fast at startup if they are not.
 
-### 5.4 Tuning the heuristic
+### 5.4 Tuning ML routing
 
-**Add a keyword** (forces 122B when it appears in any message):
-```json
-// appsettings.json
-"Routing": {
-  "Keywords": ["recursive", "dependency", ..., "your-new-keyword"]
-}
-```
-Restart the router after editing `appsettings.json`.
-
-**Lower the complexity threshold** (routes more requests to 122B):
+**Adjust the confidence threshold** (lower → more requests to 122B):
 ```json
 "Routing": {
-  "ComplexityThreshold": 2
+  "ML": { "Threshold": 0.4 }
 }
 ```
-Raise it (e.g., to `5`) to prefer 35B more aggressively.
+Default `0.5` is a balanced split; lower to `0.4` if you observe Hermes/Graphify quality regressions on borderline prompts; raise to `0.6` to prefer 35B more aggressively for latency.
+
+**Force a model per-request** — bypass stage 3 entirely:
+```bash
+curl -d '{"model": "122b", "messages": [...]}'   # always 122B
+curl -d '{"model": "35b",  "messages": [...]}'   # always 35B
+curl -d '{"task": "compiler_debug", "messages": [...]}'   # task table → 122B high-priority
+```
+
+**Watch the classifier improve over time** — Loop B retrains every `Retraining.IntervalMinutes` (default 60) using `fallback_used=true` records as hard cases. New models are validated against a held-out set before going live; rejected models are logged to `logs/retraining-rejections.jsonl`. The active `model_version` appears in every DecisionLog row — watch it bump after a successful retrain.
 
 ---
 
@@ -314,11 +307,9 @@ All keys live in `src/SmartRouter.Cli/appsettings.json`. The router reads them a
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `Routing.Algorithm` | string | `"ml"` | Stage-3 algorithm: `"ml"` or `"heuristic"` |
-| `Routing.ComplexityThreshold` | int | `3` | Heuristic score threshold; score ≥ this → 122B |
 | `Routing.TimeoutSeconds` | int | `300` | Per-request upstream timeout |
-| `Routing.Keywords` | string[] | (20 terms) | Keywords that contribute to heuristic score |
 | `Routing.TaskTable` | object | (7 tasks) | Per-task model + priority mapping |
+| `Routing.ModelAliases` | object | (auto/35b/122b) | Wire alias → ModelId mapping for stage-1 model override |
 
 ### Routing.ML
 
@@ -623,8 +614,8 @@ Every request produces one row in `logs/decisions/YYYY-MM-DD.jsonl`. The file ro
 | `correlation_id` | string | UUID injected by `CorrelationMiddleware`; sticky key for canary bucketing |
 | `timestamp` | string | ISO 8601 UTC — time the DecisionLog row was written |
 | `target` | string | `"Qwen35B"` or `"Qwen122B"` — the model that actually served the request |
-| `routing_reason` | string | `model_override`, `task_table`, `heuristic`, `ml`, `fallback_to_35b`, or a compound like `ml;upstream_error` |
-| `routing_algorithm` | string | `"heuristic"` or `"ml"` — the active `Routing.Algorithm` at request time |
+| `routing_reason` | string | `explicit_model:{alias}`, `explicit_task:{TaskType}`, `default`, `ml`, `fallback_to_35b`, or a compound like `ml;upstream_error`, `ml;cancelled`, `ml;stream_error` |
+| `routing_algorithm` | string | `"ml"` (only valid value as of Phase 12; the seam is retained for future algorithm additions) |
 | `latency_ms` | float | End-to-end time from request start to last byte written |
 | `model_version` | string | Active classifier version (e.g., `"v3"` baseline, `"v3-canary"` for canary cohort) |
 | `fallback_used` | bool | `true` if 122B was unreachable and the request was transparently rerouted to 35B |
@@ -667,22 +658,108 @@ curl -s http://127.0.0.1:4000/stats | jq '{depth_high: .queue_depth_122b_high, d
 
 `semaphore_available: 0` and `queue_depth_122b_high > 0` = high-priority requests piling up. Consider raising `Queue.FairnessK` or adding a second 122B instance.
 
-### 9.6 Log files
+### 9.6 Log files (overview)
 
-| Path | Content |
-|------|---------|
-| `logs/decisions/YYYY-MM-DD.jsonl` | DecisionLog rows (relative to `WorkingDirectory`) |
-| `~/llm-system/services/logs/smart-router.log` | Serilog stdout (launchd deployment) |
-| `~/llm-system/services/logs/smart-router.err` | Serilog stderr / startup errors (launchd deployment) |
-| `logs/retraining-rejections.jsonl` | Models the Validator rejected |
+The router emits two parallel log streams plus a few small auxiliary files. All paths below are relative to the process WorkingDirectory (under launchd: `/Users/ohama/llm-system/services/smart-router/`).
 
-In dev mode (`dotnet run`), Serilog writes to the console. In the launchd deployment, it writes to the log files above.
+| Path | Stream | Format | Audience |
+|------|--------|--------|----------|
+| stderr (Serilog Console sink) | Operational | text, structured | live `tail -f` in dev mode; launchd captures it to `~/llm-system/services/logs/smart-router.err` in production |
+| `logs/decisions/YYYY-MM-DD.jsonl` | Decision | JSONL (12-field schema in §9.1) | FailureDetector / dashboards / Loop B retraining |
+| `datasets/hard-cases.jsonl` | Training | JSONL (labeled samples) | Loop B input |
+| `datasets/teacher-cap-YYYY-MM-DD.json` | Cap counter | JSON | TeacherLabeler daily cost-cap state |
+| `logs/retraining-rejections.jsonl` | Validator audit | JSONL | post-mortem on rejected retrains |
+| `~/llm-system/services/logs/smart-router.log` | launchd-captured stdout | (mostly empty — OBS-04 stream separation) | crash-time fallback only |
+| `~/llm-system/services/logs/smart-router.err` | launchd-captured stderr | text (whatever Serilog writes) | post-mortem if no rolling file is configured yet |
+
+**v1 logging stream model:** Serilog writes structured events to **stderr only** (OBS-04 invariant; stdout is reserved for the application). The launchd plist captures stderr to a flat file at `~/llm-system/services/logs/smart-router.err`. There is no built-in rotation in v1 — the file grows until the operator truncates it (`truncate -s 0 ~/llm-system/services/logs/smart-router.err`) or until Phase 13 ships rolling file sinks (planned: `logs/operational/smart-router-{Date}.log`, 50 MB cap, 30-day retention).
+
+The DecisionLog stream is **rotated daily by filename** (UTC date in the name); there is no built-in retention in v1 — files accumulate until Phase 13's `LogRetentionService` ships (planned: 90-day retention).
+
+### 9.7 Reading the operational log
+
+Each line is a structured Serilog event written via the template `[{Level:u3}] {Message:lj}{NewLine}{Exception}`. Examples:
+
+```
+[INF] Now listening on: http://127.0.0.1:4000
+[INF] HealthService starting
+[INF] HealthService: Qwen35B reachable
+[INF] HealthService: Qwen122B reachable
+[INF] CanaryService: starting; canary_version=(none)
+[INF] Routing target=Qwen122B reason=ML priority=Low stream=true
+[WRN] HealthService: Qwen122B probe failed (consecutive=1)
+[ERR] StreamAsync: unexpected error writing to response for Qwen122B
+       System.Net.Http.HttpRequestException: Connection refused
+```
+
+The `correlation_id` (32-char hex) injected by `CorrelationMiddleware` is captured into Serilog's `LogContext` per request and is the join key with the JSONL DecisionLog rows. In v1 the operational template does not render `correlation_id` directly — to trace a single request, look up its `correlation_id` in the DecisionLog JSONL first, then grep the Serilog stream for any entries matching that value (Phase 13 expands the template to render `[{correlation_id}]` per line).
+
+**Common operator queries:**
+
+```bash
+# Tail the live stderr stream (dev mode)
+dotnet run --project src/SmartRouter.Cli 2>&1 | tee /tmp/smart-router.log
+
+# Tail launchd-captured stderr (production)
+tail -f ~/llm-system/services/logs/smart-router.err
+
+# Find all warnings + errors today (launchd)
+grep -E '\[(WRN|ERR)\]' ~/llm-system/services/logs/smart-router.err
+
+# Trace a request across both streams
+CID=$(jq -r 'select(.correlation_id == "abc12345...")' < logs/decisions/$(date +%F).jsonl | head -1 | jq -r .correlation_id)
+echo "DecisionLog rows for $CID:"
+grep "\"correlation_id\":\"$CID\"" logs/decisions/*.jsonl
+
+# Count requests by target (last 24h)
+jq -r '.target' < logs/decisions/$(date +%F).jsonl | sort | uniq -c
+
+# Count fallback events (last 7 days)
+for d in 0 1 2 3 4 5 6; do
+  date=$(date -v -${d}d +%F 2>/dev/null || date -d "${d} days ago" +%F)
+  count=$(jq 'select(.fallback_used == true)' < logs/decisions/${date}.jsonl 2>/dev/null | wc -l | tr -d ' ')
+  echo "${date}: ${count} fallback events"
+done
+```
+
+### 9.8 Log levels and filtering
+
+Serilog's runtime minimum level is controlled by a `LoggingLevelSwitch`. In v1, the default level is `Information`; the legacy `--trace` boolean flag flips it to `Debug`. Phase 13 replaces `--trace` with `--log-level=enum` (valid values: `verbose | debug | information | warning | error | fatal`).
+
+| Level | Volume | Used for |
+|-------|--------|----------|
+| Verbose / VRB | very low | per-token streaming events; off by default |
+| Debug / DBG | low | per-request prompt-feature extraction; HealthService steady-state probes; queue ticket lifecycle |
+| Information / INF | moderate | per-request routing decisions (note: hot-path); HealthService startup + state-changes; CanaryService promote/rollback; RetrainingService cycle start/end |
+| Warning / WRN | bursty | upstream 502/timeouts (retries handle them); HealthService transitions to unreachable; queue depth high-water; cost cap thresholds; FileSystemWatcher rearm failures |
+| Error / ERR | rare | unhandled exceptions in BackgroundService loops; SSE write failures; teacher labeler malformed responses after retries |
+| Fatal / FTL | should never appear | reserved for unrecoverable host failures |
+
+`appsettings.json:Serilog.MinimumLevel.Default` documents the intended config-driven default but is not yet wired to Serilog's startup binding in v1 (Phase 13 wires `.ReadFrom.Configuration(...)` so the appsettings value takes effect; v1 always boots at `Information` regardless of the appsettings value).
+
+### 9.9 Log parameters reference
+
+The following keys in `appsettings.json` control logging behavior:
+
+| Key | Type | Default | Effect (v1) | Effect after Phase 13 |
+|-----|------|---------|-------------|----------------------|
+| `Serilog.MinimumLevel.Default` | string | `"Information"` | (v1: ignored — see §9.8) | active default level |
+| `Serilog.MinimumLevel.Override.{Source}` | string | absent | (v1: ignored) | per-category filter (e.g., `Microsoft.AspNetCore: Warning`) |
+| `Logging.Directory` | string | n/a (Phase 13) | (v1: stderr only) | rolling file sink location |
+| `Logging.RetentionDays` | int | n/a (Phase 13) | n/a | days of operational logs to keep |
+| `DecisionLog.Directory` | string | `"logs/decisions"` | output directory for JSONL DecisionLog | unchanged |
+| `DecisionLog.ChannelCapacity` | int | `10000` | in-memory async-channel buffer for DecisionLog writer | unchanged |
+| `DecisionLog.RetentionDays` | int | n/a (Phase 13) | n/a | days of decision JSONL to keep |
+| CLI flag `--trace` | bool | absent | flips `LoggingLevelSwitch` to Debug | replaced by `--log-level=enum` |
+| CLI flag `--log-level=...` | enum | n/a (Phase 13) | n/a | sets `LoggingLevelSwitch` for the lifetime of the process |
+
+In dev mode (`dotnet run`), Serilog writes to the console. In the launchd deployment, it writes to whatever launchd captures stderr into (default: `smart-router.err`). Phase 13 introduces a parallel rolling file sink so post-mortem analysis doesn't require trawling a single growing file.
 
 ---
 
 ## 10. Hermes Integration
 
-Hermes Agent (`~/hermes-agent`) is a general-purpose coding assistant. It does not send a `task` field. Every Hermes request passes through stages 1 and 2 of the routing pipeline without a match, and the decision is made entirely by stage 3 (heuristic or ML).
+Hermes Agent (`~/hermes-agent`) is a general-purpose coding assistant. It does not send a `task` field. Every Hermes request passes through stages 1 and 2 of the routing pipeline without a match, and the decision is made entirely by stage 3 (the ML classifier).
 
 **Point Hermes at the router:**
 ```jsonc
@@ -705,7 +782,7 @@ Hermes Agent (`~/hermes-agent`) is a general-purpose coding assistant. It does n
 
 ## 11. Graphify Integration
 
-Graphify is a graph-indexing pipeline that sends a `task` field with every request. The `task` value routes directly through stage 2 (task table), bypassing the ML/heuristic stage entirely.
+Graphify is a graph-indexing pipeline that sends a `task` field with every request. The `task` value routes directly through stage 2 (task table), bypassing the stage-3 ML classifier entirely.
 
 **Standard Graphify request:**
 ```json
@@ -803,20 +880,20 @@ tail -f ~/llm-system/services/logs/smart-router.err
 
 The plist install path is `~/Library/LaunchAgents/com.ohama.smart-router.plist` (LaunchAgent — runs as the logged-in user, not root).
 
-### 12.2 Switch routing algorithm
+### 12.2 Tune ML routing
 
 Edit `appsettings.json` in the install directory:
 ```bash
-# Edit the deployed config
+# Adjust confidence threshold (lower → more 122B routing)
 nano ~/llm-system/services/smart-router/appsettings.json
-# Change: "Algorithm": "heuristic"  or  "Algorithm": "ml"
+# Edit Routing.ML.Threshold (default 0.5)
 
 # Restart
 launchctl unload ~/Library/LaunchAgents/com.ohama.smart-router.plist
 launchctl load -w ~/Library/LaunchAgents/com.ohama.smart-router.plist
 ```
 
-For a one-off override without editing the file, you can temporarily add the flag to `ProgramArguments` in the plist, but restarting with the config change is cleaner.
+The router reads `Routing.ML.Threshold`, `Routing.ML.ModelPath`, and `Routing.ML.EmbeddingModelPath` at startup; restart after any change. Loop B can also retrain the model in-place — see § 6.2 and § 12.4.
 
 ### 12.3 Canary workflow
 

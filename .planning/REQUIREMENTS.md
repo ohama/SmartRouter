@@ -75,7 +75,7 @@
 
 - [x] **OPS-01**: launchd plist (`com.ohama.smart-router.plist`) auto-starts the router and supervises restart, mirroring the operator's `com.ohama.qwen36-35b.plist` + `com.ohama.qwen122b.plist` convention exactly (KeepAlive=`<true/>`, ThrottleInterval=30, RunAtLoad=`<true/>`, 4-space XML); ships at `deploy/com.ohama.smart-router.plist` + `scripts/install-launchd.sh` for operator-driven install
 - [x] **OPS-02**: launchd plist references the dotnet runtime by absolute path `/opt/homebrew/bin/dotnet` (PATH unavailable to launchd at load time)
-- [x] **OPS-03**: README.md at repo root (1020 lines, 14 sections) documents What This Is / Architecture / Quickstart / Routing Pipeline (heuristic + ML, 7 task types) / ML Feedback Loop (Loop A + Loop B + canary) / Configuration Reference / Endpoints (all 8) / Debugging (DecisionLog schema) / Hermes Integration / Graphify Integration / Operations (launchd + canary + retraining) / Troubleshooting / Further Reading
+- [x] **OPS-03**: README.md at repo root documents What This Is / Architecture / Quickstart / Routing Pipeline (ML-only as of Phase 12; 7 task types) / ML Feedback Loop (Loop A + Loop B + canary) / Configuration Reference / Endpoints (all 8) / Debugging (DecisionLog schema) / Operational Logging (Phase 13) / Hermes Integration / Graphify Integration / Operations (launchd + canary + retraining) / Troubleshooting / Further Reading. Phase 13 expands the Operational Logging section.
 - [x] **OPS-04**: Router binds explicitly to `127.0.0.1` (not `0.0.0.0`, not just `localhost`) to avoid Mac firewall surprises
 - [x] **OPS-05**: `appsettings.json` captures all tunables (model URLs, threshold, keyword list, task table, timeouts, retry policy)
 
@@ -269,14 +269,33 @@ Deferred. Tracked but not in current roadmap.
 | CANARY-01 | Phase 9 | Complete |
 | CANARY-02 | Phase 9 | Complete |
 | CANARY-03 | Phase 9 | Complete |
+| HRM-01 | Phase 12 | Complete |
+| HRM-02 | Phase 12 | Complete |
+| HRM-03 | Phase 12 | Complete |
+| HRM-04 | Phase 12 | Complete |
+| HRM-05 | Phase 12 | Complete |
+| HRM-06 | Phase 12 | Complete |
+| HRM-07 | Phase 12 | Complete |
+
+### Heuristic Routing Removal (Phase 12)
+
+These requirements supersede ROUT-03/ROUT-04 (heuristic routing fallback), ML-02 (Routing.Algorithm config key), ML-03 (--routing-algorithm CLI flag), and ML-04 (Heuristic.fs ↔ ML.fs cross-import guard). The original requirements documented historical truth at delivery; HRM-* documents the post-Phase-12 truth. Routing decisions still produce a `RoutingReason` per ROUT-06, but the `Heuristic of score` DU case is gone — remaining cases: ExplicitModelOverride, ExplicitTask, Default, ML, FallbackTo35B.
+
+- [x] **HRM-01**: `src/SmartRouter.Core/Heuristic.fs` does not exist; `RoutingReason.Heuristic of score` DU case is removed; `RoutingConfig.Keywords` and `RoutingConfig.ComplexityThreshold` fields are removed; `Routing.fs canonicalKeywords` constant is removed
+- [x] **HRM-02**: `appsettings.json:Routing.Algorithm` key is absent; `RoutingOptions.Algorithm` field is absent; ML wiring runs unconditionally in `configureRequestPipeline` (no string-based dispatch)
+- [x] **HRM-03**: `--routing-algorithm` CLI flag is absent from `Program.fs`; if a legacy operator passes it, the host fails fast with the unrecognized-argument error from .NET CLI parsing
+- [x] **HRM-04**: `CompositionRoot.fs` exposes two top-level entry points: `configureRequestPipeline` (full ML + Health + Canary + Retraining + endpoints) and `configureWithoutMl` (HTTP factories + decision-logger sink + retrain ports + Embedder option binding only — no IClassifier, no RoutingAlgorithmRegistration, no MakeApplyMl, no ensureEmbeddingFilesPresent, no HealthService, no CanaryService, no RetrainingService); `--retrain` CLI branch and offline-friendly tests use the second entry point
+- [x] **HRM-05**: `tests/SmartRouter.Tests/RoutingTests.fs` does not exist (entire file removed; user-decided Q5=전체 삭제); `MLRoutingTests.fs` has no heuristic-vs-ML divergence test, no "both algorithms satisfy RoutingAlgorithm" test, no "--routing-algorithm=ml override" test; `StreamingTests.fs` / `LoggingTests.fs` / `HealthFallbackTests.fs` inject test-stub `RoutingAlgorithmRegistration` directly via `services.AddSingleton<...>(testStubReg)` after `configureWithoutMl` returns; `LoggingTests.fs` asserts `routing_algorithm = "ml"` (not `"heuristic"`)
+- [x] **HRM-06**: `scripts/check-routing-isolation.sh` does not exist (CI guard for Heuristic.fs ↔ ML.fs cross-import is no longer needed since Heuristic.fs is gone); supersedes ML-04
+- [x] **HRM-07**: `archive/heuristic-baseline` git branch and `v0.5-heuristic-baseline` git tag are present and untouched (heuristic baseline snapshot from 2026-05-08 preserved as historical reference; no rollback workflow ships in v1)
 
 **Coverage:**
-- v1 requirements: 83 total (56 original + 27 ML-arc additions; +1 EMBED-03 for bge-m3 latency)
-- Mapped to phases: 83 ✓
+- v1 requirements: 90 total (83 original + 7 HRM additions in Phase 12; +1 EMBED-03 for bge-m3 latency already counted)
+- Mapped to phases: 90 ✓
 - Unmapped: 0
-- Complete: 60 (Phases 1-6 ✓ + TEST-01/TEST-02 retroactive)
-- Pending: 23 (11 ML arc remaining: Phases 7-9 + 12 deferred heuristic-cleanup)
+- Complete: 89 (Phases 1-12 ✓; TEST-01/TEST-02 retroactive; ML-04 superseded by HRM-06 but historically delivered; ROUT-03/ROUT-04/ML-02/ML-03 historically delivered then removed in Phase 12)
+- Pending: 0 within v1 scope (Phase 13 logging is a v1.1 enhancement, not in this requirements list)
 
 ---
 *Requirements defined: 2026-05-07*
-*Last updated: 2026-05-08 after Phase 6 (Real ML Routing) completion — 60 requirements verified Complete (Phase 6 EMBED-01/02/03 + CLS-01/02/03; live bge-m3 inference verification approved on automated evidence per operator)*
+*Last updated: 2026-05-09 after Phase 12 (Heuristic Routing Removal) completion — 7 HRM requirements added documenting the post-removal truth.*
