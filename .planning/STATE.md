@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 
 ## Current Position
 
-Phase: 9 of 11 (Canary Deployment) — COMPLETE ✓
-Plan: 3 of 3 in current phase — COMPLETE ✓
-Status: Phase 9 COMPLETE. Plan 09-03 adds 12 canary tests (5 CANARY-01 unit + 7 mlIntegTest integration). CanaryTests.fs: mkStableCorrelationIds (seed=42 binomial CI [80,120]), sticky bucket, short-circuits; CANARY-02 JsonDocument.Parse cohort tagging; CANARY-03 rollback/enable/promote/auto-rollback; CANARY-04 FileSystemWatcher post-startup lifecycle. CapturingSink for AUTO-ROLLBACK log assertion. testSequenced. Build: 0/0. Tests: 78 pass + 17 ignored + 0 failed (embeddings absent; 85+10+0 when present). SUMMARY: .planning/phases/09-canary-deployment/09-03-SUMMARY.md
-Last activity: 2026-05-09 — Phase 9 Plan 3 (COMPLETE). Phase 9 COMPLETE.
+Phase: 10 of 11 (Health/Fallback + graph_indexing no-fallback) — IN PROGRESS
+Plan: 1 of 3 in current phase — COMPLETE ✓
+Status: Phase 10 Plan 01 COMPLETE. Foundation: RoutingReason.FallbackTo35B DU case added; IHealthProbe extended with IsReachable (sync) + LastProbedAt; appsettings Routing.Health + AutoRollbackEnabled=true; DecisionLogger formatReason cascade updated. Build: 0/0. Tests: 78 pass + 17 ignored + 0 failed (baseline preserved). SUMMARY: .planning/phases/10-health-fallback-and-graph-indexing-no-fallback/10-01-SUMMARY.md
+Last activity: 2026-05-09 — Phase 10 Plan 1 (COMPLETE).
 
-Progress: [█████████████████████░░] 29 of ~30 plans (phase 9 of 11 complete; phase 10 next)
+Progress: [██████████████████████░] 30 of ~32 plans (phase 9 complete; phase 10 plan 1 of 3 complete)
 
 ## Performance Metrics
 
@@ -177,6 +177,11 @@ Recent decisions affecting current work:
 - 09-VERIFICATION (verifier scored 36/36 must-haves): Canary deployment is real and proven. Notable findings: Pure-Core invariant preserved (CanaryPorts.fs BCL-only — only System.Threading + System.Threading.Tasks); ML.fs single isCanary boolean correctly gates BOTH classifier selection AND ModelVersion assignment (Pitfall 8 verified); CompositionRoot Step 1.0 TryAddSingleton fallbacks precede ML conditional block (B2 fix); CanaryService FileSystemWatcher arms in StartAsync, disposes in StopAsync via separate try/with (no F# parsing trap); ContextualTargetingFilter via WithTargeting<>, PercentageFilter zero hits in src; AutoRollbackEnabled defaults to false (Lock 1) — proxy signal will become real in Phase 10. Three human-verification items deferred (real traffic distribution at scale, real launchd auto-rollback under upstream failures, macOS FSEvents latency) — non-blocking; require live traffic.
 - 09-03: Auto-rollback test drives ICanaryMetrics.Record() directly via DI (not real HTTP traffic) — avoids fake-upstream cohort-coordination problem; 30 baseline success + 30 canary fail → delta=1.0 >> threshold=0.10 → watchdog fires
 - 09-03: Phase 9 COMPLETE. All Locks 1-17 (CONTEXT.md) have corresponding test or grep guard. Ready for /gsd:verify-phase 9 + /gsd:uat-phase 9.
+- 10-01: RoutingReason.FallbackTo35B DU case added (6th case, no payload — routing_reason JSONL literal = "fallback_to_35b"); formatReason exhaustive match in DecisionLogger.fs cascaded (FS0025 confirmed then resolved under TreatWarningsAsErrors=true)
+- 10-01: IHealthProbe extended with IsReachable: ModelId -> bool (sync fast-path for QueueDispatcher + ChatCompletions hot path) + LastProbedAt: ModelId -> DateTimeOffset (for /health endpoint body rendering); BCL-only preserved (ARCH-01); 6 total abstract members in Ports.fs
+- 10-01: appsettings.Routing.Health section (PollingIntervalSeconds=10, ConsecutiveFailureThreshold=1) per Lock 1+2; consumed by Plan 10-02 HealthService via IOptions binding
+- 10-01: Canary.AutoRollbackEnabled flipped from false to true — Phase 10 makes fallback_used signal real (REL-03 fires fallback_used=true); probe-blip risk damped by ConsecutiveFailureThreshold (raise to 2 in prod if flapping)
+- 10-01: MLRoutingTests.fs read-only confirmation passed — both match sites at lines 167+190 have | r -> failtestf catch-all arms; RoutingTests.fs match sites all have | r -> failtestf catch-alls; no test edits made (per CONTEXT D12)
 
 ### Pending Todos
 
@@ -190,6 +195,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-05-09T08:46:00Z
-Stopped at: Phase 9 COMPLETE — 3/3 plans + verifier 36/36 must-haves passed; CANARY-01..03 marked Complete in REQUIREMENTS.md; build clean; 78 pass + 17 ignored, 0 failed (without embed models) / 85 + 10 (with embed models). Phase 10 (Health/Fallback) is the next milestone gate.
+Last session: 2026-05-09T00:34:37Z
+Stopped at: Phase 10 Plan 1 COMPLETE — foundation: FallbackTo35B DU + IHealthProbe sync extensions + appsettings Routing.Health + AutoRollbackEnabled=true. Build: 0/0. Tests: 78 pass + 17 ignored, 0 failed. Phase 10 Plan 2 (HealthService + DI + adapters + endpoint) is the next milestone gate.
 Resume file: None
