@@ -8,8 +8,8 @@ open System.Text.Json
 open System.Threading
 open System.Threading.Tasks
 open FSharp.Control
+open Microsoft.Extensions.Logging
 open Microsoft.Extensions.Options
-open Serilog
 open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
 open SmartRouter.Cli.Adapters.Json
@@ -85,14 +85,14 @@ let tryParseModelId (json: string) : string option =
 /// Returns Ok modelId on success, Error on any failure (HTTP error, missing id,
 /// JSON parse error). Error here means the upstream is likely down or misconfigured;
 /// CompleteAsync maps this to ModelUnavailable.
-let private probeModelIdAsync (httpFactory: IHttpClientFactory) (clientName: string) (baseUrl: string) : Task<Result<string, RouterError>> =
+let private probeModelIdAsync (logger: ILogger) (httpFactory: IHttpClientFactory) (clientName: string) (baseUrl: string) : Task<Result<string, RouterError>> =
     task {
         try
             let client = httpFactory.CreateClient(clientName)
             use! resp = client.GetAsync(baseUrl + "/v1/models", CancellationToken.None)
 
             if not resp.IsSuccessStatusCode then
-                Log.Warning(
+                logger.LogWarning(
                     "GET {Url}/v1/models returned {Status}; model id unknown",
                     baseUrl, int resp.StatusCode)
                 return Error (ModelUnavailable (Qwen35B, $"GET /v1/models returned HTTP {int resp.StatusCode}"))
@@ -100,13 +100,13 @@ let private probeModelIdAsync (httpFactory: IHttpClientFactory) (clientName: str
                 let! json = resp.Content.ReadAsStringAsync(CancellationToken.None)
                 match tryParseModelId json with
                 | Some id ->
-                    Log.Information("Probed {Url}/v1/models → model id = {ModelId}", baseUrl, id)
+                    logger.LogInformation("Probed {Url}/v1/models → model id = {ModelId}", baseUrl, id)
                     return Ok id
                 | None ->
-                    Log.Warning("GET {Url}/v1/models returned parseable JSON but data[0].id missing/empty; POST will likely 4xx", baseUrl)
+                    logger.LogWarning("GET {Url}/v1/models returned parseable JSON but data[0].id missing/empty; POST will likely 4xx", baseUrl)
                     return Error (ModelUnavailable (Qwen35B, "invalid /v1/models response"))
         with ex ->
-            Log.Warning(ex, "GET {Url}/v1/models failed", baseUrl)
+            logger.LogWarning(ex, "GET {Url}/v1/models failed", baseUrl)
             return Error (ModelUnavailable (Qwen35B, $"probe failed: {ex.Message}"))
     }
 
@@ -130,18 +130,18 @@ let private roleString : MessageRole -> string =
 /// ARCH-06 note: registered as DI Singleton — stateless service; lazy probe
 /// cache is process-lifetime. Named HttpClient instances are NOT cached in
 /// fields — CreateClient is called per request (PITFALL-15).
-type QwenUpstreamClient(httpFactory: IHttpClientFactory, opts: IOptions<UpstreamOptions>) =
+type QwenUpstreamClient(httpFactory: IHttpClientFactory, opts: IOptions<UpstreamOptions>, logger: ILogger<QwenUpstreamClient>) =
 
     // Lazy probes per upstream. Fires ONCE on first access per process.
     // LazyThreadSafetyMode.ExecutionAndPublication guarantees single-probe
     // semantics under parallel calls. CancellationToken.None: probe is shared.
     let probe35b: Lazy<Task<Result<string, RouterError>>> =
         Lazy<Task<Result<string, RouterError>>>(
-            fun () -> probeModelIdAsync httpFactory "upstream35b" opts.Value.Model35B)
+            fun () -> probeModelIdAsync logger httpFactory "upstream35b" opts.Value.Model35B)
 
     let probe122b: Lazy<Task<Result<string, RouterError>>> =
         Lazy<Task<Result<string, RouterError>>>(
-            fun () -> probeModelIdAsync httpFactory "upstream122b" opts.Value.Model122B)
+            fun () -> probeModelIdAsync logger httpFactory "upstream122b" opts.Value.Model122B)
 
     let resolveClientName (target: ModelId) (stream: bool) =
         match target, stream with
@@ -204,7 +204,7 @@ type QwenUpstreamClient(httpFactory: IHttpClientFactory, opts: IOptions<Upstream
 
             let bodyJson = JsonSerializer.Serialize(bodyDict, jsonOptions)
 
-            Log.Debug("POST {Url}/v1/chat/completions body: {Body}", upstreamUrl, bodyJson)
+            logger.LogDebug("POST {Url}/v1/chat/completions body: {Body}", upstreamUrl, bodyJson)
 
             // 5. POST — do NOT cache the client instance (PITFALL-15)
             let client = httpFactory.CreateClient(clientName)
@@ -283,7 +283,7 @@ type QwenUpstreamClient(httpFactory: IHttpClientFactory, opts: IOptions<Upstream
 
             let bodyJson = JsonSerializer.Serialize(bodyDict, jsonOptions)
 
-            Log.Debug("StreamAsync POST {Url}/v1/chat/completions (stream=true)", upstreamUrl)
+            logger.LogDebug("StreamAsync POST {Url}/v1/chat/completions (stream=true)", upstreamUrl)
 
             // 5. Build the HTTP request message. Do NOT cache the client (PITFALL-15).
             let client = httpFactory.CreateClient(clientName)

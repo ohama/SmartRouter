@@ -390,7 +390,8 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
     services.AddSingleton<QwenUpstreamClient>(fun sp ->
         QwenUpstreamClient(
             sp.GetRequiredService<IHttpClientFactory>(),
-            sp.GetRequiredService<IOptions<UpstreamOptions>>()))
+            sp.GetRequiredService<IOptions<UpstreamOptions>>(),
+            sp.GetRequiredService<ILogger<QwenUpstreamClient>>()))
         |> ignore
 
     // QueueDispatcher wraps QwenUpstreamClient — registered as concrete singleton plus
