@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 13 IN PROGRESS — ILogger<T> migration complete (13-02). All Serilog.Log.* static calls removed from adapters. Ready for 13-03 (behavior changes).
+**Current focus:** Phase 13 IN PROGRESS — 13-04 CLI --log-level flag complete. 13-03 (behavior changes) running in parallel. Ready for 13-05 (startup banner + LogRetentionService).
 
 ## Current Position
 
 Phase: 13 of 13 (Service Logging) — IN PROGRESS
-Plan: 2 of 6 in current phase — COMPLETE ✓
-Status: 13-02 ILogger<T> migration complete. 10 type adapters + 4 module functions + ChatCompletions endpoint migrated. Static Log.* retained only in 2 startup-window call sites. Test baseline preserved: **62 passed + 16 ignored + 0 failed**.
-Last activity: 2026-05-09 — Completed 13-02-ILOGGER-MIGRATION-PLAN.md.
+Plan: 4 of 6 in current phase — COMPLETE ✓ (13-03 and 13-04 both complete; parallel wave 3 done)
+Status: 13-04 complete. parseLogLevel + applyLogLevelFromArgs added to Program.fs. --trace migration guard live. Both --retrain and main Kestrel branches honor --log-level. Test baseline preserved: **62 passed + 16 ignored + 0 failed**.
+Last activity: 2026-05-09 — Completed 13-04-LOG-LEVEL-CLI-PLAN.md.
 
-Progress: [█████████████████████████████████░░░░░] 43 of 47 plans (Phases 1-12 complete; Phase 13: 2/6 done)
+Progress: [██████████████████████████████████░░░░] 44 of 47 plans (Phases 1-12 complete; Phase 13: 4/6 done)
 
 ## Performance Metrics
 
@@ -232,6 +232,8 @@ Recent decisions affecting current work:
 - 13-02: NullLogger.Instance for bootstrap calls in configureRequestPipeline — DI container not yet built at configure time; startup-window Serilog static sink still captures fatal exceptions
 - 13-02: CapturingLogger<T> MEL type replaces Serilog CapturingSink for RETRAIN-05 — ILogger<T> injection means messages no longer flow through Serilog static logger; MEL capture is the correct interception point
 - 13-02: Log.Verbose maps to logger.LogTrace (ILogger equivalent of Serilog Verbose level) — confirmed for CanaryWatchdog migration
+- 13-04: applyLogLevelFromArgs is module-level private helper called in BOTH --retrain and main Kestrel branches after Logging.configure; setLevel only meaningful after levelSwitch initialized
+- 13-04: "trace" alias in parseLogLevel maps to Verbose (operator convenience); distinct from --trace flag which fails with migration error
 
 ### Pending Todos
 
@@ -248,5 +250,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-09
-Stopped at: Completed 13-02-ILOGGER-MIGRATION-PLAN.md. All Serilog.Log.* static calls removed from adapters. ILogger<T> ctor injection for 10 type adapters + Option A for 4 module functions + ILoggerFactory for ChatCompletions. Test baseline 62+16+0 preserved. Key commits: c91ddae, c1d4f17, 316b704, c27786b, f981f3a, c826984, b5c4885, 709e0f5, 3974e20, ec7dc30, 90e0d7d, 3999a78, 0927b2a, ee9a4e0.
+Stopped at: Completed 13-04-LOG-LEVEL-CLI-PLAN.md. parseLogLevel + applyLogLevelFromArgs added to Program.fs. --trace migration guard active. Both --retrain and main Kestrel branches honor --log-level. Build clean (0 warnings/errors). Test baseline 62+16+0 preserved. Key commit: e7f904f.
 Resume file: None
