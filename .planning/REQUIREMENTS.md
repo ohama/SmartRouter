@@ -320,11 +320,11 @@ distillation 디자인의 "Failure = Gold Data" 패턴을 smart-router 에 첫 �
 | QSE-04 | Phase 15 | Complete |
 | QSE-05 | Phase 15 | Complete |
 | QSE-06 | Phase 15 | Complete |
-| JDG-01 | Phase 16 | Pending |
-| JDG-02 | Phase 16 | Pending |
-| JDG-03 | Phase 16 | Pending |
-| JDG-04 | Phase 16 | Pending |
-| JDG-05 | Phase 16 | Pending |
+| JDG-01 | Phase 16 | Complete |
+| JDG-02 | Phase 16 | Complete |
+| JDG-03 | Phase 16 | Complete |
+| JDG-04 | Phase 16 | Complete |
+| JDG-05 | Phase 16 | Complete |
 | QCLS-01 | Phase 17 | Pending |
 | QCLS-02 | Phase 17 | Pending |
 | QCLS-03 | Phase 17 | Pending |
@@ -348,11 +348,11 @@ Phase 14 의 `isBadResponse` 가 길이/키워드만 보던 단순 휴리스틱�
 
 Phase 15 heuristic 통과했지만 quality 가 borderline (entropy/length/keyword band edge) 한 케이스에만 122B 에 1-token verification call. 명백한 good/bad 는 fast path 유지. Cache by `(prompt_hash + response_hash)`. distillation 의 lazy verification 단계; Phase 17 self-improving classifier 의 학습 데이터 수집 부가 효과. 상세 분석: `.planning/docs/quality-check-improvement-options.md` Tier 3-A.
 
-- [ ] **JDG-01**: `Adapters/BorderlineClassifier.fs` (pure F#, BCL only) — Phase 15 의 entropy/length/keyword 신호 기반 3-way 분류: `Verdict = Good | Bad | Borderline of reason: string`; band edge 임계값 (예: entropy 2.5..3.5, length 30..60, keyword 부분 매치); 단위 테스트로 명백한 good (4+ entropy, 100+ length, no keyword) / 명백한 bad (Phase 15 fail) / borderline (band edge) 3 클래스 분류 검증
-- [ ] **JDG-02**: `Adapters/JudgeClient.fs` (`IJudgeClient` 포트 + named "judge" HttpClient + `prompts/judge-prompt.md` template + 1-token max_tokens + `ROUTE_YES`/`ROUTE_NO` parser); `appsettings.json:Routing.Judge.{Endpoint, PromptPath, TimeoutSeconds, MaxCacheEntries}`; named HttpClient 별도 reg (122B endpoint 재사용; `AddResilienceHandler` 재사용 가능)
-- [ ] **JDG-03**: `(prompt_hash, response_hash) → verdict` LRU cache (in-memory `ConcurrentDictionary` + LRU eviction; bounded by `MaxCacheEntries` default 10000); cache hit/miss counter 노출 via `IStatsProvider`; `/stats` JSON 에 `judge_cache_hits`, `judge_cache_misses` 필드 추가
-- [ ] **JDG-04**: Borderline 일 때만 judge 호출 — fake-Kestrel counter 로 명백한 good/bad 케이스에서 judge HttpClient 호출 횟수 = 0 검증; 1-token 응답으로 judge call latency p95 < 100ms (122B normal call 의 ~50× 빠름; fake-Kestrel 측정으로 검증; threshold 는 환경 의존이라 단위 테스트로는 완화)
-- [ ] **JDG-05**: TraceLog 신규 필드 `judge_called: bool`, `judge_verdict: string option ("yes"|"no"|null)`, `judge_latency_ms: float option`; schema_version=1 유지 (필드 추가만; rename/remove 안 함; backward-compat); `ChatCompletions.fs` 에서 `GetService<IJudgeClient>()` null-safe optional resolve (judge 비활성 시 borderline=good 처리, Phase 15 동작 유지)
+- [x] **JDG-01**: `Adapters/BorderlineClassifier.fs` (pure F#, BCL only) — Phase 15 의 entropy/length 신호 기반 borderline 분류. Returns `BorderlineKind option` where `BorderlineKind = UncertainEntropy of float | UncertainLength of int`. Hard-coded band edges: entropy `[EntropyThreshold, EntropyThreshold + 1.0)`, effective length `[MinResponseLength, MinResponseLength × 1.5)`. **Architectural deviation from original spec (documented here, gsd-verifier alignment):** (a) Separate `BorderlineKind` DU rather than extending `Verdict = Good | Bad | Borderline`; researcher rationale — extending Verdict would force updates to all 6 existing pattern-match arms in ChatCompletions.fs (Phase 14/15) plus `isBadResponse`. Borderline is a *qualifier on Good*, not a third verdict. Architecture: `analyzeResponse → if Good → classifyBorderline → if Some → judge → decide`. (b) Keyword dimension deliberately EXCLUDED from borderline detection — keyword match is binary (present/absent), no natural partial zone; finish_reason similarly excluded as decisive signal. Borderline = entropy/length band edges only. Unit tests verify 3 classes: clearly good (None), borderline entropy (Some UncertainEntropy), borderline length (Some UncertainLength); clearly bad cases never reach classifyBorderline (caller invokes only on `Verdict.Good`). See `.planning/phases/16-122b-as-judge-for-borderline-cases/16-RESEARCH.md` §"Pattern 1" + 16-01-PLAN.md `<rationale>` block for full architectural derivation.
+- [x] **JDG-02**: `Adapters/JudgeClient.fs` (`IJudgeClient` 포트 + named "judge" HttpClient + `prompts/judge-prompt.md` template + 1-token max_tokens + `ROUTE_YES`/`ROUTE_NO` parser); `appsettings.json:Routing.Judge.{Endpoint, PromptPath, TimeoutSeconds, MaxCacheEntries}`; named HttpClient 별도 reg (122B endpoint 재사용; `AddResilienceHandler` 재사용 가능)
+- [x] **JDG-03**: `(prompt_hash, response_hash) → verdict` LRU cache (in-memory `ConcurrentDictionary` + LRU eviction; bounded by `MaxCacheEntries` default 10000); cache hit/miss counter 노출 via `IJudgeStats`; `/stats` JSON 에 `judge_cache_hits`, `judge_cache_misses`, `judge_call_count` 필드 추가
+- [x] **JDG-04**: Borderline 일 때만 judge 호출 — fake-Kestrel counter 로 명백한 good 케이스에서 judge HttpClient 호출 횟수 = 0 검증; borderline 케이스에서 = 1 검증; 동일 요청 2번 → cache hit → counter still = 1
+- [x] **JDG-05**: TraceLog 신규 필드 `judge_called: bool`, `judge_verdict: string option ("yes"|"no"|null)`, `judge_latency_ms: float option`; schema_version=1 유지 (필드 추가만; rename/remove 안 함; backward-compat); `ChatCompletions.fs` 에서 `GetService<IJudgeClient>()` null-safe optional resolve (judge 비활성 시 borderline=good 처리, Phase 15 동작 유지)
 
 ### QualityClassifier — distillation endgame (Phase 17 — planned)
 
@@ -368,13 +368,13 @@ Phase 15 heuristic 통과했지만 quality 가 borderline (entropy/length/keywor
 
 **Coverage:**
 - v1 requirements: 100 (Complete; Phases 1-14)
-- v2 requirements: 18 planned — 6 QSE (Phase 15 ✓) + 5 JDG (Phase 16) + 7 QCLS (Phase 17)
+- v2 requirements: 18 planned — 6 QSE (Phase 15 ✓) + 5 JDG (Phase 16 ✓) + 7 QCLS (Phase 17)
 - Total v1+v2: 118
 - Mapped to phases: 118 ✓
 - Unmapped: 0
-- Complete: 105 (v1 99 + QSE-01..06 ✓)
-- Pending: 12 (Phase 16 JDG-01..05 + Phase 17 QCLS-01..07)
+- Complete: 110 (v1 99 + QSE-01..06 ✓ + JDG-01..05 ✓)
+- Pending: 7 (Phase 17 QCLS-01..07)
 
 ---
 *Requirements defined: 2026-05-07*
-*Last updated: 2026-05-10 after Phase 15 (Quality Signal Enrichment) completion — QSE-01..06 marked Complete. 102 tests passing. Phases 16-17 (122B-as-Judge / QualityClassifier) remain Pending per quality-enrichment arc roadmap.*
+*Last updated: 2026-05-11 after Phase 16 (122B-as-Judge for Borderline Cases) completion — JDG-01..05 marked Complete. JDG-01 entry revised to document the separate BorderlineKind DU + keyword exclusion (architectural deviation from original spec; rationale in 16-01-PLAN.md). 113 tests passing. Phase 17 (QualityClassifier) remains Pending per quality-enrichment arc roadmap.*
