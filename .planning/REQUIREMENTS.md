@@ -289,13 +289,39 @@ These requirements supersede ROUT-03/ROUT-04 (heuristic routing fallback), ML-02
 - [x] **HRM-06**: `scripts/check-routing-isolation.sh` does not exist (CI guard for Heuristic.fs ↔ ML.fs cross-import is no longer needed since Heuristic.fs is gone); supersedes ML-04
 - [x] **HRM-07**: `archive/heuristic-baseline` git branch and `v0.5-heuristic-baseline` git tag are present and untouched (heuristic baseline snapshot from 2026-05-08 preserved as historical reference; no rollback workflow ships in v1)
 
+### Quality Fallback + Trace Infrastructure (Phase 14)
+
+distillation 디자인의 "Failure = Gold Data" 패턴을 smart-router 에 첫 구현. 35B response 가 quality 기준 미달이면 122B 로 자동 retry; 운영자가 fallback 동작을 검증할 수 있는 cold-start CLI flag + 별도 trace JSONL 도 함께 도입.
+
+- [x] **QF-01**: `Adapters/QualityCheck.fs` 의 `isBadResponse` 가 pure F# (BCL only); `Routing.QualityFallback.{Enabled, MinResponseLength=30, BadKeywords=["TODO","I think"]}` 를 통해 appsettings.json 으로 tunable; Enabled=false 시 false 반환 (kill switch)
+- [x] **QF-02**: `Endpoints/ChatCompletions.fs` non-streaming branch 가 35B response → `isBadResponse` → bad 일 때 122B 로 retry; final 응답은 122B 의 것; DecisionLog `target=Qwen122B`, `routing_reason="fallback_to_122b"`, `fallback_used=true`. graceful degradation: 122B unreachable 또는 retry Error 시 35B response 그대로 forward
+- [x] **QF-03**: `Endpoints/ChatCompletions.fs` streaming branch 는 quality fallback 의도적 미적용 (chunks already shipped to client; retract 불가); 명시적 `INTENTIONALLY SKIPPED` 주석
+- [x] **QF-04**: `Adapters/ColdStart.fs` + `Program.fs` `--cold-start` CLI flag — 4 candidate 파일 (`models/router.zip`, `.prev`, `datasets/hard-cases.jsonl`, `datasets/training-set.jsonl`) timestamp suffix `.cold-start-backup-{yyyyMMdd-HHmmss}` 으로 backup; 미존재 시 idempotent skip; process 는 exit 안 하고 정상 startup 진행 (ensureDummyModel 가 fresh dummy 생성)
+- [x] **QF-05**: `Adapters/TraceLogger.fs` `ITraceLogger` + `TraceLogger : BackgroundService` (Channel + 단일-writer + `BoundedChannelFullMode.Wait` + 일별 file rotation by UTC date); 12-field TraceRecord (`schema_version`, `correlation_id`, `prompt_uid`, `prompt_hash`, `prompt_excerpt`, `initial_target`, `initial_response_excerpt`, `fallback_kind`, `final_target`, `final_response_excerpt`, `total_latency_ms`, `timestamp`)
+- [x] **QF-06**: `Program.fs` `--trace-responses` CLI flag injects `Trace:Enabled=true` into IConfiguration; `CompositionRoot.configureRequestPipeline` (NOT `configureWithoutMl`) 가 그 키를 읽어 `ITraceLogger` triple-reg (concrete + interface alias + AddHostedService); flag 미설정 시 등록 안 함; `ChatCompletions` 가 `GetService<ITraceLogger>()` (null-safe optional resolve)
+- [x] **QF-07**: `prompt_uid` = `prompt_hash` 의 첫 12 hex (Phase 5 LOG-01 의 SHA-256 결과 재사용); 새 field 안 추가; 운영자: `echo -n "<prompt>" | sha256sum | cut -c1-12` 으로 일치 확인 가능; trace JSONL 안에 `prompt_uid` 표시 + DecisionLog 의 `prompt_hash` prefix 검색으로 cross-reference
+- [x] **QF-08**: `RoutingReason.FallbackTo122B` DU 6th case + `DecisionLogger.formatReason` 6-arm exhaustive match (`"fallback_to_122b"`); schema_version=1 유지; 기존 `"fallback_to_35b"` (Phase 10 availability) 와 공존; routing_reason 으로 fallback 종류 구별
+- [x] **QF-09**: `tests/SmartRouter.Tests/QualityFallbackTests.fs` 2 testCase (QF-01 35B-only success + QF-02 quality fallback fires); 둘 다 fake-Kestrel 35B/122B + JsonDocument.Parse 기반 JSONL log 검증; `testSequenced` + unique temp dir; 80 → 82 passed
+- [x] **QF-10**: README §5.5 "Quality fallback" 새 subsection + §7 `Routing.QualityFallback` config table + §9.1 `routing_reason` row 에 `fallback_to_122b` 추가 + §9.10 "Trace logging" 새 subsection (--trace-responses 운영자 가이드 + grep workflow) + §12.6 CLI flags table 에 `--cold-start`/`--trace-responses` 추가; CLAUDE.md sync rule 12-area 게이트 충족 (areas 5/7/8/9.1/11/12)
+
+| QF-01 | Phase 14 | Complete |
+| QF-02 | Phase 14 | Complete |
+| QF-03 | Phase 14 | Complete |
+| QF-04 | Phase 14 | Complete |
+| QF-05 | Phase 14 | Complete |
+| QF-06 | Phase 14 | Complete |
+| QF-07 | Phase 14 | Complete |
+| QF-08 | Phase 14 | Complete |
+| QF-09 | Phase 14 | Complete |
+| QF-10 | Phase 14 | Complete |
+
 **Coverage:**
-- v1 requirements: 90 total (83 original + 7 HRM additions in Phase 12; +1 EMBED-03 for bge-m3 latency already counted)
-- Mapped to phases: 90 ✓
+- v1 requirements: 100 total (83 original + 7 HRM additions in Phase 12 + 10 QF additions in Phase 14; +1 EMBED-03 for bge-m3 latency already counted)
+- Mapped to phases: 100 ✓
 - Unmapped: 0
-- Complete: 89 (Phases 1-12 ✓; TEST-01/TEST-02 retroactive; ML-04 superseded by HRM-06 but historically delivered; ROUT-03/ROUT-04/ML-02/ML-03 historically delivered then removed in Phase 12)
-- Pending: 0 within v1 scope (Phase 13 logging is a v1.1 enhancement, not in this requirements list)
+- Complete: 99 (Phases 1-14 ✓; TEST-01/TEST-02 retroactive; ML-04 superseded by HRM-06 but historically delivered; ROUT-03/ROUT-04/ML-02/ML-03 historically delivered then removed in Phase 12)
+- Pending: 0 within v1 scope
 
 ---
 *Requirements defined: 2026-05-07*
-*Last updated: 2026-05-09 after Phase 12 (Heuristic Routing Removal) completion — 7 HRM requirements added documenting the post-removal truth.*
+*Last updated: 2026-05-10 after Phase 14 (Quality Fallback + Trace) completion — 10 QF requirements added documenting distillation's fallback design implementation.*
