@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-10
+
+Quality fallback release. The router now retries on 122B when 35B's
+response is low-quality (non-streaming only), captures both responses in
+an opt-in trace log for end-to-end debugging, and ships a cold-start
+recovery path for corrupted models. README rewritten for operator focus.
+
+### Added
+
+#### Quality fallback (35B → 122B retry)
+- Non-streaming requests routed to 35B are auto-retried on 122B when the
+  35B response fails a quality heuristic (length below threshold, or a
+  configurable bad-keyword match like `"TODO"` or `"I think"`). The
+  client sees only the 122B response — the bad 35B response never leaks
+- DecisionLog: `routing_reason="fallback_to_122b"` with `fallback_used=true`
+- Streaming requests are intentionally exempt (chunks already shipped)
+- Kill switch: `Routing.QualityFallback.Enabled=false`
+
+#### Trace log (end-to-end debugging)
+- `--trace-responses` CLI flag enables a per-request JSONL log at
+  `logs/trace/YYYY-MM-DD.jsonl` (off by default; opt-in only)
+- Each row joins by `prompt_uid` (first 12 hex of `prompt_hash`) and
+  carries: `initial_target`, `initial_response_excerpt`, `fallback_kind`
+  (`"quality"` | `"availability"` | null), `final_target`, `final_response_excerpt`
+- Operator workflow: `jq 'select(.prompt_uid == "...")'` to see exactly
+  what 35B said, why fallback fired (or didn't), and what 122B said
+
+#### Cold-start recovery
+- `--cold-start` CLI flag backs up `models/router.zip` and `datasets/*`
+  with a timestamp suffix, then regenerates a fresh dummy classifier on
+  the same startup. Recovery: rename the backup back into place
+
+#### Configuration keys
+- `Routing.QualityFallback.{Enabled, MinResponseLength, BadKeywords}`
+- `Trace.{Enabled, Directory, ChannelCapacity}`
+
+### Changed
+
+- README condensed from 1310 to 669 lines. New features (quality
+  fallback, trace log, cold-start, CLI flags) given dedicated sections;
+  verbose architectural prose and per-endpoint duplicated examples
+  trimmed. All 12 mandatory sections (config keys, endpoints, schemas,
+  operations, etc.) preserved
+- CHANGELOG rewritten from user perspective for v1.0.0 entry — internal
+  phase references removed; entries organized by user-visible feature
+  area
+
 ## [1.0.0] - 2026-05-10
 
 First production release. F# .NET 10 gateway routing OpenAI-compatible chat
