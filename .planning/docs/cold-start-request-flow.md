@@ -3,23 +3,24 @@
 **작성:** 2026-05-10
 **대상:** smart-router 가 fresh clone / 첫 startup 상태 (`models/router.zip` 미존재) 에서 어떻게 동작하는지 알고 싶은 운영자.
 
-## 사전 정정 — 사용자 멘탈 모델 vs 실제 동작
+## 사전 정정 — 사용자 멘탈 모델 vs 실제 동작 (Phase 14 업데이트)
 
 질문: "35B 에서 처리 안 되어서 122B 로 다시 처리되는 경우"
 
-이런 **재시도 (escalation) 경로는 smart-router 에 존재하지 않는다.** 라우팅은 **요청당 한 번** 만 결정된다. 코드 안에서 "35B 실패 → 122B 재시도" 분기는 0 곳:
+**Phase 14 부터 이 경로가 실제로 존재한다.** 이전 (Phase 13까지) 에는 없었고 이 문서가 처음 작성됐을 당시 상황.
 
-```bash
-grep -rn "FallbackTo122B\|escalate.*122B" src/   # → 0 hits
-```
+이제 (Phase 14):
+- non-streaming 요청만 — 35B response 가 quality 기준 미달이면 자동으로 122B 로 retry
+- streaming 요청은 여전히 단일 routing 결정만 — 디자인상 chunk retract 불가
+- 두 fallback 방향 모두 코드에 있음:
+  - 122B unreachable → 35B (Phase 10 REL-01..04, `routing_reason=fallback_to_35b`)
+  - 35B quality 미달 → 122B (Phase 14, `routing_reason=fallback_to_122b`)
 
-실제 fallback 방향은 **반대** 다 (Phase 10):
-- 122B 가 unreachable → 35B 로 transparent reroute (`Reason=FallbackTo35B`, `IsFallback=true`)
-- 35B 가 unreachable → 503 에러 (graph_indexing 류 task 는 specifically not downgraded)
+자세한 설명: README §5.5 "Quality fallback".
 
 따라서 "두 가지 경우" 는 다음으로 재해석한다:
 
-- **시나리오 A**: 분류기가 35B 라고 판정 → 단일 호출 → 35B 응답
+- **시나리오 A**: 분류기가 35B 라고 판정 → 단일 호출 → 35B 응답 (quality 기준 통과 시)
 - **시나리오 B**: 분류기가 122B 라고 판정 ("35B 로는 부족하다") → 단일 호출 → 122B 응답
 
 **Cold-start 의 추가 함정**: `models/router.zip` 이 `ensureDummyModel` 로 생성된 무작위 가중치 LR 이라서 분류 결과가 **본질적으로 50/50 무작위**. prompt 의 실제 복잡도와 분류 결정은 학습 전에는 상관관계 없음. 여기서 "scenario A/B" 는 **결과 분포의 두 가지 outcome** 으로 본다 — 입력 prompt 의 의미가 아니라.

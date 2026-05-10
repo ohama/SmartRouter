@@ -188,7 +188,7 @@ distillation → smart-router 핸드오프 문서. 핵심 차별점을 다음과
 | 항목 | distillation 디자인 (의도) | smart-router 구현 (현재) |
 |---|---|---|
 | Routing 결정 횟수 | 요청당 1번 (decision time) + 1번 (post-response quality check) | 요청당 **1 번만** (decision time) |
-| Quality check 의 존재 | `isBadResponse` 함수 (TODO / 길이 < 30 / "I think") | **없음** — 35B 응답을 그대로 forward |
+| Quality check 의 존재 | `isBadResponse` 함수 (TODO / 길이 < 30 / "I think") | **Phase 14 부터 implement** — `Adapters/QualityCheck.fs` 의 `isBadResponse` 함수 (configurable via `Routing.QualityFallback.{Enabled, MinResponseLength, BadKeywords}`). non-streaming 만 적용 |
 | Fallback 트리거 | 35B response 가 quality 기준 미달 | 122B 가 health probe 미통과 (반대 방향) |
 | Fallback 방향 | 35B → 122B (escalation) | **122B → 35B** (degradation) |
 | `fallback_used=true` 의 의미 | "응답 품질이 나빠서 122B 가 다시 처리함" | "122B 가 죽어서 35B 가 대신 처리함" |
@@ -237,11 +237,15 @@ grep -rn "isBadResponse\|FallbackTo122B\|35B.*fail.*122B" src/
 
 `handoff-to-smart-router.md` §0 ("한눈에 보는 결론") 은 통합 시점에 "Phase 1~2 완료, Phase 3 진행 중" 이라고 명시 — 그 시점에 distillation 의 fallback 디자인이 이미 있었다. 하지만 smart-router 의 PROJECT.md 에는 quality-check-based fallback 이 명시적 요구사항으로 들어가지 않았고, 대신 Phase 10 의 REL-01..04 가 **infrastructure-level fallback** (122B downtime 처리) 으로 채워졌다.
 
-다시 말해 같은 단어 "fallback" 이 두 시스템에서 다른 개념을 가리킨다:
-- distillation: **품질-기반** quality fallback — "응답 보고 결정"
-- smart-router: **가용성-기반** availability fallback — "헬스 보고 결정"
+다시 말해 (Phase 14 이전엔) 같은 단어 "fallback" 이 두 시스템에서 다른 개념을 가리켰다:
+- distillation 디자인: **품질-기반** quality fallback — "응답 보고 결정"
+- smart-router (Phase 13 까지): **가용성-기반** availability fallback — "헬스 보고 결정"
 
-`fallback_used` 필드 이름이 양쪽에서 동일해서 외형적으로는 같은 시스템처럼 보이지만, 그 값이 `true` 가 되는 조건이 본질적으로 다르다. Loop B (Phase 7-8) 의 retraining 입력이 distillation 디자인 의도와 정확히 일치하지 않는다.
+**Phase 14 부터 smart-router 가 distillation 디자인의 quality fallback 도 구현.** 두 fallback 이 공존:
+- `routing_reason = "fallback_to_35b"` — 122B unreachable (Phase 10 / availability)
+- `routing_reason = "fallback_to_122b"` — 35B response bad (Phase 14 / quality)
+
+DecisionLog `fallback_used=true` 는 둘 다 trigger. routing_reason 으로 종류 구별. Loop B (Phase 7-8) retraining 은 둘 다 hard-case 신호로 사용. 이로써 distillation 의 "Failure = Gold Data" 사상이 실제로 동작.
 
 ---
 
@@ -272,7 +276,7 @@ streaming 분기는 더 어렵다 — chunk 가 이미 client 로 흘러나간 �
 - Phase 7 FailureDetector 가 `fallback_used=true` 의 의미를 distinguish: availability 인지 quality 인지 — 추가 필드 (`fallback_kind: "availability" | "quality"`) 필요
 - Phase 8 RetrainingService 가 quality-fallback row 만 hard case 로 채택하도록 분기 추가
 
-이건 substantial 한 phase 단위 작업. 현재 v1 milestone 에는 안 들어 있음. 향후 Phase 14+ candidate.
+이건 substantial 한 phase 단위 작업. **Phase 14 — DONE.** `Routing.QualityFallback` 설정 블록으로 동작; README §5.5 참조.
 
 ### 4.3 가치 평가
 
