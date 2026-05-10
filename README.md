@@ -166,8 +166,10 @@ When a non-streaming request is routed to 35B and the response fails a quality c
 - Stage 3 routes to 35B
 - 35B returns HTTP 200
 - `Routing.QualityFallback.Enabled = true` (default)
-- 35B response fails `isBadResponse`: length < `MinResponseLength` (default 30) OR contains any `BadKeywords` (default `["TODO","I think"]`)
+- 35B response's assistant content (`choices[0].message.content`) fails `isBadResponse`: length < `MinResponseLength` (default 30) OR contains any `BadKeywords` (default `["TODO","I think"]`)
 - 122B reachable per HealthService
+
+> Note: the heuristic checks the assistant content, NOT the raw JSON envelope. Malformed upstream responses degrade safely — they are treated as empty content and trigger fallback (the conservative default).
 
 **On fire:** final response = 122B's. DecisionLog row: `target=Qwen122B`, `routing_reason=fallback_to_122b`, `fallback_used=true`. TraceLog row (if `--trace-responses`): captures both 35B's bad response and 122B's response, joined by `prompt_uid`.
 

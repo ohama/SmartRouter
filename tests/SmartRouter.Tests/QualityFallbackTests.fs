@@ -467,4 +467,70 @@ let tests =
                 finally d35b.Dispose() ; d122b.Dispose()
             finally
                 try Directory.Delete(tempDir, true) with _ -> ()
+
+        // ── Unit tests for issue #13 — content-vs-envelope heuristic ─────────────
+        // QF-01/QF-02 above are integration tests that pass coincidentally because
+        // their fixture content embeds "TODO" verbatim, putting it into the envelope
+        // string too. The unit tests below exercise the actual heuristic boundary:
+        // length is always measured on assistant content (not envelope), and
+        // keyword matches in envelope-only fields do not trigger fallback.
+
+        testCase "QF-03 (#13): short content triggers MinResponseLength even though envelope is long" <| fun () ->
+            let opts = { Enabled = true; MinResponseLength = 30; BadKeywords = [|"TODO"; "I think"|] }
+            // Realistic OpenAI-compatible envelope where 35B answered "Yes" (3 chars).
+            // Envelope total is ~100 chars but content is 3 — must be flagged bad.
+            let body = """{"id":"chatcmpl-x","choices":[{"message":{"role":"assistant","content":"Yes"},"finish_reason":"stop"}]}"""
+            Expect.isTrue
+                (isBadResponse opts body)
+                "3-char content must fail MinResponseLength=30 regardless of envelope size (issue #13 reproduction)"
+
+        testCase "QF-04 (#13): keyword match runs against content, not envelope" <| fun () ->
+            let opts = { Enabled = true; MinResponseLength = 5; BadKeywords = [|"I think"|] }
+            let body = """{"id":"chatcmpl-x","choices":[{"message":{"role":"assistant","content":"I think this is fine. The answer is correct enough."},"finish_reason":"stop"}]}"""
+            Expect.isTrue
+                (isBadResponse opts body)
+                "BadKeyword present inside content must trigger fallback"
+
+        testCase "QF-05 (#13): keyword in envelope-only fields does NOT trigger" <| fun () ->
+            let opts = { Enabled = true; MinResponseLength = 5; BadKeywords = [|"TODO"|] }
+            // Wrapper has "TODO" in the id field but content does not. Pre-fix this
+            // would have triggered fallback because the heuristic checked the whole
+            // string; post-fix it must NOT trigger.
+            let body = """{"id":"chatcmpl-TODO-task-id","choices":[{"message":{"role":"assistant","content":"All good. The answer is yes."},"finish_reason":"stop"}]}"""
+            Expect.isFalse
+                (isBadResponse opts body)
+                "BadKeyword in envelope-only fields must NOT trigger — issue #13 root cause"
+
+        testCase "QF-06 (#13): malformed JSON degrades to empty content (triggers MinResponseLength)" <| fun () ->
+            let opts = { Enabled = true; MinResponseLength = 30; BadKeywords = [||] }
+            let malformed = """{"id":"x","choices":[{"message":{"role":"assistant","content"""
+            Expect.isTrue
+                (isBadResponse opts malformed)
+                "malformed JSON must not throw; treated as empty content → fallback fires (safe-on-fail)"
+
+        testCase "QF-07 (#13): kill switch (Enabled=false) returns false even on short content" <| fun () ->
+            let opts = { Enabled = false; MinResponseLength = 30; BadKeywords = [|"TODO"|] }
+            let body = """{"id":"chatcmpl-x","choices":[{"message":{"role":"assistant","content":"Yes"},"finish_reason":"stop"}]}"""
+            Expect.isFalse
+                (isBadResponse opts body)
+                "Enabled=false must short-circuit before content extraction"
+
+        testCase "QF-08 (#13): extractAssistantText handles missing fields gracefully" <| fun () ->
+            // Missing "choices" entirely.
+            Expect.equal (extractAssistantText """{"id":"x"}""") "" "missing choices → empty"
+            // choices empty array.
+            Expect.equal (extractAssistantText """{"id":"x","choices":[]}""") "" "empty choices → empty"
+            // choices[0] missing message.
+            Expect.equal (extractAssistantText """{"id":"x","choices":[{}]}""") "" "missing message → empty"
+            // message missing content.
+            Expect.equal (extractAssistantText """{"id":"x","choices":[{"message":{"role":"assistant"}}]}""") "" "missing content → empty"
+            // content is null (not string).
+            Expect.equal (extractAssistantText """{"id":"x","choices":[{"message":{"role":"assistant","content":null}}]}""") "" "null content → empty"
+            // empty string body.
+            Expect.equal (extractAssistantText "") "" "empty body → empty"
+            // happy path — content extracted verbatim.
+            Expect.equal
+                (extractAssistantText """{"id":"x","choices":[{"message":{"role":"assistant","content":"hello world"}}]}""")
+                "hello world"
+                "content field extracted verbatim"
     ]

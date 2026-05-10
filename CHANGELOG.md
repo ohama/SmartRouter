@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Quality fallback (35B → 122B retry) was broken for real model
+  responses.** The `isBadResponse` heuristic was checking the raw
+  OpenAI-compatible JSON envelope (which is always longer than 30
+  characters and rarely contains literal `"TODO"` / `"I think"`),
+  not the inner `choices[0].message.content`. As a result,
+  length-based fallback never fired in production, and keyword-based
+  fallback only fired when the model's content happened to embed the
+  keyword string. Now parses the response and applies the heuristic
+  to `message.content` directly. Malformed responses degrade safely
+  (treated as empty content → fallback fires). (#13)
+
 ## [1.1.0] - 2026-05-10
 
 Quality fallback release. The router now retries on 122B when 35B's
