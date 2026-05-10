@@ -10,6 +10,9 @@ files_modified:
   - src/SmartRouter.Cli/appsettings.json
   - src/SmartRouter.Cli/Endpoints/ChatCompletions.fs
   - src/SmartRouter.Cli/Endpoints/Stats.fs
+  - tests/SmartRouter.Tests/QualityFallbackTests.fs
+  - tests/SmartRouter.Tests/QualitySignalEnrichmentTests.fs
+  - tests/SmartRouter.Tests/RouterTests.fs
 autonomous: true
 
 must_haves:
@@ -24,9 +27,10 @@ must_haves:
     - "When initialVerdict = Good AND judgeClient is non-null AND classifyBorderline returns Some _: judge.VerdictAsync called → if RouteNo AND 122B reachable → retry on 122B with FallbackTo122B reason; if RouteYes / JudgeSkipped / JudgeFailed → forward 35B response unchanged (fail-open)"
     - "When initialVerdict = Good AND classifyBorderline returns None (clearly good): judge is NOT called (judgeCallCount stays 0); fast path preserved"
     - "Streaming branch is NOT modified — Phase 14 INTENTIONALLY SKIPPED comment preserved (autonomous decision C: streaming inherits no-judge behavior)"
-    - "fallback_kind = Some \"quality\" when judge fires AND returns RouteNo AND 122B retry succeeds (researcher OQ #6 resolution: keep \"quality\"; new judge_* fields disambiguate)"
+    - "fallback_kind = Some \"quality\" when judge fires AND returns RouteNo AND 122B retry succeeds (researcher OQ #6 resolution: keep \"quality\"; new judge_* fields disambiguate); fallback_kind = None when judge fires + RouteNo + 122B retry FAILS (no actual fallback substitution occurred — see Task 3 RouteNo+retry-fails arm)"
     - "computePromptHash hoisted to a single call site BEFORE the analyzeResponse block (researcher OQ #3 resolution); both judge cache key and trace block share the result"
     - "Stats.fs StatsWire gains 3 new fields: judge_cache_hits (int64), judge_cache_misses (int64), judge_call_count (int64); resolved via GetService<IJudgeStats>() (null-safe → 0L,0L,0L when not registered)"
+    - "Existing test fixtures (Phase 14/15) that construct TraceRecord literally are updated to include the 3 new fields with default values (judge_called=false, judge_verdict=None, judge_latency_ms=None) — preserves 102+16+0 baseline"
   artifacts:
     - path: "src/SmartRouter.Cli/Adapters/TraceLogger.fs"
       provides: "TraceRecord extended with 3 Phase 16 fields"
@@ -126,7 +130,8 @@ This plan resolves researcher OQ #3 and #6, autonomous decisions A and C, and in
 
 **OQ #3 — `computePromptHash` hoisting:** HOIST. In current ChatCompletions.fs the prompt hash is computed inside the trace block at line 495 (only when traceLogger is non-null). Phase 16 needs it BEFORE the borderline check (for the cache key). Hoist `let promptHash = computePromptHash req.Messages` to immediately after `let initialDecision = decision` (line ~409), so both the judge cache key (when traceLogger is null) and the trace block (when non-null) share the value. Removes one duplicate hashing pass when both judge AND trace are enabled. Cost: zero (the cost was always paid when trace was enabled; now it's always paid but at a single site).
 
-**OQ #6 — `fallback_kind` value when judge fires:** KEEP `"quality"`. The `judge_called=true` + `judge_verdict="no"` fields disambiguate without changing existing values. New value `"quality_judge"` would break downstream tooling that already does simple `fallback_kind == "quality"` matching (Hermes Agent operator scripts, jq filters in README §9.10). Backward-compat win.
+**OQ #6 — `fallback_kind` value when judge fires:** KEEP `"quality"` (when fallback substitution actually occurs). The `judge_called=true` + `judge_verdict="no"` fields disambiguate without changing existing values. New value `"quality_judge"` would break downstream tooling that already does simple `fallback_kind == "quality"` matching (Hermes Agent operator scripts, jq filters in README §9.10). Backward-compat win.
+**Sub-rule (NEW from B3 fix — RouteNo + retry-fails):** When judge says NO but the 122B retry itself FAILS, `fallback_kind = None` (NOT `"quality"`). Rationale: `fallback_kind` describes whether the *response substitution* happened. If 122B is unreachable / errored, the client receives the original 35B response — no substitution occurred. `judge_called=true` and `judge_verdict="no"` still record that the judge fired, so operators can distinguish "judge fired but fallback didn't substitute" via the trace fields without conflating with `fallback_kind`.
 
 **Autonomous decision A — `Routing.Judge.Enabled` default:** `false` (OPT-IN). Why: judge adds a 122B HTTP call latency on every borderline 35B response. Even at 1-token + 5s timeout, that's measurable user-facing latency. Phase 15's silent-enable was for purely-local heuristics (no extra cost). Judge is a network call. Operators must explicitly opt in after evaluating their borderline rate (visible via the new `quality_check_hits_*` /stats counters from Phase 15). Document in README §7 "OPT-IN" badge in Plan 16-04.
 
@@ -141,6 +146,8 @@ This plan resolves researcher OQ #3 and #6, autonomous decisions A and C, and in
 **JDG-05 schema_version=1:** TraceRecord extension is purely additive (3 new fields after `bad_reason`). schema_version stays at 1 — readers ignoring unknown fields remain forward-compatible. No version bump.
 
 **Compile-order dependency:** ChatCompletions.fs (compile pos 58) imports BorderlineClassifier (Plan 16-01 added at pos ~24) and JudgeClient (Plan 16-02 added at pos ~25). Both precede ChatCompletions in the fsproj. Compile-order safe.
+
+**Config-read pattern consistency (I9):** `Routing.Judge.Enabled` is read with the same pattern Phase 14 used for `Trace:Enabled` — `config.["Routing:Judge:Enabled"]` + `raw.Equals("true", StringComparison.OrdinalIgnoreCase)`. See CompositionRoot.fs lines 510-512 for the established pattern this mirrors. Do NOT change to `config.GetSection(...).Get<bool>()` or `config.GetValue<bool>(...)` — staying consistent with the Trace:Enabled feature-flag idiom keeps the codebase navigable.
 </rationale>
 
 <tasks>
@@ -240,12 +247,24 @@ Place this block immediately AFTER the existing TraceLogger registration block (
     // ── Phase 16: Judge (optional; Routing.Judge.Enabled gates entire feature) ──
     // OPT-IN by default (Routing.Judge.Enabled=false in appsettings.json) — judge
     // adds 122B HTTP latency on every borderline case (autonomous decision A).
-    // When enabled: triple-reg pattern for JudgeClient (concrete + IJudgeClient
-    // alias + IJudgeStats alias). Single instance carries both interfaces so
-    // the LRU cache and counters are shared across all callers.
+    //
+    // DI shape:
+    //   - if judgeEnabled: register concrete JudgeClient + IJudgeClient alias +
+    //     IJudgeStats alias (single instance carries both interfaces so the LRU
+    //     cache and counters are shared across all callers). NamedHttpClient "judge"
+    //     also registered here with its 2-retry resilience handler (OQ #5).
+    //   - else: register ONLY IJudgeStats NoOp (struct(0L,0L,0L)) so the /stats
+    //     endpoint resolves cleanly. IJudgeClient is deliberately NOT registered;
+    //     ChatCompletions's GetService<IJudgeClient>() returns null → borderline
+    //     check skipped → Phase 15 behavior preserved bit-stable.
+    //
+    // The two branches are mutually exclusive — there is no override conflict.
     //
     // Endpoint normalization (researcher OQ #4): empty Endpoint string =
     // derive from Upstreams.Model122B at registration time.
+    //
+    // Config-read pattern (I9): mirrors the existing Trace:Enabled feature-flag idiom
+    // at lines 510-512 above (config.["Routing:Judge:Enabled"] + raw.Equals("true", ...)).
     let judgeEnabled =
         let raw = config.["Routing:Judge:Enabled"]
         not (isNull raw) && raw.Equals("true", StringComparison.OrdinalIgnoreCase)
@@ -327,8 +346,7 @@ Place this block immediately AFTER the existing TraceLogger registration block (
 NOTES:
 - `UpstreamOptions` is the existing CLIMutable record bound from the `Upstreams` section (search the file for "Model122B" — the type already exists).
 - The `judgeEnabled` block runs only when the operator opts in; default behavior (Enabled=false) registers only the NoOp IJudgeStats.
-- IJudgeStats NoOp is registered BOTH in the disabled-branch AND when judgeEnabled is true (latter via the JudgeClient triple-reg). last-registration-wins ensures the real IJudgeStats overrides when judgeEnabled.
-- WAIT — actually, using `if/else` means only ONE branch runs, so there's no override conflict. The `else` branch registers NoOp; the `then` branch registers the real one. Both paths produce a resolvable IJudgeStats.
+- Two branches are mutually exclusive (`if judgeEnabled then ... else ...`) — no override needed. The `then` branch registers the real JudgeClient triple-reg; the `else` branch registers only the NoOp IJudgeStats. Both paths produce a resolvable IJudgeStats. IJudgeClient is registered ONLY in the `then` branch.
 
 **EDIT 3: configureWithoutMl — IJudgeStats NoOp registration**
 
@@ -363,21 +381,22 @@ CompositionRoot wires the named judge HttpClient + JudgeClient + IJudgeClient + 
 </task>
 
 <task type="auto">
-  <name>Task 3: Wire borderline → judge → fallback cascade in ChatCompletions.fs + extend Stats.fs StatsWire</name>
-  <files>src/SmartRouter.Cli/Endpoints/ChatCompletions.fs, src/SmartRouter.Cli/Endpoints/Stats.fs</files>
+  <name>Task 3: Wire borderline → judge → fallback cascade in ChatCompletions.fs + extend Stats.fs StatsWire + update test fixtures for new TraceRecord fields</name>
+  <files>src/SmartRouter.Cli/Endpoints/ChatCompletions.fs, src/SmartRouter.Cli/Endpoints/Stats.fs, tests/SmartRouter.Tests/QualityFallbackTests.fs, tests/SmartRouter.Tests/QualitySignalEnrichmentTests.fs, tests/SmartRouter.Tests/RouterTests.fs</files>
   <action>
-**EDIT 1: src/SmartRouter.Cli/Endpoints/ChatCompletions.fs**
 
-Three sub-edits:
+This task has 4 sub-steps. Sub-step 3d (test fixtures) is REQUIRED — without it, tests will not compile because Phase 14/15 fixtures construct `TraceRecord` literally and the 3 new fields make those literals incomplete.
 
-**1a — Imports.** At the top of the file, after the existing `open SmartRouter.Cli.Adapters.QualityCheck` line (~24), add:
+**Sub-step 3a — ChatCompletions.fs imports and helper.**
+
+At the top of `src/SmartRouter.Cli/Endpoints/ChatCompletions.fs`, after the existing `open SmartRouter.Cli.Adapters.QualityCheck` line (~24), add:
 
 ```fsharp
 open SmartRouter.Cli.Adapters.BorderlineClassifier   // Phase 16: classifyBorderline
 open SmartRouter.Cli.Adapters.JudgeClient            // Phase 16: IJudgeClient + JudgeVerdict
 ```
 
-**1b — Add a private SHA-256 helper near the existing `truncate` helper (around line 32).** Mirrors `computePromptHash` in DecisionLogger.fs but is local so we don't have to broaden DecisionLogger's surface.
+Then add a private SHA-256 helper near the existing `truncate` helper (around line 32). Mirrors `computePromptHash` in DecisionLogger.fs but is local so we don't have to broaden DecisionLogger's surface.
 
 ```fsharp
 /// Phase 16 — SHA-256 hex of arbitrary string for judge cache key.
@@ -392,7 +411,9 @@ let private computeContentHash (content: string) : string =
     |> String.concat ""
 ```
 
-**1c — Hoist `computePromptHash` AND wire the borderline → judge cascade in the non-streaming branch.**
+**Sub-step 3b — ChatCompletions.fs Good-arm cascade.**
+
+Hoist `computePromptHash` AND wire the borderline → judge cascade in the non-streaming branch.
 
 Find the existing block at ~line 405-490 in ChatCompletions.fs that resolves QualityFallbackOptions / traceLogger / qualityCheckStats and runs analyzeResponse. The block currently looks like:
 
@@ -429,7 +450,9 @@ REWRITE THE BLOCK to:
 4. After the existing Bad-verdict 122B retry handling, add a Good-verdict borderline check that runs only when `judgeClient` is non-null AND `classifyBorderline` returns Some.
 5. On RouteNo (judge says bad) AND 122B reachable: do the same FallbackTo122B retry as the Bad path.
 6. On RouteYes / JudgeSkipped / JudgeFailed: forward 35B response unchanged (fail-open).
-7. Update fallback_kind logic: `Some "quality"` when (existing Bad triggered) OR (judge fired AND RouteNo AND retry succeeded). researcher OQ #6 — keep "quality" value; new judge_* fields disambiguate.
+7. Update fallback_kind logic per OQ #6 + B3 fix:
+   - `Some "quality"` when (existing Bad triggered AND retry succeeded) OR (judge fired AND RouteNo AND retry actually succeeded).
+   - `None` when judge fired + RouteNo + retry FAILED (no actual fallback substitution; trace fields `judge_called=true` + `judge_verdict="no"` still record judge invocation).
 8. Pass judgeCalledFlag / judgeVerdictStr / judgeLatencyMs into the trace block.
 
 CONCRETE BLOCK REPLACEMENT (preserving all existing decisionLogger.Log + metrics.Record + ctx.Response.WriteAsync calls):
@@ -478,6 +501,10 @@ match initialResult with
 
     // Phase 16: judge cascade — only on Good 35B responses + judge enabled + borderline.
     // Returns judge metadata so the trace block can emit the 3 new fields.
+    //
+    // Tuple element 6 (judgeTriggeredFallback : bool) is the SUBSTITUTION flag —
+    // true ONLY when a 122B retry actually replaced the 35B response. False on
+    // judge-NO-but-retry-failed (judge fired but no substitution happened — see B3 fix).
     let! (finalDecision, finalBody, judgeCalled, judgeVerdictStr, judgeLatencyMs, judgeTriggeredFallback) = task {
         match initialVerdict with
         | Bad _ ->
@@ -539,10 +566,14 @@ match initialResult with
                         | RouteNo ->
                             // Judge says bad — fire quality fallback (same path as Phase 15 Bad)
                             if not (healthProbe.IsReachable(Qwen122B)) then
+                                // B3 fix: judge fired (judge_called=true, judge_verdict="no")
+                                // BUT 122B unreachable → no substitution occurs → judgeTriggeredFallback=false.
+                                // Result: trace records judge invocation, but fallback_kind=null
+                                // because the client receives the original 35B response unchanged.
                                 logger.LogWarning(
                                     "ChatCompletions: judge said NO but 122B unreachable; returning 35B response as-is; cid={Cid}",
                                     correlationId)
-                                return (initialDecision, initialBody, true, Some "no", Some judgeMs, true)
+                                return (initialDecision, initialBody, true, Some "no", Some judgeMs, false)
                             else
                                 logger.LogInformation(
                                     "ChatCompletions: judge said NO; retrying on 122B; cid={Cid}",
@@ -557,12 +588,17 @@ match initialResult with
                                 let! retryResult = upstream.CompleteAsync req retryDecision ctx.RequestAborted
                                 match retryResult with
                                 | Ok retryBody ->
+                                    // Substitution succeeded → judgeTriggeredFallback=true → fallback_kind="quality"
                                     return (retryDecision, retryBody, true, Some "no", Some judgeMs, true)
                                 | Error _ ->
+                                    // B3 fix: 122B retry failed → no substitution → judgeTriggeredFallback=false
+                                    // Mirrors the existing Bad+retry-fails arm above (line `Error _ -> ...false`).
+                                    // The trace records judge_called=true, judge_verdict="no", but fallback_kind=null
+                                    // because the client receives the original 35B response (no substitution occurred).
                                     logger.LogWarning(
                                         "ChatCompletions: judge-triggered 122B retry failed; returning 35B response as-is; cid={Cid}",
                                         correlationId)
-                                    return (initialDecision, initialBody, true, Some "no", Some judgeMs, true)
+                                    return (initialDecision, initialBody, true, Some "no", Some judgeMs, false)
                         | RouteYes ->
                             return (initialDecision, initialBody, true, Some "yes", Some judgeMs, false)
                         | JudgeSkipped reason ->
@@ -593,15 +629,19 @@ match initialResult with
             |> List.map (fun m -> m.Content)
             |> String.concat " "
         // qualityFallbackTriggered = true when initialVerdict was Bad (Phase 15)
-        // judgeTriggeredFallback   = true when judge said NO and 122B retry actually fired (Phase 16)
-        // Either one means initial response was unsatisfactory — record initial excerpt.
+        // judgeTriggeredFallback   = true when judge said NO and 122B retry SUBSTITUTED successfully (Phase 16)
+        // Either one means the client received the 122B response — record initial excerpt.
+        // (If judge fired but retry failed, judgeTriggeredFallback=false — see B3 fix.)
         let initialResponseExcerpt =
             if qualityFallbackTriggered || judgeTriggeredFallback then
                 Some (truncate 500 initialBody)
             else None
-        // OQ #6 resolution: keep fallback_kind = "quality" for both Phase-15-triggered
-        // and judge-triggered quality fallbacks. judge_called + judge_verdict
-        // disambiguate without breaking downstream tooling that does simple matching.
+        // OQ #6 + B3 resolution: fallback_kind describes whether SUBSTITUTION happened.
+        //   - Some "quality" — Phase 15 Bad triggered, retry succeeded
+        //                     OR judge said NO, retry succeeded (same value; judge_* fields disambiguate)
+        //   - None          — judge said NO but retry failed (no substitution); judge_called/_verdict still
+        //                     record the judge invocation in the trace fields
+        //   - Some "availability" — non-quality fallback path (existing Phase 13/14 semantic)
         let fallbackKind =
             if qualityFallbackTriggered || judgeTriggeredFallback then Some "quality"
             elif finalDecision.IsFallback then Some "availability"
@@ -638,14 +678,15 @@ KEY CONSIDERATIONS:
 - `computeContentHash` is called only on the borderline path (so we don't pay SHA-256 cost on every Good response).
 - All existing decisionLogger.Log / metrics.Record / ctx.Response.WriteAsync calls run UNCHANGED — judge wiring is purely additive on the Good arm.
 - `judgeClient.VerdictAsync` returns Task<JudgeVerdict> — F# match on the 4 cases is exhaustive (compiler enforces).
+- B3 fix invariant: `judgeTriggeredFallback` is `true` ONLY when a 122B retry actually substituted the response. The judge-NO+retry-fails arm sets it `false` (mirrors the Bad-verdict+retry-fails arm). This keeps `fallback_kind` semantically coherent: "did we actually swap the response?"
 
-**EDIT 2: src/SmartRouter.Cli/Endpoints/Stats.fs**
+**Sub-step 3c — Stats.fs StatsWire.**
 
-Open Stats.fs. Make 3 sub-edits:
+Open `src/SmartRouter.Cli/Endpoints/Stats.fs`. Make 3 sub-edits:
 
-**2a — Add `open SmartRouter.Cli.Adapters.JudgeClient` to the imports** (after `open SmartRouter.Cli.Adapters.QueueDispatcher`).
+3c-i. Add `open SmartRouter.Cli.Adapters.JudgeClient` to the imports (after `open SmartRouter.Cli.Adapters.QueueDispatcher`).
 
-**2b — Extend StatsWire with 3 new fields** (at the end of the existing record, after `quality_check_hits_keyword`):
+3c-ii. Extend StatsWire with 3 new fields (at the end of the existing record, after `quality_check_hits_keyword`):
 
 ```fsharp
 type private StatsWire =
@@ -667,9 +708,7 @@ let private snapshotToWireFields (s: StatsSnapshot) : StatsWire =
       judge_call_count                   = 0L }    // overridden in mapEndpoints
 ```
 
-**2c — Update `mapEndpoints` to resolve IJudgeStats null-safely and populate the 3 fields:**
-
-Inside the existing `app.MapGet("/stats", Func<HttpContext, Task>(fun ctx -> task { ... } ))` block, after the existing service resolutions (`stats`, `versionP`, `canarySt`), add:
+3c-iii. Update `mapEndpoints` to resolve IJudgeStats null-safely and populate the 3 fields. Inside the existing `app.MapGet("/stats", Func<HttpContext, Task>(fun ctx -> task { ... } ))` block, after the existing service resolutions (`stats`, `versionP`, `canarySt`), add:
 
 ```fsharp
             let judgeStats = ctx.RequestServices.GetService<IJudgeStats>()  // null-safe
@@ -695,13 +734,63 @@ Then update the `wire` object construction at the end of the handler to override
 NOTES on Stats.fs design:
 - IJudgeStats is registered in BOTH composition paths (configureRequestPipeline always — judgeEnabled gates which implementation; configureWithoutMl always — NoOp). So GetService should never return null in production. We use GetService anyway (not GetRequiredService) for defense-in-depth — if a future test fixture forgets to register IJudgeStats, /stats degrades to 0L instead of crashing.
 
-After these edits, run `dotnet build src/SmartRouter.Cli/SmartRouter.Cli.fsproj` — must succeed with 0 warnings under TreatWarningsAsErrors=true. Then `dotnet build tests/SmartRouter.Tests/SmartRouter.Tests.fsproj` — must also succeed (test fixtures don't construct TraceRecord directly; they parse JSONL — backward-compat with the new fields is automatic since System.Text.Json round-trips additive fields without errors).
+**Sub-step 3d — Test fixture TraceRecord literal updates (REQUIRED — blocks compile of the test project).**
 
-Then `dotnet test tests/SmartRouter.Tests/SmartRouter.Tests.fsproj --no-build -- --sequenced` — baseline 102+16+0 must hold. If a test fixture happens to construct `TraceRecord` literally (RouterTests / QualityFallbackTests / QSE), it must be updated to include the 3 new fields. CHECK and update if needed:
+Phase 14/15 tests construct `TraceRecord` records literally in fixture code. Adding 3 fields to the record makes those literals incomplete. This sub-step fixes them BEFORE the build/test verification step. Without this sub-step the test project fails to compile and the entire test baseline is unverifiable.
 
-- `grep -rn "schema_version" tests/SmartRouter.Tests/*.fs` — find any TraceRecord literal constructions
-- For each match, add `judge_called = false; judge_verdict = None; judge_latency_ms = None` to the record literal (Phase 14/15 tests don't exercise judge — these defaults preserve their assertions)
-- This is the ONLY test edit this plan makes. Comprehensive Phase 16 test coverage lives in Plan 16-04.
+Steps (run in order):
+
+1. Locate every TraceRecord literal construction in the test tree:
+
+   ```bash
+   grep -rn "schema_version" tests/SmartRouter.Tests/*.fs
+   ```
+
+   Expected matches: at least `tests/SmartRouter.Tests/QualityFallbackTests.fs` (Phase 14 fixtures) and `tests/SmartRouter.Tests/QualitySignalEnrichmentTests.fs` (Phase 15 fixtures). Also check `RouterTests.fs` and any other *.fs that constructs `{ schema_version = 1; ... }`.
+
+2. For EACH match where `{ schema_version = 1; ...; bad_reason = ... }` is constructed (record literal — NOT JSON parsing of stringly-typed JSONL), add 3 new fields with default values:
+
+   ```fsharp
+   {
+       schema_version   = 1
+       // ... existing fields unchanged ...
+       bad_reason       = None        // (or whatever the existing test sets)
+       judge_called     = false       // NEW Phase 16 default — Phase 14/15 tests don't exercise judge
+       judge_verdict    = None        // NEW Phase 16 default
+       judge_latency_ms = None        // NEW Phase 16 default
+   }
+   ```
+
+   These defaults preserve the assertions of Phase 14 (QF-01..10) and Phase 15 (QSE-01..06) — those tests don't touch judge fields, so `false`/`None`/`None` keep their semantic meaning ("judge not enabled in this fixture; record reflects that").
+
+3. Confirm the test project compiles cleanly:
+
+   ```bash
+   dotnet build tests/SmartRouter.Tests/SmartRouter.Tests.fsproj
+   ```
+
+   Must exit 0 with 0 warnings under TreatWarningsAsErrors=true.
+
+4. Run the test suite once and confirm baseline holds:
+
+   ```bash
+   dotnet test tests/SmartRouter.Tests/SmartRouter.Tests.fsproj --no-build -- --sequenced 2>&1 | tail -15
+   ```
+
+   Must show "Passed: 102, Failed: 0, Skipped: 16" (or higher Passed if a fixture happened to be auto-counted differently; never lower; never any Failed).
+
+**Note on JSONL-parsing tests:** Tests that READ trace JSONL output via `JsonDocument.Parse` and call `JsonElement.TryGetProperty("judge_called", ...)` do NOT need updates — System.Text.Json round-trips additive fields without errors. Only tests that CONSTRUCT TraceRecord literals (typed F# record syntax) need the 3 new fields.
+
+**Final build/test verification (after all sub-steps 3a-3d).**
+
+```bash
+dotnet build src/SmartRouter.Cli/SmartRouter.Cli.fsproj         # exit 0, 0 warnings
+dotnet build tests/SmartRouter.Tests/SmartRouter.Tests.fsproj   # exit 0
+dotnet test tests/SmartRouter.Tests/SmartRouter.Tests.fsproj --no-build -- --sequenced
+# Expected: Passed: 102, Failed: 0, Skipped: 16
+```
+
+If any test fixture was missed in sub-step 3d, the build fails at `dotnet build tests/...` with an "incomplete record" compiler error pointing to the exact line. Fix and re-run.
   </action>
   <verify>
 - `dotnet build src/SmartRouter.Cli/SmartRouter.Cli.fsproj` — exit 0; "Build succeeded"; 0 warnings under TreatWarningsAsErrors=true
@@ -711,6 +800,8 @@ Then `dotnet test tests/SmartRouter.Tests/SmartRouter.Tests.fsproj --no-build --
 - `grep -c "judgeClient\|judgeCalled\|judgeVerdictStr\|judgeLatencyMs\|judgeTriggeredFallback\|computeContentHash\|classifyBorderline" src/SmartRouter.Cli/Endpoints/ChatCompletions.fs` — at least 14 (cumulative across the new variable usages)
 - `grep "INTENTIONALLY SKIPPED" src/SmartRouter.Cli/Endpoints/ChatCompletions.fs` — exactly 1 line in the streaming branch (autonomous decision C: streaming preserved unchanged)
 - `grep -c "judge_cache_hits\|judge_cache_misses\|judge_call_count" src/SmartRouter.Cli/Endpoints/Stats.fs` — at least 6 (3 wire fields + 3 in snapshotToWireFields/wire override)
+- B3 fix evidence: `grep -B1 -A1 "judge-triggered 122B retry failed" src/SmartRouter.Cli/Endpoints/ChatCompletions.fs` — surrounding context shows the return tuple ends in `false` (last element = judgeTriggeredFallback), NOT `true`. Confirms the retry-fails arm does NOT set the fallback flag.
+- Sub-step 3d completion: `grep -c "judge_called *= *false" tests/SmartRouter.Tests/*.fs` — at least 1 (every TraceRecord literal in fixtures now has the new fields with default values)
   </verify>
   <done>
 - Cli + Tests projects build cleanly under TreatWarningsAsErrors=true.
@@ -720,6 +811,8 @@ Then `dotnet test tests/SmartRouter.Tests/SmartRouter.Tests.fsproj --no-build --
 - TraceRecord 16 fields, schema_version=1.
 - /stats has 3 new judge_* fields, null-safe IJudgeStats resolution.
 - Default behavior identical to Phase 15 (Routing.Judge.Enabled=false → no IJudgeClient → no borderline check).
+- B3 fix in place: judge-NO + 122B-retry-fails arm sets judgeTriggeredFallback=false → fallback_kind=null in trace; judge_called=true + judge_verdict="no" still record the judge invocation.
+- Sub-step 3d test fixture updates landed: every TraceRecord literal in tests/ has the 3 new fields with default values (judge_called=false, judge_verdict=None, judge_latency_ms=None).
   </done>
 </task>
 
@@ -745,10 +838,13 @@ Then `dotnet test tests/SmartRouter.Tests/SmartRouter.Tests.fsproj --no-build --
 **Schema invariants (JDG-05 compliance):**
 - `grep "schema_version *<- *1\|schema_version *= *1\|schema_version *: *int" src/SmartRouter.Cli/Adapters/TraceLogger.fs` confirms schema_version still = 1 (additive change only)
 - Trace fields are appended at the end of the record (declaration order = JSON property order); old log readers ignore unknown fields — forward-compat preserved
+
+**B3 invariant (judge-NO + retry-fails consistency):**
+- The judge-NO + retry-fails arm sets `judgeTriggeredFallback=false` → trace `fallback_kind=null` (NOT "quality") because no substitution occurred. Trace fields `judge_called=true` + `judge_verdict="no"` still record the judge invocation.
 </verification>
 
 <success_criteria>
-- All 5 source files modified per task descriptions
+- All 5 source files modified per task descriptions (TraceLogger.fs, CompositionRoot.fs, appsettings.json, ChatCompletions.fs, Stats.fs) PLUS test fixtures updated for new TraceRecord fields (sub-step 3d)
 - Cli + Tests build cleanly (0 warnings under TreatWarningsAsErrors=true)
 - Test baseline 102+16+0 preserved (zero regression)
 - Default behavior (Routing.Judge.Enabled=false): bit-stable identical to Phase 15
@@ -757,6 +853,7 @@ Then `dotnet test tests/SmartRouter.Tests/SmartRouter.Tests.fsproj --no-build --
 - TraceRecord 16 fields, schema_version=1 unchanged (JDG-05)
 - /stats wire has 3 new int64 fields
 - All 5 researcher OQ resolutions + 4 autonomous decisions documented inline as comments at the relevant code sites
+- B3 invariant holds: judge-NO + retry-fails sets judgeTriggeredFallback=false (consistent with the Bad+retry-fails arm)
 </success_criteria>
 
 <output>
@@ -771,4 +868,5 @@ After completion, create `.planning/phases/16-122b-as-judge-for-borderline-cases
   - `feat(16-03): register IJudgeClient + IJudgeStats DI in CompositionRoot (opt-in via Routing.Judge.Enabled)`
   - `feat(16-03): wire borderline → judge → fallback cascade in ChatCompletions.fs non-streaming branch`
   - `feat(16-03): extend /stats StatsWire with 3 judge_* fields (null-safe IJudgeStats resolution)`
+  - `test(16-03): update Phase 14/15 TraceRecord literals with judge_called/_verdict/_latency_ms defaults`
 </output>

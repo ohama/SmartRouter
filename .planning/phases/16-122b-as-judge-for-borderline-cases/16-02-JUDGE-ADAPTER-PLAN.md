@@ -359,6 +359,14 @@ type JudgeClient(httpFactory: IHttpClientFactory, options: JudgeOptions, logger:
         bodyDict.["temperature"] <- 0.0 :> obj   // deterministic
         bodyDict.["stream"]      <- false :> obj
         let opts = JsonSerializerOptions()
+        // JsonFSharpConverter required for anonymous record {| role; content |} in
+        // messages array — without it, System.Text.Json may not serialize F#
+        // anonymous records correctly. Cross-reference: prompts/teacher-prompt.md
+        // invocation in TeacherLabeler.fs (the precedent — see TeacherLabeler.fs
+        // buildBody for the exact same JsonFSharpConverter + anonymous-record
+        // pattern). DO NOT remove this converter as "apparently unnecessary":
+        // bodyDict is `Dictionary<string,obj>` but the messages-array element IS
+        // an F# anonymous record, which requires the converter.
         opts.Converters.Add(JsonFSharpConverter())
         JsonSerializer.Serialize(bodyDict, opts)
 
@@ -433,6 +441,7 @@ KEY POINTS:
 - `globalSeq` is a single int64 counter; `Interlocked.Increment(&globalSeq)` returns the new value and is thread-safe.
 - `attemptOnce` does NO retry — the named "judge" HttpClient (registered by Plan 16-03) wraps it with `AddResilienceHandler` carrying 2 retries (researcher OQ #5).
 - CTOR signature `(IHttpClientFactory, JudgeOptions, ILogger<JudgeClient>)` — exact mirror of TeacherLabeler — ready for DI registration in Plan 16-03.
+- `JsonFSharpConverter` is REQUIRED in `buildBody` despite `bodyDict` being a plain `Dictionary<string,obj>` — the messages-array element is an F# anonymous record (`{| role; content |}`), and System.Text.Json without the converter does not serialize F# anonymous records correctly. See TeacherLabeler.fs `buildBody` for the precedent (same pattern, same converter).
   </action>
   <verify>
 - `dotnet build src/SmartRouter.Cli/SmartRouter.Cli.fsproj` — fails initially (file not in fsproj — Task 3 fixes); after Task 3, must build cleanly under `TreatWarningsAsErrors=true`
@@ -441,6 +450,7 @@ KEY POINTS:
 - `grep "max_tokens.*1 " src/SmartRouter.Cli/Adapters/JudgeClient.fs` — exactly 1 line (1-token request body)
 - `grep "CreateClient(\"judge\")" src/SmartRouter.Cli/Adapters/JudgeClient.fs` — exactly 1 occurrence (named-client lookup)
 - `grep -c "open SmartRouter.Core" src/SmartRouter.Cli/Adapters/JudgeClient.fs` — must return 0 (Cli adapter; no Core dep)
+- `grep "JsonFSharpConverter" src/SmartRouter.Cli/Adapters/JudgeClient.fs` — at least 1 occurrence (required for F# anonymous-record serialization in messages array; do NOT strip)
   </verify>
   <done>
 File exists, ~200-300 lines, defines all four types (JudgeVerdict, JudgeOptions, IJudgeClient, IJudgeStats) and the JudgeClient class. ROUTE_NO wins parser. 1-token request body. LRU cache with O(n) eviction. ARCH-01 invariant preserved (no Core changes).
