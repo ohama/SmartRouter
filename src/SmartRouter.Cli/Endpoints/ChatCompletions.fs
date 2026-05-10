@@ -10,6 +10,7 @@ open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Logging
+open Microsoft.Extensions.Options
 open Microsoft.Extensions.Primitives
 open SmartRouter.Core.Domain
 open SmartRouter.Core.Ports
@@ -20,6 +21,17 @@ open SmartRouter.Cli.Adapters.DecisionLogger
 open SmartRouter.Cli.Adapters.CorrelationMiddleware
 open SmartRouter.Cli.Adapters.RoutingAlgorithm
 open SmartRouter.Cli.Adapters.CanaryMetrics
+open SmartRouter.Cli.Adapters.QualityCheck
+open SmartRouter.Cli.Adapters.TraceLogger
+
+// ── Phase 14 — string truncation for trace excerpts ──────────────────────────
+
+/// Returns up to n characters, appending "…" when truncated.
+/// Returns "" for null input. Safe to call on any string.
+let private truncate (n: int) (s: string) : string =
+    if isNull s then ""
+    elif s.Length <= n then s
+    else s.Substring(0, n) + "…"
 
 // ── Wire types ───────────────────────────────────────────────────────────────
 
@@ -271,6 +283,15 @@ let handler
             // ── existing body UNCHANGED from here onwards ─────────────────────────────
             if req.Stream then
                 // ── SSE streaming branch ──────────────────────────────────────────────
+                // Phase 14: Quality fallback (35B response → 122B retry) is INTENTIONALLY SKIPPED
+                // for streaming requests. Once the first SSE chunk has been
+                // FlushAsync'd to the client (typically within ~100ms), the response
+                // cannot be retracted. Streaming-quality fallback would require either
+                // per-chunk quality detection (not feasible — partial token streams have
+                // no semantic completeness) or full server-side buffering (defeats the
+                // latency advantage of streaming entirely). Operators who want quality
+                // fallback should send non-streaming requests (stream=false).
+                //
                 // STRM-04 / PITFALL-6: Set all SSE headers BEFORE writing any body bytes.
                 // Once any WriteAsync runs, headers are committed and cannot be changed.
                 ctx.Response.ContentType <- "text/event-stream"
@@ -366,22 +387,107 @@ let handler
                     metrics.Record(isCanary, isFb)
 
             else
-                // ── Non-streaming branch (unchanged from Phase 1) ────────────────────
+                // ── Non-streaming branch ─────────────────────────────────────────────
                 // Hot-path: same routing decision is recorded in JSONL DecisionLog at INFO-equivalent.
                 // Operational log keeps this at DEBUG to avoid stderr duplication at default level.
                 logger.LogDebug(
                     "Routing target={Target} reason={Reason} priority={Priority}",
                     decision.Target, decision.Reason, decision.Priority)
 
-                let! result = upstream.CompleteAsync req decision ctx.RequestAborted
+                // Phase 14: resolve optional dependencies for quality fallback + trace.
+                // qualityFallbackOpts: QualityFallbackOptions registered as a standalone DI
+                //   singleton in CompositionRoot (compile-order safe; QualityCheck.fs precedes
+                //   ChatCompletions.fs in fsproj; CompositionRoot.fs follows both).
+                // traceLogger: null when --trace-responses absent — skip trace block entirely.
+                let qualityFallbackOpts = ctx.RequestServices.GetRequiredService<QualityFallbackOptions>()
+                let traceLogger = ctx.RequestServices.GetService<ITraceLogger>()
 
-                match result with
-                | Ok body ->
+                let initialDecision = decision
+                let! initialResult = upstream.CompleteAsync req initialDecision ctx.RequestAborted
+
+                match initialResult with
+                | Ok initialBody ->
+                    // ── Phase 14: Quality fallback (35B → 122B retry) ────────────────
+                    // Streaming branch skips this entirely; chunks already shipped to client.
+                    // qualityFallbackTriggered is set only when 35B was the initial target
+                    // AND the response fails the configured heuristic (isBadResponse returns
+                    // false when QualityFallback.Enabled = false — operator kill-switch).
+                    let qualityFallbackTriggered =
+                        initialDecision.Target = Qwen35B
+                        && isBadResponse qualityFallbackOpts initialBody
+
+                    let! (finalDecision, finalBody) = task {
+                        if qualityFallbackTriggered then
+                            if not (healthProbe.IsReachable(Qwen122B)) then
+                                // 122B down + 35B quality bad → return 35B response as-is.
+                                // Graceful degradation; no infinite retry; no error to client.
+                                logger.LogWarning(
+                                    "ChatCompletions: 35B response failed quality check but 122B unreachable; returning 35B response as-is; cid={Cid}",
+                                    correlationId)
+                                return (initialDecision, initialBody)
+                            else
+                                logger.LogInformation(
+                                    "ChatCompletions: 35B response failed quality check; retrying on 122B; cid={Cid}",
+                                    correlationId)
+                                let retryDecision = {
+                                    initialDecision with
+                                        Target       = Qwen122B
+                                        Reason       = FallbackTo122B
+                                        IsFallback   = true
+                                        ModelVersion = versionProvider.CurrentVersion   // live read — issue #12 pattern
+                                }
+                                let! retryResult = upstream.CompleteAsync req retryDecision ctx.RequestAborted
+                                match retryResult with
+                                | Ok retryBody ->
+                                    return (retryDecision, retryBody)
+                                | Error _ ->
+                                    // 122B reachable but returned Error → return 35B response as-is.
+                                    logger.LogWarning(
+                                        "ChatCompletions: quality-fallback retry to 122B also failed; returning 35B response as-is; cid={Cid}",
+                                        correlationId)
+                                    return (initialDecision, initialBody)
+                        else
+                            return (initialDecision, initialBody)
+                    }
+
+                    // Forward final response to client.
                     ctx.Response.ContentType <- "application/json"
-                    do! ctx.Response.WriteAsync(body, ctx.RequestAborted)
-                    let okReason = formatReason decision.Reason
-                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some decision) (sprintf "%A" decision.Target) okReason decision.IsFallback)
-                    let isCanary, isFb = metricCohort decision okReason
+                    do! ctx.Response.WriteAsync(finalBody, ctx.RequestAborted)
+
+                    // DecisionLog — final decision wins (target = final model, reason = final reason).
+                    let okReason = formatReason finalDecision.Reason
+                    decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some finalDecision) (sprintf "%A" finalDecision.Target) okReason finalDecision.IsFallback)
+
+                    // Phase 14 — Trace JSONL row (only when --trace-responses enabled).
+                    // traceLogger = null when flag is absent; skip entirely (no perf cost).
+                    if not (isNull (box traceLogger)) then
+                        let promptHash = computePromptHash req.Messages
+                        let promptText =
+                            req.Messages
+                            |> List.map (fun m -> m.Content)
+                            |> String.concat " "
+                        let initialResponseExcerpt =
+                            if qualityFallbackTriggered then Some (truncate 500 initialBody) else None
+                        let fallbackKind =
+                            if qualityFallbackTriggered then Some "quality"
+                            elif finalDecision.IsFallback then Some "availability"
+                            else None
+                        traceLogger.Log({
+                            schema_version           = 1
+                            correlation_id           = correlationId
+                            prompt_uid               = promptHash.Substring(0, min 12 promptHash.Length)
+                            prompt_hash              = promptHash
+                            prompt_excerpt           = truncate 200 promptText
+                            initial_target           = sprintf "%A" initialDecision.Target
+                            initial_response_excerpt = initialResponseExcerpt
+                            fallback_kind            = fallbackKind
+                            final_target             = sprintf "%A" finalDecision.Target
+                            final_response_excerpt   = truncate 500 finalBody
+                            total_latency_ms         = (DateTimeOffset.UtcNow - started).TotalMilliseconds
+                            timestamp                = DateTimeOffset.UtcNow
+                        })
+
+                    let isCanary, isFb = metricCohort finalDecision okReason
                     metrics.Record(isCanary, isFb)
 
                 | Error e ->

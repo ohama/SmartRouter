@@ -280,6 +280,16 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         buildRoutingConfig opts)
         |> ignore
 
+    // Phase 14: QualityFallbackOptions as a standalone DI singleton.
+    // ChatCompletions.fs compiles before CompositionRoot.fs, so it cannot reference
+    // RoutingOptions directly. Registering QualityFallbackOptions separately lets the
+    // endpoint handler resolve it via GetRequiredService<QualityFallbackOptions>() with
+    // no compile-order issue (QualityCheck.fs is compiled before ChatCompletions.fs).
+    services.AddSingleton<QualityFallbackOptions>(fun sp ->
+        let opts = sp.GetRequiredService<IOptions<RoutingOptions>>().Value
+        normalizeQualityFallback opts)
+        |> ignore
+
     // ── Phase 9 unconditional fallback defaults (Step 1.0) ───────────────────
     //
     // ICanaryGate: NullCanaryGate fallback (Step 1.2 below overrides via plain AddSingleton).
@@ -856,6 +866,12 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
     services.AddSingleton<RoutingConfig>(fun sp ->
         let opts = sp.GetRequiredService<IOptions<RoutingOptions>>().Value
         buildRoutingConfig opts)
+        |> ignore
+
+    // Phase 14: QualityFallbackOptions standalone singleton (mirrors configureRequestPipeline).
+    services.AddSingleton<QualityFallbackOptions>(fun sp ->
+        let opts = sp.GetRequiredService<IOptions<RoutingOptions>>().Value
+        normalizeQualityFallback opts)
         |> ignore
 
     // DecisionLog — same triple-reg as configureRequestPipeline.
