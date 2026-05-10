@@ -314,14 +314,67 @@ distillation 디자인의 "Failure = Gold Data" 패턴을 smart-router 에 첫 �
 | QF-08 | Phase 14 | Complete |
 | QF-09 | Phase 14 | Complete |
 | QF-10 | Phase 14 | Complete |
+| QSE-01 | Phase 15 | Pending |
+| QSE-02 | Phase 15 | Pending |
+| QSE-03 | Phase 15 | Pending |
+| QSE-04 | Phase 15 | Pending |
+| QSE-05 | Phase 15 | Pending |
+| QSE-06 | Phase 15 | Pending |
+| JDG-01 | Phase 16 | Pending |
+| JDG-02 | Phase 16 | Pending |
+| JDG-03 | Phase 16 | Pending |
+| JDG-04 | Phase 16 | Pending |
+| JDG-05 | Phase 16 | Pending |
+| QCLS-01 | Phase 17 | Pending |
+| QCLS-02 | Phase 17 | Pending |
+| QCLS-03 | Phase 17 | Pending |
+| QCLS-04 | Phase 17 | Pending |
+| QCLS-05 | Phase 17 | Pending |
+| QCLS-06 | Phase 17 | Pending |
+| QCLS-07 | Phase 17 | Pending |
+
+### Quality Signal Enrichment (Phase 15 — planned)
+
+Phase 14 의 `isBadResponse` 가 길이/키워드만 보던 단순 휴리스틱을 풍부화. 모델이 이미 보내주는 `finish_reason` 활용 + case-insensitive 키워드 + refusal 패턴 default + 한글 응답 길이 보정 + Shannon entropy 반복 감지. 모든 변경 ARCH-01 보존 (`Adapters/QualityCheck.fs` 만 변경; Core 무영향). 상세 분석: `.planning/docs/quality-check-improvement-options.md` Tier 1+2.
+
+- [ ] **QSE-01**: `Routing.QualityFallback.BadFinishReasons: string array` config (default `["length", "content_filter"]`); `isBadResponse` 시그니처가 `finishReason: string option` 받음; `finish_reason` 이 BadFinishReasons 에 매치되면 길이/키워드 통과해도 bad; mlx_lm response JSON 의 `choices[0].finish_reason` 추출 후 `ChatCompletions.fs` 에서 전달
+- [ ] **QSE-02**: BadKeywords 매칭이 `String.IsNullOrEmpty` 체크 후 `IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0` 사용 — case-insensitive; default `["TODO", ...]` 가 `"todo"`, `"Todo"`, `"ToDo"` 변형 모두 cover
+- [ ] **QSE-03**: Default `BadKeywords` 가 refusal 패턴 포함 — `["TODO", "I think", "I cannot", "I'm unable", "I don't have access", "As an AI", "Sorry, I can't"]` (총 7 개); `appsettings.json` 의 default value 변경; operator 가 override 가능
+- [ ] **QSE-04**: 한글 응답 길이 보정 — `koreanRatio` 함수 (Hangul 코드포인트 `'가'..'힣'` 비율 계산) + `effectiveLength = int (length × (1 + koreanRatio × 0.8))`; `effectiveLength < MinResponseLength` 일 때 bad (길이 비교는 effective 기준); 영어 응답은 ratio=0 이므로 동작 변경 없음 (backward-compat)
+- [ ] **QSE-05**: Shannon entropy 반복 감지 — `charEntropy` 함수 (BCL only; `s |> Seq.countBy id |> Seq.map snd |> ...`) + `Routing.QualityFallback.EntropyThreshold: float` config (default 2.5); `charEntropy(response) < threshold` 일 때 bad; 정상 텍스트 entropy 4-5+, 반복 루프 ("the the the...") 1-2 → 임계값 통과
+- [ ] **QSE-06**: Phase 14 의 QF-01/QF-02 테스트가 backward-compat 으로 통과 — signature 변경 후에도 fixture 가 정상 동작; 신규 `QualitySignalEnrichmentTests.fs` 가 5 차원 (finish_reason, case-insensitive, refusal, Korean length, entropy) 각각 cover; 통합 테스트 1 개로 fake-Kestrel 35B 가 finish_reason="length" 로 잘린 응답 → 122B fallback 발화 검증
+
+### 122B-as-Judge for Borderline Cases (Phase 16 — planned)
+
+Phase 15 heuristic 통과했지만 quality 가 borderline (entropy/length/keyword band edge) 한 케이스에만 122B 에 1-token verification call. 명백한 good/bad 는 fast path 유지. Cache by `(prompt_hash + response_hash)`. distillation 의 lazy verification 단계; Phase 17 self-improving classifier 의 학습 데이터 수집 부가 효과. 상세 분석: `.planning/docs/quality-check-improvement-options.md` Tier 3-A.
+
+- [ ] **JDG-01**: `Adapters/BorderlineClassifier.fs` (pure F#, BCL only) — Phase 15 의 entropy/length/keyword 신호 기반 3-way 분류: `Verdict = Good | Bad | Borderline of reason: string`; band edge 임계값 (예: entropy 2.5..3.5, length 30..60, keyword 부분 매치); 단위 테스트로 명백한 good (4+ entropy, 100+ length, no keyword) / 명백한 bad (Phase 15 fail) / borderline (band edge) 3 클래스 분류 검증
+- [ ] **JDG-02**: `Adapters/JudgeClient.fs` (`IJudgeClient` 포트 + named "judge" HttpClient + `prompts/judge-prompt.md` template + 1-token max_tokens + `ROUTE_YES`/`ROUTE_NO` parser); `appsettings.json:Routing.Judge.{Endpoint, PromptPath, TimeoutSeconds, MaxCacheEntries}`; named HttpClient 별도 reg (122B endpoint 재사용; `AddResilienceHandler` 재사용 가능)
+- [ ] **JDG-03**: `(prompt_hash, response_hash) → verdict` LRU cache (in-memory `ConcurrentDictionary` + LRU eviction; bounded by `MaxCacheEntries` default 10000); cache hit/miss counter 노출 via `IStatsProvider`; `/stats` JSON 에 `judge_cache_hits`, `judge_cache_misses` 필드 추가
+- [ ] **JDG-04**: Borderline 일 때만 judge 호출 — fake-Kestrel counter 로 명백한 good/bad 케이스에서 judge HttpClient 호출 횟수 = 0 검증; 1-token 응답으로 judge call latency p95 < 100ms (122B normal call 의 ~50× 빠름; fake-Kestrel 측정으로 검증; threshold 는 환경 의존이라 단위 테스트로는 완화)
+- [ ] **JDG-05**: TraceLog 신규 필드 `judge_called: bool`, `judge_verdict: string option ("yes"|"no"|null)`, `judge_latency_ms: float option`; schema_version=1 유지 (필드 추가만; rename/remove 안 함; backward-compat); `ChatCompletions.fs` 에서 `GetService<IJudgeClient>()` null-safe optional resolve (judge 비활성 시 borderline=good 처리, Phase 15 동작 유지)
+
+### QualityClassifier — distillation endgame (Phase 17 — planned)
+
+별도의 ML.NET binary classifier (`models/quality-classifier.zip`) 학습 — `(bge-m3 embed(prompt) ⊕ bge-m3 embed(response))` 2048-dim → good/bad. 학습 데이터: TraceLog + DecisionLog + Phase 16 judge verdict 자동 추출. Phase 8 RetrainingService 인프라 + Phase 9 canary 패턴 재사용. distillation 디자인의 closed-loop self-improvement 가 처음으로 완전 구현됨. 상세 분석: `.planning/docs/quality-check-improvement-options.md` Tier 4.
+
+- [ ] **QCLS-01**: `Core/QualityClassifierPort.fs` BCL-only 포트 — `IQualityClassifier { IsBad : prompt: string * response: string -> bool }`; ARCH-01 보존 (Microsoft.ML 참조 없음); 두 구현 (`HeuristicQualityClassifier` + `MlNetQualityClassifier`) 모두 같은 인터페이스 만족
+- [ ] **QCLS-02**: `Adapters/MlNetQualityClassifier.fs` 가 `PredictionEnginePool` (`watchForChanges:true`) 으로 `models/quality-classifier.zip` 로드; bge-m3 embedder 재사용 (Phase 6 의 `IEmbedder`); 2048-dim concat (`embed(prompt) ⊕ embed(response)`) → binary good/bad; in-flight 요청은 swap 시점에 이전 모델로 완료
+- [ ] **QCLS-03**: `Adapters/QualityDatasetExtractor.fs` 가 `logs/trace/*.jsonl` + `logs/decisions/*.jsonl` 에서 라벨 추출: (a) `fallback_kind="quality"` AND `final_target=Qwen122B` AND `final≠initial` → bad (positive sample); (b) `fallback_kind=null` AND `fallback_used=false` AND target=Qwen35B → good (negative sample, 노이즈 있음); (c) Phase 16 judge verdict NO → bad (강한 신호); 단위 테스트로 추출 로직 + `(prompt_hash, response_hash)` 기반 dedup 검증
+- [ ] **QCLS-04**: `Adapters/QualityClassifierTrainer.fs` — Phase 8 `RetrainingService` 패턴 미러: 70/30 blend with held-out validation; `LbfgsLogisticRegression`; atomic `File.Move(overwrite=true)` to `models/quality-classifier.zip`; held-out fallback rate ≥ baseline 일 때 reject + log to `logs/quality-classifier-rejections.jsonl`; `Adapters/QualityClassifierRetrainService.fs` BackgroundService (별도 PeriodicTimer; `Retraining.QualityClassifier.IntervalMinutes` config; 기존 `RetrainingService` 와 독립 운영)
+- [ ] **QCLS-05**: Bootstrap fallback — `IQualityClassifier` 두 구현 등록; CompositionRoot 가 `datasets/quality-cases.jsonl` row count 가 < 500 일 때 `HeuristicQualityClassifier` (Phase 15+16 wrapping) 등록, ≥ 500 일 때 `MlNetQualityClassifier` 등록; in-process 동적 swap 안 함 (재시작 시 1회 결정); operator 가 datasets 폴더 보고 어느 모드로 동작 중인지 알 수 있음
+- [ ] **QCLS-06**: Canary — `models/quality-classifier-canary.zip` FileSystemWatcher (Phase 9 `CanaryService` 패턴 미러; 별도 `QualityClassifierCanaryService.fs`); 10% sticky cohort by `correlation_id` (Phase 9 와 같은 sticky bucketing — 단 두 canary 가 독립적으로 동작해야 함; 코호트 매핑 함수가 `featureName` 으로 구분); `Canary.QualityClassifier.{AutoRollbackEnabled (default false), RollingWindowSeconds, AutoRollbackThreshold}` config; rolling window 비교로 auto-rollback (judge verdict NO rate 또는 관찰 가능한 final fallback rate 기준)
+- [ ] **QCLS-07**: `QualityCheck.isBadResponse` 호출자 변경 최소 — `ChatCompletions.fs` 의 quality fallback path 가 `IQualityClassifier.IsBad(prompt, response)` 한 줄 호출로 대체; Phase 14 (QF-01/QF-02) + Phase 15 (QSE-01..06) + Phase 16 (JDG-01..05) 테스트 모두 backward-compat 통과 (heuristic fallback 경로로); `QualityClassifierTests.fs` 에 7 testCase + bootstrap heuristic-fallback 회귀 테스트 추가
 
 **Coverage:**
-- v1 requirements: 100 total (83 original + 7 HRM additions in Phase 12 + 10 QF additions in Phase 14; +1 EMBED-03 for bge-m3 latency already counted)
-- Mapped to phases: 100 ✓
+- v1 requirements: 100 (Complete; Phases 1-14)
+- v2 requirements: 18 planned — 6 QSE (Phase 15) + 5 JDG (Phase 16) + 7 QCLS (Phase 17)
+- Total v1+v2: 118
+- Mapped to phases: 118 ✓
 - Unmapped: 0
-- Complete: 99 (Phases 1-14 ✓; TEST-01/TEST-02 retroactive; ML-04 superseded by HRM-06 but historically delivered; ROUT-03/ROUT-04/ML-02/ML-03 historically delivered then removed in Phase 12)
-- Pending: 0 within v1 scope
+- Complete: 99 (v1 ✓ except retroactive marks)
+- Pending: 18 (v2 quality enrichment arc — Phases 15-17)
 
 ---
 *Requirements defined: 2026-05-07*
-*Last updated: 2026-05-10 after Phase 14 (Quality Fallback + Trace) completion — 10 QF requirements added documenting distillation's fallback design implementation.*
+*Last updated: 2026-05-10 after Phase 14 (Quality Fallback + Trace) completion — 10 QF requirements added documenting distillation's fallback design implementation. Same day Phase 15-17 (Quality Signal Enrichment / 122B-as-Judge / QualityClassifier) planned — 18 new requirements (QSE/JDG/QCLS) mapped to v2 quality-enrichment arc per `.planning/docs/quality-check-improvement-options.md`.*

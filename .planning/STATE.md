@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 14 COMPLETE — All 6 plans done. Quality fallback (35B → 122B retry), trace logging, cold-start, and docs all shipped. Test baseline: 82 passed + 16 ignored + 0 failed.
+**Current focus:** Phase 14 COMPLETE + v1.1.0 released. Phases 15-17 (Quality Signal Enrichment / 122B-as-Judge / QualityClassifier) PLANNED — quality enrichment arc designed per `.planning/docs/quality-check-improvement-options.md`. ROADMAP/REQUIREMENTS updated; plans not yet authored.
 
 ## Current Position
 
-Phase: 14 of 14 (Quality Fallback and Trace)
-Plan: 6 of 6 in current phase — 14-06 complete
-Status: Phase 14 COMPLETE. All 6 plans executed: core types (14-01), TraceLogger adapter (14-02), QualityCheck adapter (14-03), ChatCompletions quality fallback branch (14-04), integration tests QF-01+QF-02 (14-05), documentation (14-06). README updated with §5.5, §7 QualityFallback config table, §9.1 routing_reason value, §9.10 trace logging, §12.6 CLI flags. Planning docs updated to reflect Phase 14 reality. **82 passed + 16 ignored + 0 failed**.
-Last activity: 2026-05-10 — Completed 14-06-DOCS-PLAN.md.
+Phase: 14 of 17 done; 15-17 PLANNED (no plans authored yet)
+Plan: 6 of 6 in Phase 14 — 14-06 complete; Phase 15 next (3 plans projected)
+Status: Phase 14 COMPLETE + v1.1.0 released (commit 9fed265, tag v1.1.0). Quality enrichment arc planned: Phase 15 (Tier 1+2 — finish_reason wiring + case-insensitive keywords + refusal patterns + Korean length boost + Shannon entropy), Phase 16 (Tier 3-A — 122B-as-judge for borderline cases with caching), Phase 17 (Tier 4 — distillation endgame: separate ML.NET QualityClassifier with closed-loop self-improvement reusing Phase 8 RetrainingService + Phase 9 canary patterns). ROADMAP entries + REQUIREMENTS rows added (18 new IDs: QSE-01..06, JDG-01..05, QCLS-01..07). Test baseline: 82 passed + 16 ignored + 0 failed. Next concrete action: `/gsd:discuss-phase 15` (or skip to `/gsd:plan-phase 15`).
+Last activity: 2026-05-10 — Designed Phases 15-17 (ROADMAP + REQUIREMENTS only; no PLAN.md files yet).
 
-Progress: [████████████████████████████████████████] 53 of 53 plans (Phase 14 COMPLETE — all phases done)
+Progress: [████████████████████████████████░░░░░░░░] 53 of 65 plans (Phases 1-14 complete; 15-17 planned with 12 projected plans — 3+4+5)
 
 ## Performance Metrics
 
