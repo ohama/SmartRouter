@@ -162,16 +162,25 @@ If `models/router.zip` is missing, a dummy classifier with random 1024-dim weigh
 
 When a non-streaming request is routed to 35B and the response fails a quality check, the router automatically retries on 122B and forwards 122B's response.
 
-**Trigger:** all of —
+**Prerequisite conditions (all must hold):**
 - Stage 3 routes to 35B
 - 35B returns HTTP 200
 - `Routing.QualityFallback.Enabled = true` (default)
-- 35B response's assistant content (`choices[0].message.content`) fails `isBadResponse`: length < `MinResponseLength` (default 30) OR contains any `BadKeywords` (default `["TODO","I think"]`)
+- Quality check fires (see trigger conditions below)
 - 122B reachable per HealthService
 
-> Note: the heuristic checks the assistant content, NOT the raw JSON envelope. Malformed upstream responses degrade safely — they are treated as empty content and trigger fallback (the conservative default).
+**Trigger conditions** (Phase 15; cheap-first cascade — first match wins):
 
-**On fire:** final response = 122B's. DecisionLog row: `target=Qwen122B`, `routing_reason=fallback_to_122b`, `fallback_used=true`. TraceLog row (if `--trace-responses`): captures both 35B's bad response and 122B's response, joined by `prompt_uid`.
+1. **finish_reason match** — upstream `choices[0].finish_reason` matches any value in `Routing.QualityFallback.BadFinishReasons` (default `["length", "content_filter"]`). Catches max-tokens-truncated and content-filtered responses regardless of content length or keywords. Case-insensitive.
+2. **Effective length below threshold** — `effectiveLength = int(length × (1 + koreanRatio × 0.8))` is below `MinResponseLength` (default 30). Korean responses are inflated by their Hangul-syllable ratio so a 28-char Korean answer (effective ~50 chars) passes while a 28-char ASCII answer fails.
+3. **Low Shannon entropy** — `charEntropy(content) < EntropyThreshold` (default 2.5). Catches token-loop responses (`"the the the..."`) that pass length and keyword checks. Normal text scores 4.0–5.0+; pathological loops score 1.0–2.0.
+4. **Bad keyword present** — content contains any value in `Routing.QualityFallback.BadKeywords` (case-insensitive since Phase 15; defaults `["TODO", "I think"]`). Operators may add refusal patterns like `"I cannot"`, `"As an AI"`, `"I'm unable"` if appropriate for their traffic — these are NOT in the default to avoid false positives in Q&A about AI itself.
+
+The quality check operates on `choices[0].message.content` (assistant text only), not the raw JSON envelope. Malformed upstream responses degrade safely — they are treated as empty content and trigger fallback.
+
+The `bad_reason` field in the trace log (if `--trace-responses`) records which check fired: `"finish_reason=length"`, `"length=12"`, `"entropy=1.85"`, or `"keyword=TODO"`.
+
+**On fire:** final response = 122B's. DecisionLog row: `target=Qwen122B`, `routing_reason=fallback_to_122b`, `fallback_used=true`. TraceLog row captures both 35B's bad response and 122B's response, joined by `prompt_uid`.
 
 **Streaming requests are exempt** — chunks already shipped; cannot retract.
 
@@ -182,7 +191,19 @@ When a non-streaming request is routed to 35B and the response fails a quality c
   "QualityFallback": {
     "Enabled": true,
     "MinResponseLength": 30,
-    "BadKeywords": [ "TODO", "I think", "I don't know", "cannot help" ]
+    "BadKeywords": ["TODO", "I think"],
+    "BadFinishReasons": ["length", "content_filter"],
+    "EntropyThreshold": 2.5
+  }
+}
+```
+
+To add refusal-pattern detection (operator opt-in only — not in default):
+
+```jsonc
+"Routing": {
+  "QualityFallback": {
+    "BadKeywords": ["TODO", "I think", "I cannot", "As an AI", "I'm unable"]
   }
 }
 ```
@@ -250,11 +271,13 @@ All keys in `src/SmartRouter.Cli/appsettings.json`. The router reads at startup;
 
 ### Routing.QualityFallback
 
-| Key | Type | Default |
-|---|---|---|
-| `Routing.QualityFallback.Enabled` | bool | true |
-| `Routing.QualityFallback.MinResponseLength` | int | 30 |
-| `Routing.QualityFallback.BadKeywords` | string[] | `["TODO","I think"]` |
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `Routing.QualityFallback.Enabled` | bool | `true` | Master kill switch. `false` disables all quality checks regardless of other settings. |
+| `Routing.QualityFallback.MinResponseLength` | int | `30` | Minimum effective length (Korean-aware) below which the response is considered bad. `<= 0` resets to default. |
+| `Routing.QualityFallback.BadKeywords` | string[] | `["TODO","I think"]` | Case-insensitive (since Phase 15) substring matches against assistant content. Operator may add refusal patterns like `"I cannot"`, `"As an AI"` — not in default to avoid false positives. |
+| `Routing.QualityFallback.BadFinishReasons` | string[] | `["length","content_filter"]` | **Phase 15.** Match `choices[0].finish_reason` (case-insensitive). `"length"` = max-tokens truncation; `"content_filter"` = moderation rejection. Empty array disables this check. |
+| `Routing.QualityFallback.EntropyThreshold` | float | `2.5` | **Phase 15.** Shannon character-entropy threshold. Content below this value is considered a repetition loop. Set to `0` or omit to use default; set to a very small value (e.g. `0.01`) to effectively disable entropy checks. |
 
 ### Routing.Health
 
@@ -361,11 +384,30 @@ Deduplicated; first-seen wins on duplicate `id`. If both upstreams down: `200 + 
   "active_122b": 1, "queue_depth_122b_high": 0, "queue_depth_122b_low": 2,
   "active_35b": 3, "requests_per_sec": 4.2, "avg_latency_ms_60s": 1850.0,
   "semaphore_available": 0, "baseline_version": "v3", "canary_version": null,
-  "canary_percentage": 0, "canary_active": false
+  "canary_percentage": 0, "canary_active": false,
+  "quality_check_hits_finish_reason": 4,
+  "quality_check_hits_length": 12,
+  "quality_check_hits_entropy": 1,
+  "quality_check_hits_keyword": 7
 }
 ```
 
 `semaphore_available: 0` = 122B at concurrency cap; new 122B-bound requests queue.
+
+**Phase 15 — quality check hit counters** (all `int64`, process-lifetime, never reset):
+
+| Field | Description |
+|---|---|
+| `quality_check_hits_finish_reason` | Fallbacks triggered by `finish_reason` match (e.g. `"length"`, `"content_filter"`) |
+| `quality_check_hits_length` | Fallbacks triggered by effective-length-below-threshold (Korean-aware) |
+| `quality_check_hits_entropy` | Fallbacks triggered by Shannon entropy below `EntropyThreshold` |
+| `quality_check_hits_keyword` | Fallbacks triggered by case-insensitive `BadKeywords` match |
+
+```bash
+# Spot which check is dominant in production
+curl -s http://127.0.0.1:4000/stats | \
+  jq '{quality_check_hits_finish_reason, quality_check_hits_length, quality_check_hits_entropy, quality_check_hits_keyword}'
+```
 
 ### GET /canary
 
@@ -444,11 +486,27 @@ For end-to-end debugging of routing + fallback. Disabled by default (file not cr
   "final_target": "Qwen122B",
   "final_response_excerpt": "Recursion is a function...",
   "total_latency_ms": 2350.0,
-  "timestamp": "2026-05-09T03:40:01.234Z"
+  "timestamp": "2026-05-09T03:40:01.234Z",
+  "bad_reason": "keyword=TODO"
 }
 ```
 
-`fallback_kind`: `"quality"` (35B response bad → 122B retry), `"availability"` (122B down → 35B reroute), or `null`.
+| Field | Type | Description |
+|---|---|---|
+| `fallback_kind` | string \| null | `"quality"` (35B bad → 122B retry), `"availability"` (122B down → 35B reroute), or `null` |
+| `bad_reason` | string \| null | **Phase 15.** Format `"tag=value"` when quality fallback fired; `null` when response was judged good or fallback was availability-driven. Tags: `finish_reason` (e.g. `"finish_reason=length"`), `length` (e.g. `"length=12"`), `entropy` (e.g. `"entropy=1.85"`), `keyword` (e.g. `"keyword=TODO"`). |
+
+**`bad_reason` operator workflows:**
+
+```bash
+# Which quality check fires most often? (aggregate by tag prefix)
+jq -r 'select(.bad_reason != null) | .bad_reason | split("=")[0]' \
+  logs/trace/$(date -u +%F).jsonl | sort | uniq -c | sort -rn
+
+# Show all requests where entropy detection fired
+jq 'select(.bad_reason | startswith("entropy=")) | {prompt_excerpt, bad_reason, final_target}' \
+  logs/trace/$(date -u +%F).jsonl
+```
 
 **Privacy:** prompts and excerpts stored in plaintext, truncated to 200/500 chars. Operator's responsibility to manage retention. No auto-cleanup currently.
 
