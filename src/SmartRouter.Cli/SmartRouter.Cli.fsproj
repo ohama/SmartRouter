@@ -21,6 +21,8 @@
     <Compile Include="Adapters/Logging.fs" />
     <Compile Include="Adapters/ColdStart.fs" />           <!-- Phase 14: cold-start backup handler (BCL only) -->
     <Compile Include="Adapters/QualityCheck.fs" />        <!-- Phase 14: isBadResponse heuristic + QualityFallbackOptions (BCL only) -->
+    <Compile Include="Adapters/BorderlineClassifier.fs" /> <!-- Phase 16: borderline detection (BCL only) -->
+    <Compile Include="Adapters/JudgeClient.fs" />          <!-- Phase 16: judge port + LRU cache + IJudgeStats -->
     <Compile Include="Adapters/DecisionLogger.fs" />
     <Compile Include="Adapters/DecisionLogWriter.fs" />
     <Compile Include="Adapters/TraceLogger.fs" />           <!-- Phase 14: trace JSONL writer (Channel + BackgroundService) -->
