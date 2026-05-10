@@ -5,6 +5,8 @@
 **대상:** quality fallback 의 false positive / false negative 를 줄이고 싶거나, distillation 디자인이 의도한 "self-improving router" 단계로 진화시키고 싶은 사람.
 **관련:** `quality-fallback-integration-tests.md`, `distillation-fallback-design-references.md`
 
+> **Status (2026-05-10):** Tier 1 (sub-tiers 1-A finish_reason, 1-B case-insensitive keywords, 1-D Korean length correction) and Tier 2 sub-tier 2-A (Shannon entropy) implemented in Phase 15 — see `.planning/phases/15-quality-signal-enrichment/`. Tier 1-C (refusal-pattern default expansion) was DEFERRED — operator opt-in via `BadKeywords` is the chosen path (see `.planning/phases/15-quality-signal-enrichment/15-CONTEXT.md` § "Refusal pattern default 정책"). Tier 2-B (prompt-relative length) and Tier 2-C (logprob threshold) remain candidates for Phase 16+. Tier 3 (122B-as-judge) and Tier 4 (QualityClassifier ML model) are also Phase 16+.
+
 ---
 
 ## 결론 (TL;DR)

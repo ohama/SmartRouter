@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Quality fallback now triggers on 5 dimensions instead of 2 (Phase 15 — silent enable).** Existing `Routing.QualityFallback` config (`Enabled`, `MinResponseLength`, `BadKeywords`) is unchanged. Two new config keys with defaults activate automatically:
+  - `finish_reason="length"` or `"content_filter"` now triggers fallback (new Stage 1). Operators on mlx_lm will see more 35B→122B retries when 35B hits its token limit.
+  - Shannon entropy detection (default threshold 2.5) catches token-loop responses like `"the the the..."` (new Stage 3).
+  - Korean-aware effective length: Hangul-syllable content is inflated by `koreanRatio × 0.8` before comparing to `MinResponseLength` — Korean responses are less likely to false-positive as "too short" (Stage 2 refinement).
+  - `BadKeywords` matching is now **case-insensitive** (was case-sensitive in Phase 14). The keyword `"TODO"` now matches `"todo"`, `"TODO"`, `"Todo"`, etc.
+  - Detection cascade is cheap-first (finish_reason → length → entropy → keyword) with early exit at first match.
+- Operators wanting Phase 14's narrower trigger behavior can restore it by setting:
+  ```jsonc
+  "Routing": { "QualityFallback": { "BadFinishReasons": [], "EntropyThreshold": 0.01 } }
+  ```
+  (`BadFinishReasons: []` disables finish_reason checks; `EntropyThreshold: 0.01` requires near-zero entropy to fire — effectively disabled.)
+
+### Added
+
+- TraceLog field `bad_reason` (string | null) — records which quality check fired and why. Format: `"tag=value"` (e.g. `"finish_reason=length"`, `"length=12"`, `"entropy=1.85"`, `"keyword=TODO"`). `null` when response judged good or fallback was availability-driven. Operator jq: `jq -r 'select(.bad_reason != null) | .bad_reason | split("=")[0]'` to aggregate by detection tag.
+- `/stats` endpoint exposes 4 new process-lifetime counters (all `int64`): `quality_check_hits_finish_reason`, `quality_check_hits_length`, `quality_check_hits_entropy`, `quality_check_hits_keyword`. Use to identify which check dominates in production.
+- Config keys `Routing.QualityFallback.BadFinishReasons` (string[]; default `["length","content_filter"]`) and `Routing.QualityFallback.EntropyThreshold` (float; default `2.5`).
+
 ## [1.1.1] - 2026-05-10
 
 Patch release fixing a critical bug in the v1.1.0 quality fallback path.
