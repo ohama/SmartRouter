@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 15 IN PROGRESS (Quality Signal Enrichment). 15-01 + 15-02 COMPLETE. 15-03 next (QSE unit tests + README update). Phase 14 COMPLETE + v1.1.0 released.
+**Current focus:** Phase 15 COMPLETE (Quality Signal Enrichment). All 3 plans done. Phase 16 next. Phase 14 COMPLETE + v1.1.0 released.
 
 ## Current Position
 
-Phase: 15 of 17 in progress
-Plan: 2 of 3 in Phase 15 — 15-01 + 15-02 complete; 15-03 next
-Status: 15-02 COMPLETE (commits 9a17270 + d27dffa + 7b89bc6). analyzeResponse 4-stage cascade, isBadResponse compat wrapper, IQualityCheckStats + 4 counters, StatsWire 4 new fields, bad_reason TraceRecord field, ChatCompletions wiring, DI in both composition paths. Test baseline preserved: 88 passed + 16 ignored + 0 failed. Next: 15-03 (QSE unit tests + README).
-Last activity: 2026-05-10 — Completed 15-02-ANALYZERESPONSE-AND-WIRING-PLAN.md.
+Phase: 15 of 17 COMPLETE → 16 next
+Plan: 3 of 3 in Phase 15 — all complete
+Status: 15-03 COMPLETE (commits da35014 + cf97738 + 34bc979). 14 QSE tests (13 unit + 1 fake-Kestrel integration) for all 5 detection dimensions. README §5.5/§7/§9.3/§8 updated. CHANGELOG [Unreleased] silent-enable entry added. Final baseline: 102 passed + 16 ignored + 0 failed.
+Last activity: 2026-05-10 — Completed 15-03-TESTS-AND-DOCS-PLAN.md. Phase 15 COMPLETE.
 
-Progress: [█████████████████████████████████░░░░░░░] 55 of 65 plans (Phases 1-14 complete; 15-01 + 15-02 complete; 15-03 + Phases 16-17 remaining)
+Progress: [███████████████████████████████████░░░░░] 58 of 65 plans (Phases 1-15 complete; Phases 16-17 remaining)
 
 ## Performance Metrics
 
@@ -260,6 +260,10 @@ Recent decisions affecting current work:
 - 15-02: open SmartRouter.Cli.Adapters.QueueDispatcher added to ChatCompletions.fs (was missing; needed for IQualityCheckStats)
 - 15-02: bad_reason tracks initial verdict only (why fallback triggered, not quality of retry)
 - 15-02: Pre-existing streaming-cancellation flaky test (1 failure in first run of 3); 2nd+3rd runs clean at 88+16+0
+- 15-03: ICanaryState required by /stats endpoint at request time; QualityFallbackTests.startTestRouter doesn't register it because it never GETs /stats; QSE integration test does GET /stats so CanaryState(0) + ICanaryState alias added to QSE test fixture
+- 15-03: IQualityCheckStats NoOp from configureWithoutMl overridden with real QueueDispatcher-backed instance via last-registration-wins AddSingleton (after configureWithoutMl call) so counter assertions work in integration test
+- 15-03: 14 QSE test cases (13 unit + 1 fake-Kestrel integration); all pass; Phase 14 QF-01..08 baseline preserved; PITFALL-10 flake pre-existing
+- 15-03: SUMMARY.md files created: 15-03-SUMMARY.md + 15-SUMMARY.md (phase-level aggregate)
 
 ### Pending Todos
 
@@ -276,5 +280,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-10
-Stopped at: Completed 15-02-ANALYZERESPONSE-AND-WIRING-PLAN.md. analyzeResponse cascade + isBadResponse wrapper + IQualityCheckStats + StatsWire 4 fields + bad_reason trace + ChatCompletions wiring + DI registration. Test baseline preserved: 88 passed + 16 ignored. Key commits: 9a17270 (cascade), d27dffa (counters+stats), 7b89bc6 (wiring+DI).
+Stopped at: Completed 15-03-TESTS-AND-DOCS-PLAN.md. Phase 15 fully complete. 14 QSE tests (102 total passed). README §5.5/§7/§9.3/§8 updated. CHANGELOG [Unreleased] updated. Key commits: da35014 (tests), cf97738 (README), 34bc979 (CHANGELOG+planning docs).
 Resume file: None
