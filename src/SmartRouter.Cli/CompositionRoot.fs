@@ -47,6 +47,7 @@ open SmartRouter.Cli.Adapters.RetrainLock
 open SmartRouter.Cli.Adapters.HealthService
 open SmartRouter.Cli.Adapters.LogRetentionService
 open SmartRouter.Cli.Adapters.TraceLogger
+open SmartRouter.Cli.Adapters.QualityCheck
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -72,10 +73,12 @@ type MlOptions =
 /// Cli-only: Core uses the pure RoutingConfig record from Domain.fs.
 [<CLIMutable>]
 type RoutingOptions =
-    { TimeoutSeconds : int
-      ML             : MlOptions  // Routing.ML subsection; null when section absent
-      TaskTable      : Dictionary<string, TaskTableEntry>
-      ModelAliases   : Dictionary<string, string> }
+    { TimeoutSeconds  : int
+      ML              : MlOptions  // Routing.ML subsection; null when section absent
+      TaskTable       : Dictionary<string, TaskTableEntry>
+      ModelAliases    : Dictionary<string, string>
+      QualityFallback : QualityFallbackOptions   // NEW Phase 14: quality-fallback heuristic options
+    }
 
 // ── buildRoutingConfig ───────────────────────────────────────────────────────
 
@@ -117,6 +120,18 @@ let buildRoutingConfig (opts: RoutingOptions) : RoutingConfig =
 
     { TaskTable   = taskMap
       MlThreshold = mlThreshold }
+
+/// Defensive helper: normalize QualityFallbackOptions from the JSON binding.
+/// Called by configureRequestPipeline and configureWithoutMl before injecting
+/// into DI. Handles absent-section (null), zero MinResponseLength, null BadKeywords.
+let normalizeQualityFallback (opts: RoutingOptions) : QualityFallbackOptions =
+    if obj.ReferenceEquals(opts.QualityFallback, null) then
+        { Enabled = false; MinResponseLength = 30; BadKeywords = [||] }
+    else
+        let qf = opts.QualityFallback
+        { Enabled           = qf.Enabled
+          MinResponseLength = (if qf.MinResponseLength <= 0 then 30 else qf.MinResponseLength)
+          BadKeywords       = (if obj.ReferenceEquals(qf.BadKeywords, null) then [||] else qf.BadKeywords) }
 
 // ── validateConfig ───────────────────────────────────────────────────────────
 

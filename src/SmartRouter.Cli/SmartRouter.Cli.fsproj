@@ -20,6 +20,7 @@
     <Compile Include="Adapters/Json.fs" />
     <Compile Include="Adapters/Logging.fs" />
     <Compile Include="Adapters/ColdStart.fs" />           <!-- Phase 14: cold-start backup handler (BCL only) -->
+    <Compile Include="Adapters/QualityCheck.fs" />        <!-- Phase 14: isBadResponse heuristic + QualityFallbackOptions (BCL only) -->
     <Compile Include="Adapters/DecisionLogger.fs" />
     <Compile Include="Adapters/DecisionLogWriter.fs" />
     <Compile Include="Adapters/TraceLogger.fs" />           <!-- Phase 14: trace JSONL writer (Channel + BackgroundService) -->
