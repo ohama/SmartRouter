@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-10
+
+Quality signal enrichment release. The fallback heuristic now reads
+five signals instead of two — most notably `finish_reason="length"`
+(catches truncated responses) and Shannon entropy (catches token loops).
+Existing config still works; new behaviors activate silently with
+sensible defaults.
+
 ### Changed
 
-- **Quality fallback now triggers on 5 dimensions instead of 2 (Phase 15 — silent enable).** Existing `Routing.QualityFallback` config (`Enabled`, `MinResponseLength`, `BadKeywords`) is unchanged. Two new config keys with defaults activate automatically:
+- **Quality fallback now triggers on 5 dimensions instead of 2 (silent enable).** Existing `Routing.QualityFallback` config (`Enabled`, `MinResponseLength`, `BadKeywords`) is unchanged. Two new config keys with defaults activate automatically:
   - `finish_reason="length"` or `"content_filter"` now triggers fallback (new Stage 1). Operators on mlx_lm will see more 35B→122B retries when 35B hits its token limit.
   - Shannon entropy detection (default threshold 2.5) catches token-loop responses like `"the the the..."` (new Stage 3).
   - Korean-aware effective length: Hangul-syllable content is inflated by `koreanRatio × 0.8` before comparing to `MinResponseLength` — Korean responses are less likely to false-positive as "too short" (Stage 2 refinement).
