@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 15 IN PROGRESS (Quality Signal Enrichment). 15-01 COMPLETE (types + helpers + config). 15-02 next (analyzeResponse cascade + ChatCompletions.fs caller update). Phase 14 COMPLETE + v1.1.0 released.
+**Current focus:** Phase 15 IN PROGRESS (Quality Signal Enrichment). 15-01 + 15-02 COMPLETE. 15-03 next (QSE unit tests + README update). Phase 14 COMPLETE + v1.1.0 released.
 
 ## Current Position
 
 Phase: 15 of 17 in progress
-Plan: 1 of 3 in Phase 15 — 15-01 complete; 15-02 next
-Status: 15-01 COMPLETE (commits 8d5408e + 91a2489). Verdict/BadReason DUs, 5 BCL helpers, QualityFallbackOptions 5-field extension, normalizeQualityFallback extended, appsettings.json defaults wired. Test baseline preserved: 88 passed + 16 ignored + 0 failed. Next: 15-02 (analyzeResponse cascade + ChatCompletions.fs caller update).
-Last activity: 2026-05-10 — Completed 15-01-CONFIG-AND-DOMAIN-PLAN.md.
+Plan: 2 of 3 in Phase 15 — 15-01 + 15-02 complete; 15-03 next
+Status: 15-02 COMPLETE (commits 9a17270 + d27dffa + 7b89bc6). analyzeResponse 4-stage cascade, isBadResponse compat wrapper, IQualityCheckStats + 4 counters, StatsWire 4 new fields, bad_reason TraceRecord field, ChatCompletions wiring, DI in both composition paths. Test baseline preserved: 88 passed + 16 ignored + 0 failed. Next: 15-03 (QSE unit tests + README).
+Last activity: 2026-05-10 — Completed 15-02-ANALYZERESPONSE-AND-WIRING-PLAN.md.
 
-Progress: [█████████████████████████████████░░░░░░░] 54 of 65 plans (Phases 1-14 complete; 15-01 complete; 15-02/03 + Phases 16-17 remaining)
+Progress: [█████████████████████████████████░░░░░░░] 55 of 65 plans (Phases 1-14 complete; 15-01 + 15-02 complete; 15-03 + Phases 16-17 remaining)
 
 ## Performance Metrics
 
@@ -254,6 +254,12 @@ Recent decisions affecting current work:
 - 15-01: F# record extension (3→5 fields) breaks all construction sites atomically — QualityFallbackTests.fs QF-03..07 sites updated in same commit as QualityCheck.fs + CompositionRoot.fs; isBadResponse body unchanged so behavior preserved
 - 15-01: Refusal-default policy enforced: default BadKeywords stays ["TODO","I think"]; CONTEXT.md §"Refusal pattern default 정책" takes precedence over ROADMAP SC#3 wording; README §7 opt-in guidance deferred to 15-03
 - 15-01: Plan 15-02 call pattern: analyzeResponse introduced as primary; isBadResponse becomes 3-line wrapper (match analyzeResponse opts None body with Bad _ -> true | Good -> false); zero churn on QF-03..QF-08
+- 15-02: IQualityCheckStats as separate interface on QueueDispatcher (not extending IStatsProvider); struct tuple in GetHits is allocation-free on /stats hot path
+- 15-02: bad_reason wire format "tag=value" with '=' separator; operator jq: `.bad_reason | split("=")[0]`
+- 15-02: configureWithoutMl uses inline NoOp object expression for IQualityCheckStats (no QueueDispatcher in offline path)
+- 15-02: open SmartRouter.Cli.Adapters.QueueDispatcher added to ChatCompletions.fs (was missing; needed for IQualityCheckStats)
+- 15-02: bad_reason tracks initial verdict only (why fallback triggered, not quality of retry)
+- 15-02: Pre-existing streaming-cancellation flaky test (1 failure in first run of 3); 2nd+3rd runs clean at 88+16+0
 
 ### Pending Todos
 
@@ -270,5 +276,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-10
-Stopped at: Completed 15-01-CONFIG-AND-DOMAIN-PLAN.md. Verdict/BadReason DUs + 5 helpers + QualityFallbackOptions 5-field extension + normalizeQualityFallback + appsettings.json defaults. Test baseline preserved: 88 passed + 16 ignored. Key commits: 8d5408e (domain types), 91a2489 (appsettings.json).
+Stopped at: Completed 15-02-ANALYZERESPONSE-AND-WIRING-PLAN.md. analyzeResponse cascade + isBadResponse wrapper + IQualityCheckStats + StatsWire 4 fields + bad_reason trace + ChatCompletions wiring + DI registration. Test baseline preserved: 88 passed + 16 ignored. Key commits: 9a17270 (cascade), d27dffa (counters+stats), 7b89bc6 (wiring+DI).
 Resume file: None
