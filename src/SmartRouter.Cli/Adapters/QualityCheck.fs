@@ -149,29 +149,64 @@ let private matchKeyword (keywords: string array) (content: string) : Verdict =
         | Some kw -> Bad (KeywordMatch kw)
         | None    -> Good
 
-/// Pure F# (BCL only). Returns true when the response is "bad" by the configured
-/// heuristic. Returns false when QualityFallback is disabled regardless of content.
+/// Phase 15 — Cheap-first cascade returning structured Verdict.
 ///
-/// Heuristic checks the assistant content (extractAssistantText), NOT the raw
-/// JSON envelope — see issue #13 for the production bug this fix addresses.
+/// Stage order (CONTEXT.md §검사 순서):
+///   1. finish_reason match (1 string compare per BadFinishReasons element)
+///   2. effective length (Korean-aware; 1 single pass + multiplication)
+///   3. Shannon entropy (O(n) char-count + log)
+///   4. BadKeywords (Array.tryFind × IndexOf)
 ///
-/// Defaults applied at the option-binding layer (CompositionRoot):
-///   - Enabled: true
-///   - MinResponseLength: 30
-///   - BadKeywords: ["TODO", "I think"]
+/// First match wins (early-exit). Good only when all 4 stages pass.
+/// Enabled=false short-circuits to Good (kill switch).
 ///
-/// Phase 14 case-sensitive keyword match preserved here — Plan 15-02 replaces
-/// this body with analyzeResponse cascade (which is case-insensitive).
-let isBadResponse (opts: QualityFallbackOptions) (responseBody: string) : bool =
-    if not opts.Enabled then
-        false
+/// Stage 1 runs without parsing JSON beyond what the caller already extracted.
+/// Stages 2-4 share a single extractAssistantText call (Pitfall 3 — no double parse).
+let analyzeResponse
+    (opts: QualityFallbackOptions)
+    (finishReason: string option)
+    (responseBody: string)
+    : Verdict =
+    if not opts.Enabled then Good
     else
-        let content = extractAssistantText responseBody
-        if content.Length < opts.MinResponseLength then
-            true
-        elif obj.ReferenceEquals(opts.BadKeywords, null) then
-            false
-        else
-            opts.BadKeywords
-            |> Array.exists (fun kw ->
-                not (String.IsNullOrEmpty(kw)) && content.Contains(kw))
+        // Stage 1: finish_reason
+        let stage1 =
+            match finishReason with
+            | Some fr when not (obj.ReferenceEquals(opts.BadFinishReasons, null)) ->
+                let hit =
+                    opts.BadFinishReasons
+                    |> Array.exists (fun r ->
+                        not (String.IsNullOrEmpty(r))
+                        && fr.Equals(r, StringComparison.OrdinalIgnoreCase))
+                if hit then Some (Bad (FinishReasonMatch fr)) else None
+            | _ -> None
+
+        match stage1 with
+        | Some v -> v
+        | None ->
+            // Stages 2-4 need the assistant content
+            let content = extractAssistantText responseBody
+
+            // Stage 2: effective length (Korean-aware)
+            let effLen = effectiveLength content
+            if effLen < opts.MinResponseLength then
+                Bad (LengthBelow effLen)
+            else
+                // Stage 3: Shannon entropy
+                let entropy = charEntropy content
+                if opts.EntropyThreshold > 0.0 && entropy < opts.EntropyThreshold then
+                    Bad (LowEntropy entropy)
+                else
+                    // Stage 4: BadKeywords (case-insensitive)
+                    matchKeyword opts.BadKeywords content
+
+/// Phase 14 backward-compat wrapper. Returns Bool from a Verdict-shaped result.
+/// New callers should prefer `analyzeResponse` (returns structured Verdict).
+/// Equivalent to: analyzeResponse opts None responseBody |> (function Bad _ -> true | Good -> false)
+///
+/// Phase 15 — finish_reason extraction is the new caller's responsibility;
+/// this wrapper passes None so Phase 14 unit tests remain bit-stable.
+let isBadResponse (opts: QualityFallbackOptions) (responseBody: string) : bool =
+    match analyzeResponse opts None responseBody with
+    | Bad _ -> true
+    | Good  -> false
