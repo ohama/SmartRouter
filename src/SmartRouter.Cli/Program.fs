@@ -7,6 +7,7 @@ open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Hosting
 open Microsoft.Extensions.Options
 open Microsoft.Extensions.Logging
+open System.IO
 open Serilog
 open Serilog.Events
 open SmartRouter.Cli.Adapters
@@ -88,6 +89,26 @@ let private applyLogLevelFromArgs (args: string array) : unit =
 let main args =
     try
         try
+            // Phase 14: --cold-start MUST run BEFORE configureServices (ensureDummyModel
+            // sees the post-backup state). Build a minimal bootstrap config to drive
+            // Logging.configure once; per-branch builders re-read the same appsettings.json.
+            let bootstrapConfig =
+                ConfigurationBuilder()
+                    .SetBasePath(Directory.GetCurrentDirectory())
+                    .AddJsonFile("appsettings.json", optional = true)
+                    .Build() :> IConfiguration
+            Logging.configure(bootstrapConfig)
+            applyLogLevelFromArgs args
+
+            if args |> Array.contains "--cold-start" then
+                use coldStartFactory =
+                    LoggerFactory.Create(fun b ->
+                        b.AddSerilog(Log.Logger, dispose = false) |> ignore)
+                let coldStartLogger = coldStartFactory.CreateLogger("ColdStart")
+                Adapters.ColdStart.runColdStartBackup coldStartLogger System.Environment.CurrentDirectory
+                // Backup complete; startup continues — ensureDummyModel sees no router.zip
+                // and generates a fresh dummy model. Process does NOT exit here.
+
             // Phase 7: --retrain CLI command — runs the offline labeling pipeline and exits.
             // Does NOT start the Kestrel host. Useful for operator-driven manual retraining
             // and CI-friendly testing. Phase 8's BackgroundService composes the same DI
@@ -98,10 +119,8 @@ let main args =
                                .SetBasePath(System.IO.Directory.GetCurrentDirectory())
                                .AddJsonFile("appsettings.json", optional = false)
                     |> ignore
-                // Configure Serilog from IConfiguration now that appsettings.json is loaded.
-                Logging.configure(retrainBuilder.Configuration)
-                // Phase 13 Q8: apply --log-level flag (or fail on legacy --trace).
-                applyLogLevelFromArgs args
+                // Logging.configure and applyLogLevelFromArgs already called in the Phase 14
+                // bootstrap preamble above; no need to repeat here.
                 // configureWithoutMl skips IEmbedder/IClassifier/RoutingAlgorithmRegistration/ML model checks.
                 // The retrain pipeline needs IFailureDetector + ITeacherLabeler + IHardCaseDatasetWriter only.
                 CompositionRoot.configureWithoutMl retrainBuilder.Services retrainBuilder.Configuration |> ignore
@@ -177,12 +196,9 @@ let main args =
 
             let builder = WebApplication.CreateBuilder(args)
 
-            // Configure Serilog from IConfiguration (dual sink: Console stderr + rolling File).
-            // Must run AFTER builder creation so IConfiguration (appsettings.json) is available.
-            // Pre-init crash window writes to stderr via the outer `with` eprintfn fallback.
-            Logging.configure(builder.Configuration)
-            // Phase 13 Q8: apply --log-level flag (or fail on legacy --trace).
-            applyLogLevelFromArgs args
+            // Logging.configure and applyLogLevelFromArgs already called in the Phase 14
+            // bootstrap preamble above. builder.Configuration (appsettings.json) has the same
+            // values as bootstrapConfig — both read the same file from the same basePath.
 
             // Wire Serilog as the ASP.NET host logger
             builder.Host.UseSerilog() |> ignore
