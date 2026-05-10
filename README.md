@@ -1,6 +1,6 @@
 # smart-router
 
-An F# .NET 10 gateway that routes every OpenAI-compatible request to the right local model — fast Qwen 35B for simple work, powerful Qwen 122B only when the task or prompt complexity warrants it — and retrains its own classifier from live feedback.
+An F# .NET 10 gateway routing OpenAI-compatible requests between local Qwen 35B (fast) and Qwen 122B (powerful), with quality fallback, ML-based routing, and self-retraining from live feedback.
 
 ## Table of Contents
 
@@ -12,195 +12,107 @@ An F# .NET 10 gateway that routes every OpenAI-compatible request to the right l
 6. [ML Feedback Loop](#6-ml-feedback-loop)
 7. [Configuration Reference](#7-configuration-reference)
 8. [Endpoints](#8-endpoints)
-9. [Debugging](#9-debugging)
-10. [Hermes Integration](#10-hermes-integration)
-11. [Graphify Integration](#11-graphify-integration)
-12. [Operations](#12-operations)
+9. [Logs and Debugging](#9-logs-and-debugging)
+10. [Hermes / Graphify Integration](#10-hermes--graphify-integration)
+11. [Operations](#11-operations)
+12. [CLI Flags](#12-cli-flags)
 13. [Troubleshooting](#13-troubleshooting)
 
 ---
 
 ## 1. What This Is
 
-smart-router is a local-only HTTP gateway that sits in front of two `mlx_lm.server` instances (Qwen 3.6 35B at port 8000 and Qwen 3.5 122B at port 8001) and presents a single OpenAI-compatible endpoint at `http://127.0.0.1:4000`. Clients — Hermes (general coding assistant) and Graphify (graph-indexing pipeline) — send requests exactly as they would to OpenAI; the router picks the model, enforces a concurrency cap on 122B, logs every decision to a JSONL file, and periodically retrains its ML classifier from that log.
+A local-only HTTP gateway at `http://127.0.0.1:4000` fronting two `mlx_lm.server` instances (Qwen 35B at :8000, Qwen 122B at :8001). Clients (Hermes, Graphify) send OpenAI-compatible requests; the router picks the model, enforces a 1-in-flight cap on 122B, optionally retries 35B's bad responses on 122B, logs every decision to JSONL, and retrains its classifier from that log.
 
-The problem it solves: 122B is expensive in compute and slow to respond; 35B is fast but less capable on complex multi-file reasoning tasks. Without a router, clients either always hit 122B (slow, hot GPU) or always hit 35B (missed quality for hard tasks). smart-router eliminates that trade-off by making the pick automatically, per request.
+**Why:** 122B is slow; 35B is fast but weaker on hard tasks. Without a router, you pay 122B's latency always or 35B's quality always. smart-router picks per request.
 
 ---
 
 ## 2. Architecture
 
 ```
-  Hermes Agent          Graphify Pipeline
-  (~/hermes-agent)      (graph_indexing + compiler_debug …)
-        │                       │
-        └───────────┬───────────┘
-                    │  HTTP POST /v1/chat/completions
-                    ▼
-         ┌──────────────────────┐
-         │   smart-router :4000  │
-         │                      │
-         │  CorrelationMiddleware│  ← injects correlation_id UUID per request
-         │  ┌────────────────┐  │
-         │  │ Routing.fs     │  │  ← 3-stage pure pipeline (no IO)
-         │  │  1. model ovr  │  │
-         │  │  2. task table │  │
-         │  │  3. ML         │  │
-         │  └────────────────┘  │
-         │  QueueDispatcher     │  ← SemaphoreSlim cap: 1 in-flight 122B
-         │  CanaryService       │  ← FileSystemWatcher on router-canary.zip
-         │  DecisionLogger      │  ← async channel → JSONL file
-         └──────┬───────────────┘
-                │
-     ┌──────────┴──────────┐
-     ▼                     ▼
-  qwen36-35b           qwen122b
-  :8000                :8001
-  (mlx_lm.server)      (mlx_lm.server)
+  Hermes / Graphify
+        │  POST /v1/chat/completions
+        ▼
+  smart-router :4000
+    ├─ CorrelationMiddleware     → injects correlation_id
+    ├─ Routing (3 stages, pure)  → 1. model override → 2. task table → 3. ML
+    ├─ QueueDispatcher           → SemaphoreSlim(1) on 122B
+    ├─ QualityFallback           → 35B response bad → retry on 122B (non-streaming)
+    ├─ CanaryService             → FileSystemWatcher on router-canary.zip
+    ├─ DecisionLogger            → async channel → JSONL
+    └─ TraceLogger (opt-in)      → async channel → JSONL (--trace-responses)
+        │
+   ┌────┴────┐
+   ▼         ▼
+ Qwen35B   Qwen122B
+ :8000     :8001
 ```
 
-### Hexagonal architecture
+**Hexagonal:** `SmartRouter.Core` (pure, BCL-only — no Microsoft.ML, no HttpClient, no ASP.NET Core, no Serilog). Adapters live in `SmartRouter.Cli`. Project boundary enforced via `.fsproj` references.
 
-Core (`src/SmartRouter.Core/`) has zero infrastructure references. Microsoft.ML, Serilog, HttpClient, ASP.NET Core, and FSharp.SystemTextJson are all confined to the Cli project (`src/SmartRouter.Cli/`). The hexagonal boundary is enforced at the project level — `SmartRouter.Core.fsproj` has no NuGet dependencies.
+**Routing algorithm:** Stage 3 always runs ML. bge-m3 int8 ONNX → 1024-dim L2-normalized vector → ML.NET `LbfgsLogisticRegression` → confidence ≥ `Routing.ML.Threshold` (default 0.5) routes to 122B, else 35B. Heuristic routing was retired; snapshot at `archive/heuristic-baseline` branch + `v0.5-heuristic-baseline` tag.
 
-### Routing algorithm
+**Two feedback loops:**
+- **Loop A (real-time):** 122B unreachable + non-graph_indexing → reroute to 35B (`fallback_used=true`, `routing_reason=fallback_to_35b`). Quality-bad 35B response → retry on 122B (`routing_reason=fallback_to_122b`). DecisionLog row written for every request.
+- **Loop B (background):** `RetrainingService` periodically reads `fallback_used=true` rows, sends them to a teacher (122B), writes labels to `datasets/hard-cases.jsonl`, retrains ML.NET model, validates against held-out set, and atomically swaps `models/router.zip`.
 
-Stage 3 always runs the ML algorithm — embeds the prompt with bge-m3 int8 (ONNX) and feeds the 1024-dim vector to an ML.NET `LbfgsLogisticRegression` classifier trained on historical decisions. Confidence ≥ `Routing.ML.Threshold` (default `0.5`) routes to 122B; otherwise 35B. Requires `models/router.zip` and the ONNX files under `models/embed/`.
-
-A single-shape `RoutingAlgorithm` function-type alias (`RoutingConfig -> RouterRequest -> RoutingDecision`) lives in Core for future extensibility; only the ML implementation ships in v1. Heuristic routing was retired in Phase 12 — historical snapshot at `archive/heuristic-baseline` branch + `v0.5-heuristic-baseline` tag.
-
-### Two feedback loops
-
-**Loop A — real-time fallback signal**
-Every request that is routed to 122B but finds it unreachable gets transparently rerouted to 35B (`fallback_used=true`). A `DecisionLog` JSONL row is written for every request regardless of which path it took. `fallback_used=true` rows accumulate in `logs/decisions/YYYY-MM-DD.jsonl`.
-
-**Loop B — background retraining**
-A `BackgroundService` (`RetrainingService`) runs two `PeriodicTimer` loops — a daily timer and a count-threshold check every few minutes. When either fires: `FailureDetector` extracts rows with `fallback_used=true`, `TeacherLabeler` asks the 122B teacher model to label each one (`ROUTE_35B` or `ROUTE_122B`), the labeled examples are written to `datasets/hard-cases.jsonl`, `DatasetMerger` blends them 70/30 with the original training set, `Retrainer` trains a new ML.NET model, a `Validator` checks the held-out fallback rate, and an atomic `File.Move(overwrite=true)` swaps in the new `models/router.zip`. `ModelVersionProvider` increments the version string so subsequent `DecisionLog` rows carry the new `model_version`.
-
-### Canary deployment
-
-When `models/router-canary.zip` is dropped into the models directory, a `FileSystemWatcher` detects it and `CanaryService` arms the canary cohort. 10% of traffic (by `correlation_id` — sticky via `ContextualTargetingFilter`) is routed to the canary classifier; the other 90% uses the baseline. `CanaryWatchdog` monitors a rolling 60-second fallback-rate delta; if `canary_fallback_rate − baseline_fallback_rate > 0.10` and `AutoRollbackEnabled=true`, the watchdog automatically rolls back. Promote via `POST /canary/promote`; manual rollback via `POST /canary/rollback`.
+**Canary:** Drop `models/router-canary.zip` into the models dir → FileSystemWatcher arms canary cohort. 10% of traffic (sticky by `correlation_id`) routes to canary. Watchdog auto-rolls-back if canary fallback rate exceeds baseline by >10% over a 60s rolling window.
 
 ---
 
 ## 3. Requirements
 
-- macOS arm64 (Apple Silicon) — mlx_lm runs Metal kernels
-- .NET 10 SDK (`dotnet --version` must report `10.x`)
-- Two `mlx_lm.server` instances running:
+- macOS arm64 (Apple Silicon) — mlx_lm uses Metal kernels
+- .NET 10 SDK
+- Two `mlx_lm.server` instances running independently:
   - Qwen 3.6 35B at `http://127.0.0.1:8000`
   - Qwen 3.5 122B at `http://127.0.0.1:8001`
-- For ML routing (always-on as of Phase 12): bge-m3 int8 ONNX files in `models/embed/`
-- Python `huggingface_hub` package (for the `hf` CLI used by the model download script)
+- bge-m3 int8 ONNX files in `models/embed/` (mandatory; router refuses to start without them)
+- Python `huggingface_hub` for the `hf` CLI (model download script)
 
-The router does not start or manage the `mlx_lm.server` processes. They must be running independently (via launchd or manually) before the router starts probing them.
-
-### 3.1 First-time setup — ML embedding files (mandatory)
-
-Smart-router uses bge-m3 int8 embeddings for ML routing. **Two files must exist on disk before `dotnet run`** or the router exits at startup with a fatal log:
-
-```
-[FTL] Required ML embedding files missing:
-        models/embed/bge-m3-int8.onnx
-        models/embed/sentencepiece.bpe.model
-```
-
-Fetch them once with the helper script:
-
-```bash
-./scripts/download-models.sh
-```
-
-This downloads `Teradata/bge-m3` from HuggingFace via the `hf` CLI (~542 MB int8 ONNX + ~5 MB SentencePiece tokenizer) and places them at:
-
-- `models/embed/bge-m3-int8.onnx`
-- `models/embed/sentencepiece.bpe.model`
-- `models/embed/tokenizer.json` (kept for tokenizer flexibility; harmless if unused)
-
-Prerequisites for the script:
+### 3.1 First-time setup — ML embedding files
 
 ```bash
 pip install -U huggingface_hub
-hf --version   # must succeed; see issue #5 if you have legacy huggingface-cli
+./scripts/download-models.sh
 ```
 
-### 3.2 Where to put the `models/` directory
+Downloads `Teradata/bge-m3` (~542 MB int8 ONNX + ~5 MB SentencePiece) to `models/embed/`. Required files: `bge-m3-int8.onnx`, `sentencepiece.bpe.model`. If absent at startup, the router exits with a fatal log.
 
-The router resolves model paths relative to its **process working directory**, not the binary location. Three deployment modes:
+### 3.2 Where `models/` lives
 
-| Mode | CWD | Where `models/` must live |
+The router resolves model paths relative to its **process working directory**.
+
+| Mode | CWD | `models/` location |
 |---|---|---|
 | `dotnet run --project src/SmartRouter.Cli` from repo root | `src/SmartRouter.Cli/` | symlink: `ln -s ../../models src/SmartRouter.Cli/models` |
-| `dotnet run --project src/SmartRouter.Cli` from `src/SmartRouter.Cli/` | `src/SmartRouter.Cli/` | place `models/` directly in `src/SmartRouter.Cli/models/` |
-| launchd-managed install (`scripts/deploy.sh`) | `~/llm-system/services/smart-router/` | the deploy script copies `models/` into the install dir |
+| launchd-managed install | `~/llm-system/services/smart-router/` | `scripts/deploy.sh` copies `models/` into the install dir |
 
-The simplest path for local dev is the symlink — `download-models.sh` writes to repo-root `models/`, and the symlink lets the running process resolve it. Issue #9 tracks making this CWD-independent (auto-resolve via `AppContext.BaseDirectory` walk-up); until then, the symlink is the path of least resistance.
-
-### 3.3 Smoke-test that setup is complete
+### 3.3 Smoke test
 
 ```bash
 ls -lh models/embed/bge-m3-int8.onnx models/embed/sentencepiece.bpe.model
-# expected: both files exist (~542 MB and ~5 MB)
-
 dotnet build -c Release src/SmartRouter.Cli/SmartRouter.Cli.fsproj
-# expected: 0 errors, 0 warnings
-
 dotnet run --project src/SmartRouter.Cli
-# expected (within ~3s):
-#   [INF] Now listening on: http://127.0.0.1:4000
-#   [INF] HealthService: Qwen35B reachable (transitioned from down)   (if 35B is up)
-#   [INF] HealthService: Qwen122B reachable (transitioned from down)  (if 122B is up)
-#   [INF] SmartRouter starting ...                                    (startup banner)
+# Expected: "Now listening on: http://127.0.0.1:4000" within ~3s
 ```
-
-If startup fails with `Required ML embedding files missing`, re-check § 3.1 and § 3.2.
 
 ---
 
 ## 4. Quickstart
 
 ```bash
-# 1. Clone and restore
-git clone <repo-url>
-cd smart-router
-dotnet restore
-
-# 2. Start the router (dev mode; Ctrl-C to stop)
-dotnet run --project src/SmartRouter.Cli
-
-# 3. Check upstream health
-curl http://127.0.0.1:4000/health
-
-# 4. Send a chat request
+git clone <repo-url> && cd smart-router && dotnet restore
+dotnet run --project src/SmartRouter.Cli         # start router
+curl http://127.0.0.1:4000/health                # check upstreams
 curl -X POST http://127.0.0.1:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{
-    "model": "auto",
-    "messages": [{"role": "user", "content": "hello"}]
-  }'
-
-# 5. Stream a response
-curl -X POST http://127.0.0.1:4000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "auto",
-    "stream": true,
-    "messages": [{"role": "user", "content": "explain recursion"}]
-  }'
-
-# 6. See the routing decision
-tail -1 logs/decisions/$(date +%F).jsonl | jq .
-
-# 7. See available models from both upstreams
-curl http://127.0.0.1:4000/v1/models | jq .
-
-# 8. Install as a launchd service (see §12 for full details)
-./scripts/deploy.sh
-./scripts/install-launchd.sh
-launchctl load -w ~/Library/LaunchAgents/com.ohama.smart-router.plist
+  -d '{"model":"auto","messages":[{"role":"user","content":"hello"}]}'
+tail -1 logs/decisions/$(date +%F).jsonl | jq .  # see the routing decision
 ```
 
-The router listens on `http://127.0.0.1:4000` (loopback only). There is no TLS — this is a local service.
+For deployment as a launchd service: see [§11 Operations](#11-operations).
 
 ---
 
@@ -208,103 +120,63 @@ The router listens on `http://127.0.0.1:4000` (loopback only). There is no TLS �
 
 ### 5.1 Three-stage decision
 
-Every `POST /v1/chat/completions` request passes through three pure stages in order. The first stage that produces a decision wins; later stages are skipped.
-
 ```
-Request arrives
-    │
-    ▼
 Stage 1: model override
-    Does the request body carry a recognized model alias?
-    ("35b", "qwen35b", "122b", "qwen122b", "auto" = no override)
-    → Yes: use that model. DONE.
-    → No:  continue.
-    │
-    ▼
+   request.model in {"35b","qwen35b","122b","qwen122b"}? → use it. DONE.
+   "auto" or absent → continue.
+
 Stage 2: task table
-    Does the request carry a "task" field?
-    → task = graph_indexing  → 122B high priority
-    → task = compiler_debug  → 122B high priority
-    → task = unknown string  → HTTP 400 UnsupportedTask
-    → no task field          → continue.
-    │
-    ▼
+   request.task ∈ known tasks? → use task → model + priority. DONE.
+   unknown task → HTTP 400.
+   no task → continue.
+
 Stage 3: ML classifier
-    bge-m3 int8 embedding (1024-dim) → LbfgsLogisticRegression
-    confidence ≥ Routing.ML.Threshold (default 0.5) → 122B; else 35B
+   bge-m3 embed → LbfgsLogisticRegression → confidence ≥ Threshold? → 122B; else 35B.
 ```
 
 ### 5.2 Task table
 
-All seven task types map to a model and a queue priority. Priority determines queue-jump behavior when 122B is at its concurrency cap (1 in-flight slot).
+| task | target | priority | notes |
+|---|---|---|---|
+| `graph_indexing` | 122B | high | **No fallback** — 503 if 122B down |
+| `compiler_debug` | 122B | high | |
+| `architecture_analysis` | 122B | high | |
+| `dependency_analysis` | 122B | low | |
+| `reasoning` | 122B | low | |
+| `retrieval` | 35B | low | |
+| `summary` | 35B | low | |
 
-| task                  | target | priority | notes                         |
-|-----------------------|--------|----------|-------------------------------|
-| `graph_indexing`      | 122B   | high     | No fallback — 503 if 122B down |
-| `compiler_debug`      | 122B   | high     |                               |
-| `architecture_analysis` | 122B | high     |                               |
-| `dependency_analysis` | 122B   | low      |                               |
-| `reasoning`           | 122B   | low      |                               |
-| `retrieval`           | 35B    | low      |                               |
-| `summary`             | 35B    | low      |                               |
+`graph_indexing` is the only no-fallback task — rerouting to 35B would corrupt the graph index, so the router returns HTTP 503 instead.
 
 ### 5.3 ML classifier
 
-Stage 3 runs the ML pipeline:
+If `models/router.zip` is missing, a dummy classifier with random 1024-dim weights is auto-generated at startup so cold-start doesn't throw — Loop B replaces it with a real model from accumulated hard cases. `models/embed/*.onnx` files must exist (no graceful fallback).
 
-1. **Embed** — Prompt text is concatenated and embedded by bge-m3 int8 (ONNX, loaded from `Routing.ML.EmbeddingModelPath`). The result is a 1024-dim L2-normalized float vector.
-2. **Classify** — The vector is fed to an ML.NET `LbfgsLogisticRegression` classifier loaded from `Routing.ML.ModelPath` via `PredictionEnginePool` (with `watchForChanges:true` so retrained models are picked up atomically).
-3. **Threshold** — `confidence ≥ Routing.ML.Threshold` (default: `0.5`) routes to 122B; otherwise 35B. Reason is `RoutingReason.ML`.
+### 5.4 Tuning
 
-If `models/router.zip` is missing at startup, a dummy classifier with random 1024-dim weights is auto-generated so cold-start doesn't throw — Loop B (retraining) replaces it with a real model from the first labeled hard cases. Embedding model files (`models/embed/bge-m3-int8.onnx` and `models/embed/sentencepiece.bpe.model`) must be present; the router fails fast at startup if they are not.
+- **Threshold:** `Routing.ML.Threshold` — lower → more 122B. Default 0.5.
+- **Force per-request:** `{"model":"122b"}` or `{"task":"compiler_debug"}` bypasses stage 3.
+- **Watch retrains:** `model_version` in DecisionLog increments when Loop B successfully retrains.
 
-### 5.4 Tuning ML routing
+### 5.5 Quality fallback (35B → 122B retry) — non-streaming only
 
-**Adjust the confidence threshold** (lower → more requests to 122B):
-```json
+When a non-streaming request is routed to 35B and the response fails a quality check, the router automatically retries on 122B and forwards 122B's response.
+
+**Trigger:** all of —
+- Stage 3 routes to 35B
+- 35B returns HTTP 200
+- `Routing.QualityFallback.Enabled = true` (default)
+- 35B response fails `isBadResponse`: length < `MinResponseLength` (default 30) OR contains any `BadKeywords` (default `["TODO","I think"]`)
+- 122B reachable per HealthService
+
+**On fire:** final response = 122B's. DecisionLog row: `target=Qwen122B`, `routing_reason=fallback_to_122b`, `fallback_used=true`. TraceLog row (if `--trace-responses`): captures both 35B's bad response and 122B's response, joined by `prompt_uid`.
+
+**Streaming requests are exempt** — chunks already shipped; cannot retract.
+
+**Tuning:**
+
+```jsonc
 "Routing": {
-  "ML": { "Threshold": 0.4 }
-}
-```
-Default `0.5` is a balanced split; lower to `0.4` if you observe Hermes/Graphify quality regressions on borderline prompts; raise to `0.6` to prefer 35B more aggressively for latency.
-
-**Force a model per-request** — bypass stage 3 entirely:
-```bash
-curl -d '{"model": "122b", "messages": [...]}'   # always 122B
-curl -d '{"model": "35b",  "messages": [...]}'   # always 35B
-curl -d '{"task": "compiler_debug", "messages": [...]}'   # task table → 122B high-priority
-```
-
-**Watch the classifier improve over time** — Loop B retrains every `Retraining.IntervalMinutes` (default 60) using `fallback_used=true` records as hard cases. New models are validated against a held-out set before going live; rejected models are logged to `logs/retraining-rejections.jsonl`. The active `model_version` appears in every DecisionLog row — watch it bump after a successful retrain.
-
-### 5.5 Quality fallback (35B → 122B retry)
-
-When a non-streaming chat-completion request is routed to 35B and the response fails a configured quality heuristic, smart-router automatically retries the same request on 122B and forwards 122B's response to the client. This is the distillation design's "Failure = Gold Data" pattern (Phase 14).
-
-**Trigger conditions** (all must hold):
-- Stage 3 ML classifier routes to 35B (initial decision)
-- 35B returns HTTP 200 with a body
-- `Routing.QualityFallback.Enabled = true`
-- The 35B response body fails `isBadResponse` check:
-  - Length < `MinResponseLength` (default 30 chars), OR
-  - Contains any of `BadKeywords` (default `["TODO", "I think"]`)
-- 122B is reachable per HealthService
-
-**When fallback fires**:
-- Final response = 122B's response (35B's bad response is discarded)
-- DecisionLog: `target = "Qwen122B"`, `routing_reason = "fallback_to_122b"`, `fallback_used = true`
-- TraceLog (if enabled): captures both 35B and 122B response excerpts joined by `prompt_uid`
-
-**When fallback doesn't fire**:
-- Streaming requests (`stream=true`) — chunks already shipped; cannot retract
-- 122B unreachable — graceful degradation; 35B response forwarded as-is
-- 122B retry also fails — graceful degradation; 35B response forwarded as-is
-
-**Tuning** (`appsettings.json:Routing.QualityFallback`):
-
-```json
-"Routing": {
-  ...,
   "QualityFallback": {
     "Enabled": true,
     "MinResponseLength": 30,
@@ -313,9 +185,7 @@ When a non-streaming chat-completion request is routed to 35B and the response f
 }
 ```
 
-Add domain-specific keywords your team observes in low-quality responses. Set `Enabled: false` to disable the path entirely (kill switch).
-
-**Cost note**: When fallback fires, total latency = 35B latency + 122B latency. For frequent fallbacks, the 122B usage savings (the original ML routing benefit) is partially eroded. Monitor fallback rate via `/stats` (future enhancement) or grep:
+**Cost note:** When fallback fires, total latency = 35B + 122B. Monitor via:
 
 ```bash
 grep '"routing_reason":"fallback_to_122b"' logs/decisions/$(date +%F).jsonl | wc -l
@@ -325,274 +195,156 @@ grep '"routing_reason":"fallback_to_122b"' logs/decisions/$(date +%F).jsonl | wc
 
 ## 6. ML Feedback Loop
 
-### 6.1 Loop A — real-time fallback signal
+### 6.1 Loop A — real-time fallback
 
-On every `POST /v1/chat/completions` request, `ChatCompletions.fs` runs a pre-flight check after routing completes but before opening the upstream connection:
-
-1. If the routing decision targets 122B AND the task is **not** `graph_indexing` AND `IHealthProbe.IsReachable(Qwen122B)` returns `false` → shadow-rebind the decision to 35B, set `IsFallback = true`.
-2. If the task **is** `graph_indexing` AND 122B is unreachable → return HTTP 503 + `{"error": {"type": "model_unavailable"}}`. Never reroute graph_indexing to 35B (that would corrupt the graph index).
-3. After the response is written, emit one `DecisionLog` JSONL row with `fallback_used=true/false`.
-
-Every request produces exactly one row in `logs/decisions/YYYY-MM-DD.jsonl`.
+Per request, after routing:
+1. Decision targets 122B AND task ≠ `graph_indexing` AND 122B unreachable → reroute to 35B, `fallback_used=true`, `routing_reason=fallback_to_35b`.
+2. Decision targets 122B AND task = `graph_indexing` AND 122B unreachable → HTTP 503.
+3. Decision targets 35B AND quality check fails AND 122B reachable → retry on 122B, `fallback_used=true`, `routing_reason=fallback_to_122b` (see §5.5).
+4. Always: write one DecisionLog JSONL row.
 
 ### 6.2 Loop B — background retraining
 
-`RetrainingService` (a .NET `BackgroundService`) runs two timers:
-- A daily timer (`Retraining.IntervalMinutes` default: 60 minutes, configurable lower for testing).
-- A count-check timer every `Retraining.CountCheckIntervalMinutes` (default: 5 min) that triggers early if `datasets/hard-cases.jsonl` has grown by ≥ `Retraining.HardCaseCountTrigger` (default: 500) rows since the last retrain.
+`RetrainingService` runs:
+- A daily timer (`Retraining.IntervalMinutes`, default 60).
+- A count-check timer every `Retraining.CountCheckIntervalMinutes` (default 5) — triggers early if `datasets/hard-cases.jsonl` grew by ≥ `Retraining.HardCaseCountTrigger` (default 500) since last retrain.
 
-When a retrain triggers, the pipeline is:
+Pipeline: `FailureDetector` (extract `fallback_used=true`) → `TeacherLabeler` (122B labels each as `ROUTE_35B`/`ROUTE_122B`, writes to `hard-cases.jsonl`) → `DatasetMerger` (70/30 blend with `training-set.jsonl`) → `Retrainer` (ML.NET LbfgsLogisticRegression) → `Validator` (rejects if held-out fallback rate worse than baseline; logs to `logs/retraining-rejections.jsonl`) → atomic `File.Move` to `models/router.zip`. `ModelVersionProvider` increments the version string.
 
-```
-DecisionLog (logs/decisions/*.jsonl)
-    │
-    ▼  FailureDetector
-    │  extracts rows where fallback_used=true
-    │
-    ▼  TeacherLabeler
-    │  sends each hard case to 122B at TeacherLabeler.Endpoint
-    │  with the prompt template at prompts/teacher-prompt.md
-    │  labels: "ROUTE_35B" | "ROUTE_122B"
-    │  writes labeled rows to datasets/hard-cases.jsonl
-    │
-    ▼  DatasetMerger
-    │  blends hard-cases.jsonl 70% + datasets/training-set.jsonl 30%
-    │
-    ▼  Retrainer (ML.NET LbfgsLogisticRegression)
-    │  trains on blended dataset; holds out 20% for validation
-    │  writes new model to a temp path
-    │
-    ▼  Validator
-    │  computes fallback_rate on held-out set
-    │  rejects if rate > baseline (writes rejection log to
-    │  logs/retraining-rejections.jsonl)
-    │
-    ▼  File.Move(overwrite=true)
-    │  moves current models/router.zip → models/router.zip.prev
-    │  moves new model → models/router.zip
-    │
-    ▼  ModelVersionProvider
-       increments CurrentVersion (e.g., "v1" → "v2")
-       subsequent DecisionLog rows carry the new model_version
-```
+### 6.3 Canary
 
-The `AutoRollbackEnabled` gate in `Canary.AutoRollbackEnabled` (not the retraining path) controls watchdog-triggered rollbacks separately. The retraining loop's own gate is the Validator: a model that performs worse than the baseline is rejected and discarded — no rollback needed because the primary `models/router.zip` was never overwritten.
-
-### 6.3 Canary deployment lane
-
-The canary lane lets you test a new classifier on 10% of real traffic before promoting it.
-
-**Arming the canary:**
-```bash
-cp /path/to/new-model.zip \
-   ~/llm-system/services/smart-router/models/router-canary.zip
-```
-A `FileSystemWatcher` detects the new file within ~200ms and `CanaryService` loads it. No restart required.
-
-**Sticky cohort bucketing:**
-`ContextualTargetingFilter` (from `Microsoft.FeatureManagement`) assigns each `correlation_id` to baseline or canary deterministically — the same `correlation_id` always lands in the same cohort for the lifetime of the canary. This prevents A/B bleed where the same client session sees both classifiers.
-
-**Watchdog:**
-`CanaryWatchdog` polls every `Canary.WatchdogPollIntervalSeconds` seconds. If the rolling 60-second canary fallback rate minus the baseline fallback rate exceeds `Canary.AutoRollbackThreshold` (default: `0.10`) and `Canary.AutoRollbackEnabled=true`, it automatically calls `RollbackAsync` and logs a `"AUTO-ROLLBACK"` Serilog event.
+Drop `models/router-canary.zip` into the models dir. `FileSystemWatcher` detects within ~200ms; `CanaryService` arms the canary cohort. `ContextualTargetingFilter` makes cohort assignment sticky per `correlation_id` (no A/B bleed). `CanaryWatchdog` polls every `Canary.WatchdogPollIntervalSeconds`; if (canary fallback rate − baseline) > `Canary.AutoRollbackThreshold` (default 0.10) over the rolling window AND `Canary.AutoRollbackEnabled=true`, it rolls back automatically and logs `AUTO-ROLLBACK`.
 
 ---
 
 ## 7. Configuration Reference
 
-All keys live in `src/SmartRouter.Cli/appsettings.json`. The router reads them at startup; restart after any change.
+All keys in `src/SmartRouter.Cli/appsettings.json`. The router reads at startup; restart after changes.
 
 ### Upstreams
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `Upstreams.Model35B` | string | `http://127.0.0.1:8000` | Base URL of the Qwen 35B mlx_lm.server instance |
-| `Upstreams.Model122B` | string | `http://127.0.0.1:8001` | Base URL of the Qwen 122B mlx_lm.server instance |
+| Key | Type | Default |
+|---|---|---|
+| `Upstreams.Model35B` | string | `http://127.0.0.1:8000` |
+| `Upstreams.Model122B` | string | `http://127.0.0.1:8001` |
 
 ### Routing
 
 | Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `Routing.TimeoutSeconds` | int | `300` | Per-request upstream timeout |
-| `Routing.TaskTable` | object | (7 tasks) | Per-task model + priority mapping |
-| `Routing.ModelAliases` | object | (auto/35b/122b) | Wire alias → ModelId mapping for stage-1 model override |
+|---|---|---|---|
+| `Routing.TimeoutSeconds` | int | 300 | Per-request upstream timeout |
+| `Routing.TaskTable` | object | (7 tasks) | Per-task model + priority |
+| `Routing.ModelAliases` | object | auto/35b/122b | Stage-1 alias mapping |
 
 ### Routing.ML
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `Routing.ML.ModelPath` | string | `models/router.zip` | ML.NET trained classifier (primary) |
-| `Routing.ML.EmbeddingModelPath` | string | `models/embed/bge-m3-int8.onnx` | bge-m3 int8 ONNX embedder |
-| `Routing.ML.TokenizerPath` | string | `models/embed/sentencepiece.bpe.model` | Tokenizer for bge-m3 |
-| `Routing.ML.Threshold` | float | `0.5` | ML confidence threshold; above → 122B |
-| `Routing.ML.MaxTokens` | int | `512` | Max tokens fed to the embedder |
+| Key | Type | Default |
+|---|---|---|
+| `Routing.ML.ModelPath` | string | `models/router.zip` |
+| `Routing.ML.EmbeddingModelPath` | string | `models/embed/bge-m3-int8.onnx` |
+| `Routing.ML.TokenizerPath` | string | `models/embed/sentencepiece.bpe.model` |
+| `Routing.ML.Threshold` | float | 0.5 |
+| `Routing.ML.MaxTokens` | int | 512 |
 
 ### Routing.QualityFallback
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `Routing.QualityFallback.Enabled` | bool | `true` | Master switch; false disables quality fallback entirely |
-| `Routing.QualityFallback.MinResponseLength` | int | `30` | Responses shorter than this trigger fallback |
-| `Routing.QualityFallback.BadKeywords` | string[] | `["TODO", "I think"]` | Substrings that mark a response as bad (case-sensitive) |
+| Key | Type | Default |
+|---|---|---|
+| `Routing.QualityFallback.Enabled` | bool | true |
+| `Routing.QualityFallback.MinResponseLength` | int | 30 |
+| `Routing.QualityFallback.BadKeywords` | string[] | `["TODO","I think"]` |
 
 ### Routing.Health
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `Routing.Health.PollingIntervalSeconds` | int | `10` | How often HealthService probes each upstream |
-| `Routing.Health.ConsecutiveFailureThreshold` | int | `1` | Failures before marking unreachable; raise to 2-3 to reduce flapping |
+| Key | Type | Default |
+|---|---|---|
+| `Routing.Health.PollingIntervalSeconds` | int | 10 |
+| `Routing.Health.ConsecutiveFailureThreshold` | int | 1 |
 
 ### Queue
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `Queue.MaxConcurrent122B` | int | `1` | SemaphoreSlim cap on concurrent 122B requests |
-| `Queue.FairnessK` | int | `10` | High-priority requests get at most K consecutive picks before low-priority gets a turn |
-| `Queue.PerRequestTimeoutSeconds` | int | `300` | Time a request waits in the queue before HTTP 503 |
+| Key | Type | Default |
+|---|---|---|
+| `Queue.MaxConcurrent122B` | int | 1 |
+| `Queue.FairnessK` | int | 10 |
+| `Queue.PerRequestTimeoutSeconds` | int | 300 |
 
-### DecisionLog
+### Logging / DecisionLog / Trace
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `DecisionLog.Directory` | string | `logs/decisions` | Directory for JSONL log files (one file per day) |
-| `DecisionLog.ChannelCapacity` | int | `10000` | In-memory async channel buffer size |
+| Key | Type | Default |
+|---|---|---|
+| `Logging.Directory` | string | `logs/operational` |
+| `Logging.RetentionDays` | int | 30 |
+| `DecisionLog.Directory` | string | `logs/decisions` |
+| `DecisionLog.ChannelCapacity` | int | 10000 |
+| `DecisionLog.RetentionDays` | int | 90 |
+| `Trace.Enabled` | bool | false (also enabled by `--trace-responses`) |
+| `Trace.Directory` | string | `logs/trace` |
+| `Trace.ChannelCapacity` | int | 1000 |
+| `Serilog.MinimumLevel.Default` | string | Information |
+| `Serilog.MinimumLevel.Override.{Source}` | string | (filters host noise) |
 
-### TeacherLabeler
+### TeacherLabeler / Retraining / HardCaseDataset
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `TeacherLabeler.Endpoint` | string | `http://127.0.0.1:8001` | 122B endpoint used as teacher |
-| `TeacherLabeler.PromptPath` | string | `prompts/teacher-prompt.md` | Prompt template for labeling hard cases |
-| `TeacherLabeler.DailyCallCap` | int | `1000` | Max teacher calls per day (local; cost cap is no-op) |
-| `TeacherLabeler.TimeoutSeconds` | int | `30` | Per-call timeout to the teacher |
-
-### HardCaseDataset
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `HardCaseDataset.Path` | string | `datasets/hard-cases.jsonl` | Accumulated labeled hard cases |
-
-### Retraining
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `Retraining.IntervalMinutes` | int | `60` | Periodic retrain interval |
-| `Retraining.HardCaseCountTrigger` | int | `500` | Trigger early retrain after this many new hard cases |
-| `Retraining.CountCheckIntervalMinutes` | int | `5` | How often to check the hard-case count |
-| `Retraining.HardCasePath` | string | `datasets/hard-cases.jsonl` | Hard-case dataset read by Retrainer |
-| `Retraining.TrainingSetPath` | string | `datasets/training-set.jsonl` | Base training set for 70/30 blend |
-| `Retraining.ModelPath` | string | `models/router.zip` | Output path for the retrained model |
-| `Retraining.PreviousModelPath` | string | `models/router.zip.prev` | Previous model backup (kept one generation) |
-| `Retraining.HeldOutFraction` | float | `0.2` | Fraction of data withheld for Validator |
+| Key | Type | Default |
+|---|---|---|
+| `TeacherLabeler.Endpoint` | string | `http://127.0.0.1:8001` |
+| `TeacherLabeler.PromptPath` | string | `prompts/teacher-prompt.md` |
+| `TeacherLabeler.DailyCallCap` | int | 1000 |
+| `TeacherLabeler.TimeoutSeconds` | int | 30 |
+| `Retraining.IntervalMinutes` | int | 60 |
+| `Retraining.HardCaseCountTrigger` | int | 500 |
+| `Retraining.CountCheckIntervalMinutes` | int | 5 |
+| `Retraining.HeldOutFraction` | float | 0.2 |
+| `HardCaseDataset.Path` | string | `datasets/hard-cases.jsonl` |
 
 ### Canary
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `Canary.CanaryModelPath` | string | `models/router-canary.zip` | Path watched by FileSystemWatcher |
-| `Canary.PercentageEnabled` | int | `10` | Initial cohort split percentage |
-| `Canary.RollingWindowSeconds` | int | `60` | Watchdog rolling window for fallback rate |
-| `Canary.WatchdogPollIntervalSeconds` | int | `10` | Watchdog poll frequency |
-| `Canary.AutoRollbackThreshold` | float | `0.10` | Fallback delta that triggers auto-rollback |
-| `Canary.AutoRollbackEnabled` | bool | `true` | Set false to disable watchdog auto-rollback |
-| `Canary.MinBaselineSampleSize` | int | `50` | Minimum baseline samples before watchdog activates |
+| Key | Type | Default |
+|---|---|---|
+| `Canary.CanaryModelPath` | string | `models/router-canary.zip` |
+| `Canary.PercentageEnabled` | int | 10 |
+| `Canary.RollingWindowSeconds` | int | 60 |
+| `Canary.WatchdogPollIntervalSeconds` | int | 10 |
+| `Canary.AutoRollbackThreshold` | float | 0.10 |
+| `Canary.AutoRollbackEnabled` | bool | true |
+| `Canary.MinBaselineSampleSize` | int | 50 |
 
 ---
 
 ## 8. Endpoints
 
-All endpoints bind to `http://127.0.0.1:4000` (loopback only).
+All bind to `http://127.0.0.1:4000` (loopback only; no TLS).
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/v1/chat/completions` | Main routing endpoint — OpenAI-compatible |
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/v1/chat/completions` | Main routing endpoint (OpenAI-compatible) |
 | GET | `/v1/models` | Deduplicated model list from both upstreams |
-| GET | `/health` | Per-upstream reachability + last probe timestamp |
-| GET | `/stats` | Queue depth, active counts, throughput |
-| GET | `/canary` | Canary state: model version, percentage |
-| POST | `/canary/promote` | Promote canary classifier to primary |
-| POST | `/canary/rollback` | Roll back canary (sets percentage to 0) |
-| POST | `/canary/enable` | Set canary split percentage |
-
----
+| GET | `/health`, `/healthz` | Per-upstream reachability + last probe |
+| GET | `/stats` | Queue depth, active counts, throughput, model versions |
+| GET | `/canary` | Current canary state |
+| POST | `/canary/promote` | Promote canary → primary; bumps `model_version` |
+| POST | `/canary/rollback` | Set canary percentage to 0 (idempotent) |
+| POST | `/canary/enable?percentage=N` | Set canary split (0–100) |
 
 ### POST /v1/chat/completions
 
-The main routing endpoint. Accepts an OpenAI-compatible request body and proxies it to the selected upstream.
+Standard OpenAI body. Optional `task` field routes via the task table. Optional `correlation_id` honored if provided; else one is generated. Streaming via `stream:true` is fully supported (no quality fallback in streaming mode — see §5.5).
 
-**Request:**
 ```bash
 curl -X POST http://127.0.0.1:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{
-    "model": "auto",
-    "stream": false,
-    "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user",   "content": "What is tail-call optimization?"}
-    ]
-  }'
+  -d '{"model":"auto","task":"compiler_debug","messages":[{"role":"user","content":"why does this MLIR lowering fail?"}]}'
 ```
 
-**With task field (Graphify-style):**
-```bash
-curl -X POST http://127.0.0.1:4000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "auto",
-    "task": "compiler_debug",
-    "messages": [{"role": "user", "content": "why does this MLIR lowering fail?"}]
-  }'
-```
-
-**Response (non-streaming):** Passes through the upstream response verbatim.
-
-**Error responses:**
-- `400` — routing error (unknown task, malformed body)
-- `502` — upstream returned an error
-- `503` — `graph_indexing` requested but 122B is unreachable
-
----
+**Errors:** `400` malformed/unknown task · `502` upstream error · `503` `graph_indexing` + 122B down.
 
 ### GET /v1/models
 
-Returns a deduplicated list of models from both upstreams. First-seen wins on duplicate `id`. If one upstream is down, returns the other's list. If both are down, returns `200 + {"object":"list","data":[]}`.
-
-```bash
-curl http://127.0.0.1:4000/v1/models | jq .
-```
-
-**Example response:**
-```json
-{
-  "object": "list",
-  "data": [
-    {
-      "id": "/Users/ohama/llm-system/models/qwen36-35b",
-      "object": "model",
-      "owned_by": "mlx_lm"
-    },
-    {
-      "id": "/Users/ohama/llm-system/models/qwen122b",
-      "object": "model",
-      "owned_by": "mlx_lm"
-    }
-  ]
-}
-```
-
-Note: mlx_lm advertises models by their local filesystem path, not a HuggingFace model ID.
-
----
+Deduplicated; first-seen wins on duplicate `id`. If both upstreams down: `200 + {"object":"list","data":[]}` (never 503). mlx_lm advertises models by local filesystem path (e.g., `/Users/ohama/llm-system/models/qwen36-35b`), not HF id.
 
 ### GET /health
 
-Returns per-upstream reachability status and the timestamp of the last probe attempt.
-
-```bash
-curl http://127.0.0.1:4000/health | jq .
-```
-
-**Response:**
 ```json
 {
   "qwen35b":  { "reachable": true,  "last_probed_at": "2026-05-09T03:40:00.000Z" },
@@ -600,408 +352,166 @@ curl http://127.0.0.1:4000/health | jq .
 }
 ```
 
-`reachable: false` for 122B means the router is currently rerouting (fallback) all non-graph_indexing 122B-targeted requests to 35B.
-
----
-
 ### GET /stats
 
-Returns live queue and throughput metrics. Updated on every request; no caching.
-
-```bash
-curl http://127.0.0.1:4000/stats | jq .
-```
-
-**Response:**
 ```json
 {
-  "timestamp":              "2026-05-09T03:40:00.000Z",
-  "active_122b":            1,
-  "queue_depth_122b_high":  0,
-  "queue_depth_122b_low":   2,
-  "active_35b":             3,
-  "requests_per_sec":       4.2,
-  "avg_latency_ms_60s":     1850.0,
-  "failure_count_total":    5,
-  "fairness_picks_high":    12,
-  "fairness_picks_low":     44,
-  "semaphore_available":    0
+  "active_122b": 1, "queue_depth_122b_high": 0, "queue_depth_122b_low": 2,
+  "active_35b": 3, "requests_per_sec": 4.2, "avg_latency_ms_60s": 1850.0,
+  "semaphore_available": 0, "baseline_version": "v3", "canary_version": null,
+  "canary_percentage": 0, "canary_active": false
 }
 ```
 
-`semaphore_available: 0` means 122B is at its concurrency cap and new 122B-bound requests are queuing.
-
----
+`semaphore_available: 0` = 122B at concurrency cap; new 122B-bound requests queue.
 
 ### GET /canary
 
-Returns the current canary state.
-
-```bash
-curl http://127.0.0.1:4000/canary | jq .
-```
-
-**Response (canary armed):**
 ```json
-{
-  "active": true,
-  "percentage": 10,
-  "baseline_version": "v3",
-  "canary_version": "v3-canary"
-}
+{ "active": true, "percentage": 10, "baseline_version": "v3", "canary_version": "v3-canary" }
 ```
-
----
 
 ### POST /canary/promote
 
-Promotes the canary classifier to primary. Copies `router-canary.zip` over `router.zip` and increments the model version.
-
-```bash
-curl -X POST http://127.0.0.1:4000/canary/promote | jq .
-```
-
-**Response (200):** `{"status": "promoted", "new_baseline_version": "v4"}`
-
-**Error responses:**
-- `404` — no canary file found
-- `409` — retraining in progress; retry momentarily
+Copies `router-canary.zip` over `router.zip` and bumps version. Returns `{"status":"promoted","new_baseline_version":"v4"}`. Errors: `404` (no canary file) · `409` (retraining in progress).
 
 ---
 
-### POST /canary/rollback
+## 9. Logs and Debugging
 
-Sets canary percentage to 0 (idempotent). Does not delete `router-canary.zip`.
+### 9.1 DecisionLog schema (`logs/decisions/YYYY-MM-DD.jsonl`)
 
-```bash
-curl -X POST http://127.0.0.1:4000/canary/rollback | jq .
-```
+One row per request. Daily rotation by filename. Auto-pruned after `DecisionLog.RetentionDays` (default 90).
 
-**Response:** `{"status": "rolled_back"}`
-
----
-
-### POST /canary/enable
-
-Sets or adjusts the canary split percentage (0–100).
-
-```bash
-curl -X POST 'http://127.0.0.1:4000/canary/enable?percentage=20' | jq .
-```
-
-**Response:** `{"status": "enabled", "percentage": 20}`
-
-**Error (400):** `{"error": "percentage query parameter required, integer 0..100"}`
-
----
-
-## 9. Debugging
-
-### 9.1 DecisionLog schema
-
-Every request produces one row in `logs/decisions/YYYY-MM-DD.jsonl`. The file rotates daily. Each row is a JSON object on a single line.
-
-**Example row:**
 ```json
 {
-  "schema_version":         1,
-  "correlation_id":         "a3f8c2d1e9b74a5f8c2d1e9b7a",
-  "timestamp":              "2026-05-09T03:40:01.234Z",
-  "target":                 "Qwen122B",
-  "routing_reason":         "task_table",
-  "routing_algorithm":      "ml",
-  "latency_ms":             1924.5,
-  "model_version":          "v3",
-  "fallback_used":          false,
-  "task_type":              "compiler_debug",
-  "prompt_hash":            "sha256:abcdef1234567890abcdef1234567890",
+  "schema_version": 1,
+  "correlation_id": "a3f8c2d1e9b74a5f8c2d1e9b7a",
+  "timestamp": "2026-05-09T03:40:01.234Z",
+  "target": "Qwen122B",
+  "routing_reason": "task_table",
+  "routing_algorithm": "ml",
+  "latency_ms": 1924.5,
+  "model_version": "v3",
+  "fallback_used": false,
+  "task_type": "compiler_debug",
+  "prompt_hash": "sha256:abcdef1234567890abcdef1234567890",
   "prompt_korean_char_ratio": 0.12
 }
 ```
 
-**Field reference:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `schema_version` | int | Log schema version (currently 1) |
-| `correlation_id` | string | UUID injected by `CorrelationMiddleware`; sticky key for canary bucketing |
-| `timestamp` | string | ISO 8601 UTC — time the DecisionLog row was written |
-| `target` | string | `"Qwen35B"` or `"Qwen122B"` — the model that actually served the request |
-| `routing_reason` | string | `explicit_model:{alias}`, `explicit_task:{TaskType}`, `default`, `ml`, `fallback_to_35b` (Phase 10 — 122B unreachable), `fallback_to_122b` (Phase 14 — 35B response failed quality check), or a compound like `ml;upstream_error`, `ml;cancelled`, `ml;stream_error` |
-| `routing_algorithm` | string | `"ml"` (only valid value as of Phase 12; the seam is retained for future algorithm additions) |
-| `latency_ms` | float | End-to-end time from request start to last byte written |
-| `model_version` | string | Active classifier version (e.g., `"v3"` baseline, `"v3-canary"` for canary cohort) |
-| `fallback_used` | bool | `true` if 122B was unreachable and the request was transparently rerouted to 35B |
-| `task_type` | string or null | Value of the `task` field in the request body, if present |
-| `prompt_hash` | string | SHA-256 of the concatenated message content; used by Loop B for deduplication |
-| `prompt_korean_char_ratio` | float | Fraction of Korean characters (0.0–1.0); diagnostic for bilingual routing quality |
-
-### 9.2 Reading model_version
-
-- `"v1"`, `"v2"`, `"v3"` etc. — baseline classifier generation.
-- `"v3-canary"` — request was served by the canary cohort using the v3-canary classifier.
-
-When Loop B completes a retrain and the Validator accepts it, the version increments. You can watch `model_version` in the log to confirm a retrain took effect.
-
-### 9.3 Reading fallback_used
-
-`fallback_used: true` means:
-1. The routing decision targeted 122B.
-2. `IHealthProbe.IsReachable(Qwen122B)` returned `false` at request time.
-3. The request was transparently served by 35B instead.
-4. The task was **not** `graph_indexing` (that path gets HTTP 503 instead).
-
-Sustained `fallback_used: true` rows → 122B is down. Check `/health`.
-
-### 9.4 /health interpretation
-
-```bash
-# Is 122B reachable?
-curl -s http://127.0.0.1:4000/health | jq '.qwen122b.reachable'
-# → true  (122B up; normal routing)
-# → false (122B down; fallback active for non-graph_indexing requests)
-```
-
-### 9.5 /stats for queue pressure
-
-```bash
-# Are requests queuing behind 122B?
-curl -s http://127.0.0.1:4000/stats | jq '{depth_high: .queue_depth_122b_high, depth_low: .queue_depth_122b_low, active: .active_122b, semaphore: .semaphore_available}'
-```
-
-`semaphore_available: 0` and `queue_depth_122b_high > 0` = high-priority requests piling up. Consider raising `Queue.FairnessK` or adding a second 122B instance.
-
-### 9.6 Log files (overview)
-
-The router emits two parallel log streams plus a few small auxiliary files. All paths below are relative to the process WorkingDirectory (under launchd: `/Users/ohama/llm-system/services/smart-router/`).
-
-| Path | Stream | Format | Audience |
-|------|--------|--------|----------|
-| `logs/operational/smart-router-YYYYMMDD.log` | Operational (rolling) | text, structured | primary post-mortem; `tail -f` in production |
-| stderr (Serilog Console sink) | Operational (mirror) | text, structured | launchd captures to `~/llm-system/services/logs/smart-router.err`; mirrors rolling file |
-| `logs/decisions/YYYY-MM-DD.jsonl` | Decision | JSONL (12-field schema in §9.1) | FailureDetector / dashboards / Loop B retraining |
-| `datasets/hard-cases.jsonl` | Training | JSONL (labeled samples) | Loop B input |
-| `datasets/teacher-cap-YYYY-MM-DD.json` | Cap counter | JSON | TeacherLabeler daily cost-cap state |
-| `logs/retraining-rejections.jsonl` | Validator audit | JSONL | post-mortem on rejected retrains |
-| `~/llm-system/services/logs/smart-router.log` | launchd-captured stdout | (mostly empty — OBS-04 stream separation) | crash-time fallback only |
-| `~/llm-system/services/logs/smart-router.err` | launchd-captured stderr | text | mirrors operational stream; mostly redundant once rolling file is active |
-
-**Operational rolling files** are written to `logs/operational/` (configurable via `Logging:Directory` in `appsettings.json`). Files roll daily and on a 50 MB size cap:
-
-```
-logs/operational/
-├── smart-router-20260509.log       # daily roll — current day
-├── smart-router-20260509_001.log   # size-roll within the day (50 MB cap)
-├── smart-router-20260508.log       # previous day
-└── ...                              # auto-pruned after 30 days by LogRetentionService
-```
-
-Pattern: `smart-router-{yyyyMMdd}[_{NNN}].log` where `_NNN` suffix appears only when a single day's file exceeds 50 MB.
-
-**Decision JSONL** is rotated daily by filename (UTC date in name) and auto-pruned after 90 days by `LogRetentionService`.
-
-**`smart-router.err`** (launchd stderr capture): Serilog writes to this as a side-effect of the Console sink, but the rolling operational log is the authoritative source. In steady state `smart-router.err` is mostly redundant. Quarterly housekeeping: `truncate -s 0 ~/llm-system/services/logs/smart-router.err`. Serilog continues writing to its own rolling files unaffected.
-
-### 9.7 Reading the operational log
-
-Each log line follows the output template:
-
-```
-{Timestamp:yyyy-MM-ddTHH:mm:ss.fffzzz} [{Level:u3}] {SourceContext} [{correlation_id}] {Message:lj}
-```
-
-Example lines:
-
-```
-2026-05-09T14:32:11.001+09:00 [INF] Startup [-] SmartRouter starting
-    listen            = http://127.0.0.1:4000
-    routing.algorithm = ml
-    model.version     = v1.0.0
-    canary.version    = (none)
-    ...
-2026-05-09T14:32:11.123+09:00 [INF] SmartRouter.Cli.Adapters.HealthService.HealthService [-] HealthService: Qwen35B reachable (transitioned from down)
-2026-05-09T14:32:11.456+09:00 [INF] SmartRouter.Cli.Endpoints.ChatCompletions [abc12345...] /v1/chat/completions request received
-2026-05-09T14:32:11.789+09:00 [WRN] SmartRouter.Cli.Adapters.QueueDispatcher.QueueDispatcher [abc12345...] QueueDispatcher: 122B queue depth=8 (high water)
-2026-05-09T14:32:12.001+09:00 [ERR] SmartRouter.Cli.Adapters.QwenUpstreamClient.QwenUpstreamClient [abc12345...] StreamAsync: unexpected error
-       System.Net.Http.HttpRequestException: Connection refused
-```
-
-- `[-]` = log not associated with a specific HTTP request (background services, startup, shutdown)
-- `[abc12345...]` = correlation_id (32-char hex) — joinable with the same `correlation_id` field in JSONL DecisionLog
-
-**Common operator queries:**
-
-```bash
-# Tail the live operational rolling log (cd to WorkingDirectory first)
-tail -f logs/operational/smart-router-$(date +%Y%m%d).log
-
-# Find all warnings and errors today
-grep -E '\[(WRN|ERR)\]' logs/operational/smart-router-$(date +%Y%m%d).log
-
-# Trace a specific request by correlation_id (across both streams)
-CID=abc12345
-grep "\[$CID\]" logs/operational/smart-router-*.log
-grep "\"correlation_id\":\"$CID\"" logs/decisions/*.jsonl
-
-# Count requests by target (last 24h)
-jq -r '.target' < logs/decisions/$(date +%F).jsonl | sort | uniq -c
-
-# Count fallback events (last 7 days)
-for d in 0 1 2 3 4 5 6; do
-  day=$(date -v -${d}d +%F 2>/dev/null || date -d "${d} days ago" +%F)
-  count=$(jq 'select(.fallback_used == true)' < logs/decisions/${day}.jsonl 2>/dev/null | wc -l | tr -d ' ')
-  echo "${day}: ${count} fallback events"
-done
-
-# Find requests that timed out or were cancelled
-grep "TaskCanceledException\|cancelled\|OperationCanceledException" logs/operational/smart-router-*.log
-
-# Dev mode: tail stderr directly
-dotnet run --project src/SmartRouter.Cli 2>&1 | tee /tmp/smart-router-dev.log
-```
-
-### 9.8 Log levels and filtering
-
-Serilog's runtime minimum level is controlled by a `LoggingLevelSwitch`. The default level is `Information`. Override via CLI flag `--log-level`:
-
-```bash
-dotnet run --project src/SmartRouter.Cli -- --log-level=debug
-dotnet run --project src/SmartRouter.Cli -- --log-level=warn
-```
-
-Valid values: `verbose` | `debug` | `information` | `warning` | `error` | `fatal`. Short aliases: `vrb`, `dbg`, `info`, `warn`, `err`, `ftl`. An invalid value fails fast at startup with a descriptive error. The legacy `--trace` flag was removed — use `--log-level=debug` instead (using `--trace` causes a startup error with a migration message).
-
-| Level | Volume | Used for |
-|-------|--------|----------|
-| Verbose / VRB | very low | per-token streaming events; off by default |
-| Debug / DBG | low | per-request prompt-feature extraction; endpoint hit signals; queue ticket lifecycle |
-| Information / INF | moderate | HealthService state transitions; CanaryService promote/rollback; RetrainingService cycle start/end; startup + shutdown banners |
-| Warning / WRN | bursty | upstream 502/timeouts; HealthService unreachable transitions; queue high-water; cost cap thresholds; FileSystemWatcher rearm failures |
-| Error / ERR | rare | unhandled exceptions in BackgroundService loops; SSE write failures; teacher labeler malformed responses after retries |
-| Fatal / FTL | should never appear | reserved for unrecoverable host failures |
-
-`appsettings.json:Serilog.MinimumLevel.Default` sets the config-driven default (active, bound via `.ReadFrom.Configuration(...)`). Per-category overrides in `Serilog:MinimumLevel:Override` filter noisy ASP.NET host messages to Warning — tweak as needed.
-
-### 9.9 Log parameters reference
-
-The following keys in `appsettings.json` control logging behavior:
-
-| Key | Type | Default | Effect |
-|-----|------|---------|--------|
-| `Serilog.MinimumLevel.Default` | string | `"Information"` | Active default log level (bound via ReadFrom.Configuration) |
-| `Serilog.MinimumLevel.Override.{Source}` | string | see appsettings.json | Per-category filter — e.g., `"Microsoft.AspNetCore": "Warning"` suppresses host noise |
-| `Logging.Directory` | string | `"logs/operational"` | Rolling operational log file directory (relative to WorkingDirectory) |
-| `Logging.RetentionDays` | int | `30` | Days of operational log files to retain; LogRetentionService prunes hourly |
-| `DecisionLog.Directory` | string | `"logs/decisions"` | Directory for JSONL DecisionLog files (one per day) |
-| `DecisionLog.ChannelCapacity` | int | `10000` | In-memory async-channel buffer for DecisionLogWriter |
-| `DecisionLog.RetentionDays` | int | `90` | Days of decision JSONL to retain; LogRetentionService prunes hourly |
-| CLI flag `--log-level=...` | enum | absent (defaults to Information) | Sets LoggingLevelSwitch for the lifetime of the process |
-
-Note: the `--trace` flag was removed in Phase 13. Using it causes a startup error directing the operator to `--log-level=debug`.
-
-### 9.10 Trace logging — `--trace-responses` flag (operator debugging)
-
-For end-to-end debugging of routing decisions and fallback behavior, the router has an optional trace log that captures intermediate request state. Operator opts in via CLI flag:
-
-```bash
-dotnet run --project src/SmartRouter.Cli -- --trace-responses
-# or in production deployment:
-dotnet SmartRouter.Cli.dll --trace-responses
-```
-
-When enabled, each non-streaming chat-completion request appends one row to `logs/trace/YYYY-MM-DD.jsonl`. Schema (12 fields):
-
-| Field | Description |
-|-------|-------------|
+| Field | Meaning |
+|---|---|
 | `schema_version` | Currently 1 |
-| `correlation_id` | UUID per request (matches DecisionLog) |
-| `prompt_uid` | First 12 hex of `prompt_hash` (stable per prompt content) |
-| `prompt_hash` | Full SHA-256 (matches DecisionLog) |
-| `prompt_excerpt` | First 200 chars of concatenated prompt messages |
-| `initial_target` | First routing decision (`Qwen35B` or `Qwen122B`) |
-| `initial_response_excerpt` | First 500 chars of the initial-target response (null if no fallback) |
-| `fallback_kind` | `"quality"` (Phase 14), `"availability"` (Phase 10), or null |
-| `final_target` | Model that actually produced the response sent to client |
-| `final_response_excerpt` | First 500 chars of the final response |
-| `total_latency_ms` | End-to-end time from request start to last byte written |
-| `timestamp` | ISO 8601 UTC |
+| `correlation_id` | UUID; sticky for canary bucketing; joinable with operational log + trace log |
+| `target` | `Qwen35B` or `Qwen122B` — model that actually served |
+| `routing_reason` | `explicit_model:{alias}`, `explicit_task:{task}`, `default`, `ml`, `fallback_to_35b` (122B unreachable), `fallback_to_122b` (35B response quality-bad), or compounds (`ml;upstream_error`, `ml;cancelled`, `ml;stream_error`) |
+| `routing_algorithm` | `ml` (only valid value; seam preserved for future) |
+| `model_version` | `v1`, `v2`, ... baseline; `v3-canary` for canary cohort |
+| `fallback_used` | `true` if reroute happened (either direction) |
+| `prompt_hash` | SHA-256 of concat'd message content; first 12 hex = `prompt_uid` joining to TraceLog |
+| `prompt_korean_char_ratio` | 0.0–1.0; bilingual routing diagnostic |
 
-**Operator workflow — grep by prompt UID**:
+### 9.2 Operational log (`logs/operational/smart-router-{yyyyMMdd}[_{NNN}].log`)
 
-```bash
-# Compute UID from your prompt text
-PROMPT="explain recursion in Python"
-UID=$(echo -n "$PROMPT" | sha256sum | cut -c1-12)
+Rolling daily files; 50 MB size cap (`_NNN` suffix when exceeded); auto-pruned after `Logging.RetentionDays` (default 30). Mirrors to stderr (launchd captures to `~/llm-system/services/logs/smart-router.err`).
 
-# Find the trace row(s) for that prompt
-jq "select(.prompt_uid == \"$UID\")" logs/trace/$(date +%F).jsonl
+Output template: `{Timestamp} [{Level:u3}] {SourceContext} [{correlation_id}] {Message}`.
 
-# What did 35B say? What did 122B say? Did fallback fire?
-jq "select(.prompt_uid == \"$UID\") | {initial_target, fallback_kind, initial_response_excerpt, final_target, final_response_excerpt}" logs/trace/$(date +%F).jsonl
+```
+2026-05-09T14:32:11.456+09:00 [INF] SmartRouter.Cli.Endpoints.ChatCompletions [abc12345...] /v1/chat/completions request received
+2026-05-09T14:32:11.789+09:00 [WRN] SmartRouter.Cli.Adapters.QueueDispatcher [abc12345...] 122B queue depth=8 (high water)
 ```
 
-**Privacy / size note**: prompts and response excerpts are stored in plaintext. Default state is **off** (file not created). Enable only for diagnostics, not for production-default. The 200/500 char truncation limits storage but doesn't fully sanitize PII — operator's responsibility to manage retention.
+`[-]` = no associated request (background services, startup). `[abc12345...]` = correlation_id.
 
-**Retention**: Phase 14 ships without auto-cleanup of `logs/trace/`. Operator manually prunes or relies on Phase 13 LogRetentionService extension (future).
+### 9.3 Trace log (opt-in via `--trace-responses`) (`logs/trace/YYYY-MM-DD.jsonl`)
 
----
+For end-to-end debugging of routing + fallback. Disabled by default (file not created).
 
-## 10. Hermes Integration
-
-Hermes Agent (`~/hermes-agent`) is a general-purpose coding assistant. It does not send a `task` field. Every Hermes request passes through stages 1 and 2 of the routing pipeline without a match, and the decision is made entirely by stage 3 (the ML classifier).
-
-**Point Hermes at the router:**
-```jsonc
-// hermes config (exact key name depends on your Hermes version)
-{
-  "openai": {
-    "base_url": "http://localhost:4000/v1",
-    "model": "auto"
-  }
-}
-```
-
-`model: "auto"` lets the router decide. You can force a model by setting `model: "35b"` or `model: "122b"` — this triggers stage-1 model override and bypasses routing entirely.
-
-**Streaming:** Fully supported. Hermes uses `stream: true`; the router forwards SSE chunks token-by-token and injects `data: [DONE]` if the upstream omits it.
-
-**Mid-stream cancellation:** If Hermes cancels the request, the router detects `OperationCanceledException`, disposes the upstream connection cleanly, and logs a `routing_reason` ending in `;cancelled`.
-
----
-
-## 11. Graphify Integration
-
-Graphify is a graph-indexing pipeline that sends a `task` field with every request. The `task` value routes directly through stage 2 (task table), bypassing the stage-3 ML classifier entirely.
-
-**Standard Graphify request:**
 ```json
 {
-  "model": "auto",
-  "task": "graph_indexing",
-  "messages": [
-    {"role": "user", "content": "Index this codebase: ..."}
-  ]
+  "schema_version": 1,
+  "correlation_id": "...",
+  "prompt_uid": "abcdef123456",
+  "prompt_hash": "sha256:abcdef123456...",
+  "prompt_excerpt": "explain recursion in Python",
+  "initial_target": "Qwen35B",
+  "initial_response_excerpt": "TODO: implement this",
+  "fallback_kind": "quality",
+  "final_target": "Qwen122B",
+  "final_response_excerpt": "Recursion is a function...",
+  "total_latency_ms": 2350.0,
+  "timestamp": "2026-05-09T03:40:01.234Z"
 }
 ```
 
+`fallback_kind`: `"quality"` (35B response bad → 122B retry), `"availability"` (122B down → 35B reroute), or `null`.
+
+**Privacy:** prompts and excerpts stored in plaintext, truncated to 200/500 chars. Operator's responsibility to manage retention. No auto-cleanup currently.
+
+### 9.4 Common operator queries
+
 ```bash
-curl -X POST http://127.0.0.1:4000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "auto",
-    "task": "architecture_analysis",
-    "messages": [{"role": "user", "content": "describe the module structure"}]
-  }'
+# Tail live operational log
+tail -f logs/operational/smart-router-$(date +%Y%m%d).log
+
+# Find errors today
+grep -E '\[(WRN|ERR)\]' logs/operational/smart-router-$(date +%Y%m%d).log
+
+# Trace one request across both streams
+CID=abc12345
+grep "\[$CID\]" logs/operational/smart-router-*.log
+jq "select(.correlation_id == \"$CID\")" logs/decisions/*.jsonl
+
+# Count requests by target (today)
+jq -r '.target' < logs/decisions/$(date +%F).jsonl | sort | uniq -c
+
+# Count quality fallbacks (today)
+grep '"routing_reason":"fallback_to_122b"' logs/decisions/$(date +%F).jsonl | wc -l
+
+# Trace by prompt UID — see what 35B vs 122B said
+PROMPT="explain recursion in Python"
+UID=$(echo -n "$PROMPT" | sha256sum | cut -c1-12)
+jq "select(.prompt_uid == \"$UID\") | {initial_target, fallback_kind, initial_response_excerpt, final_target, final_response_excerpt}" \
+  logs/trace/$(date +%F).jsonl
 ```
 
-### graph_indexing no-fallback rule
+### 9.5 Log levels
 
-`graph_indexing` is the only task with a hard no-fallback constraint. If the routing decision selects 122B for a `graph_indexing` request and 122B is currently unreachable, the router returns:
+Set via `--log-level=LEVEL` (or `Serilog.MinimumLevel.Default`). Values: `verbose|debug|information|warning|error|fatal` (also `vrb|dbg|info|warn|err|ftl`). Invalid → fail-fast at startup.
 
+| Level | Used for |
+|---|---|
+| Debug | per-request prompt features; queue ticket lifecycle |
+| Information (default) | health transitions; canary promote/rollback; retrain start/end; startup banner |
+| Warning | upstream 502/timeouts; queue high-water; cost cap thresholds |
+| Error | unhandled BackgroundService exceptions; SSE write failures; teacher labeler malformed responses |
+
+---
+
+## 10. Hermes / Graphify Integration
+
+### Hermes (latency-sensitive; no `task` field)
+
+```jsonc
+// hermes config
+{ "openai": { "base_url": "http://localhost:4000/v1", "model": "auto" } }
 ```
-HTTP 503
-Content-Type: application/json
 
+Every Hermes request passes stages 1–2 unmatched; stage 3 (ML classifier) decides. Streaming + mid-stream cancellation fully supported (router detects `OperationCanceledException`, disposes upstream cleanly, logs `routing_reason` ending in `;cancelled`).
+
+### Graphify (concurrency-protected; sends `task`)
+
+```json
+{ "model": "auto", "task": "graph_indexing", "messages": [...] }
+```
+
+`task` routes through stage 2, bypassing the ML classifier. 122B is gated to 1 in-flight request via SemaphoreSlim — parallel Graphify pipelines queue.
+
+**graph_indexing no-fallback rule:** if 122B unreachable, returns HTTP 503 (not 35B reroute) — rerouting would corrupt the graph index. Graphify should retry once `/health` shows 122B back up.
+
+```json
 {
   "error": {
     "message": "Task 'graph_indexing' requires Qwen122B which is currently unreachable; fallback policy does not apply for graph_indexing.",
@@ -1011,268 +521,138 @@ Content-Type: application/json
 }
 ```
 
-This is intentional. Shadow-rebinding `graph_indexing` to 35B would produce an incomplete or incorrect graph index. Graphify should handle 503 by retrying once 122B is back up (check `/health`).
-
-### Concurrency cap
-
-122B is gated to 1 in-flight request via `SemaphoreSlim`. Graphify's `graph_indexing` and `compiler_debug` tasks are `high` priority, so they queue-jump `dependency_analysis` and `reasoning` requests (which are `low` priority). If you have parallel Graphify pipelines, they will queue; the queue timeout is `Queue.PerRequestTimeoutSeconds` (default: 300s).
-
 ---
 
-## 12. Operations
+## 11. Operations
 
-### 12.1 launchd setup
+### 11.1 launchd setup
 
-The router ships with a launchd plist and two helper scripts:
-
-- `deploy/com.ohama.smart-router.plist` — the LaunchAgent definition
-- `scripts/deploy.sh` — publishes the .NET binary to `~/llm-system/services/smart-router/`
-- `scripts/install-launchd.sh` — copies the plist to `~/Library/LaunchAgents/`
-
-**First-time install:**
 ```bash
-# 1. Publish the binary + assets (idempotent; safe to re-run)
-./scripts/deploy.sh
-
-# 2. Copy the plist to LaunchAgents (does NOT auto-load; gives you review opportunity)
-./scripts/install-launchd.sh
-
-# 3. Load and start the service
+./scripts/deploy.sh           # publishes binary + assets to ~/llm-system/services/smart-router/
+./scripts/install-launchd.sh  # copies plist to ~/Library/LaunchAgents/
 launchctl load -w ~/Library/LaunchAgents/com.ohama.smart-router.plist
-
-# 4. Verify it started
 curl http://127.0.0.1:4000/health
 ```
 
-**Stop the service:**
-```bash
-launchctl unload ~/Library/LaunchAgents/com.ohama.smart-router.plist
-```
-
-**Restart after config change:**
+**Stop / restart:**
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.ohama.smart-router.plist
 launchctl load -w ~/Library/LaunchAgents/com.ohama.smart-router.plist
 ```
 
-**View logs:**
+Plist runs as the logged-in user. `KeepAlive: true` (auto-restart on crash); `RunAtLoad: true`; `ThrottleInterval: 30` (max 1 restart per 30s); `WorkingDirectory: /Users/ohama/llm-system/services/smart-router` (relative paths in `appsettings.json` resolve from here).
+
+### 11.2 Tune ML routing
+
+Edit `~/llm-system/services/smart-router/appsettings.json` → restart. Common knob: `Routing.ML.Threshold` (lower → more 122B). Loop B retrains in-place — see §11.4.
+
+### 11.3 Canary workflow
+
 ```bash
-tail -f ~/llm-system/services/logs/smart-router.log
-tail -f ~/llm-system/services/logs/smart-router.err
+# 1. Drop new model
+cp /path/to/new-model.zip ~/llm-system/services/smart-router/models/router-canary.zip
+# FileSystemWatcher arms in ~200ms. No restart.
+
+curl http://127.0.0.1:4000/canary | jq .                              # confirm armed
+curl -X POST 'http://127.0.0.1:4000/canary/enable?percentage=20'      # adjust split
+curl -X POST http://127.0.0.1:4000/canary/promote                     # promote if good
+curl -X POST http://127.0.0.1:4000/canary/rollback                    # roll back if bad
 ```
 
-**Plist behavior:**
-- `KeepAlive: true` — launchd restarts the process on any exit (including crashes).
-- `RunAtLoad: true` — service starts immediately on `launchctl load`.
-- `ThrottleInterval: 30` — restart attempts are throttled to at most one every 30 seconds.
-- `WorkingDirectory: /Users/ohama/llm-system/services/smart-router` — relative paths in `appsettings.json` (e.g., `logs/decisions`, `models/router.zip`) resolve from here.
+Watchdog auto-rolls-back if (canary_fallback_rate − baseline) > 0.10 over 60s. Disable via `Canary.AutoRollbackEnabled: false`.
 
-The plist install path is `~/Library/LaunchAgents/com.ohama.smart-router.plist` (LaunchAgent — runs as the logged-in user, not root).
-
-### 12.2 Tune ML routing
-
-Edit `appsettings.json` in the install directory:
-```bash
-# Adjust confidence threshold (lower → more 122B routing)
-nano ~/llm-system/services/smart-router/appsettings.json
-# Edit Routing.ML.Threshold (default 0.5)
-
-# Restart
-launchctl unload ~/Library/LaunchAgents/com.ohama.smart-router.plist
-launchctl load -w ~/Library/LaunchAgents/com.ohama.smart-router.plist
-```
-
-The router reads `Routing.ML.Threshold`, `Routing.ML.ModelPath`, and `Routing.ML.EmbeddingModelPath` at startup; restart after any change. Loop B can also retrain the model in-place — see § 6.2 and § 12.4.
-
-### 12.3 Canary workflow
+### 11.4 Manual retrain
 
 ```bash
-# Step 1: Train a new classifier and drop it as router-canary.zip
-cp /path/to/new-model.zip \
-   ~/llm-system/services/smart-router/models/router-canary.zip
-# FileSystemWatcher arms the canary within ~200ms. No restart needed.
-
-# Step 2: Confirm canary is active
-curl http://127.0.0.1:4000/canary | jq .
-
-# Step 3: Adjust the split (optional; default 10%)
-curl -X POST 'http://127.0.0.1:4000/canary/enable?percentage=20'
-
-# Step 4a: Promote if metrics look good
-curl -X POST http://127.0.0.1:4000/canary/promote
-
-# Step 4b: Roll back if metrics are bad (idempotent)
-curl -X POST http://127.0.0.1:4000/canary/rollback
-
-# Monitor fallback_used rate in the log
-grep '"fallback_used":true' \
-  ~/llm-system/services/smart-router/logs/decisions/$(date +%F).jsonl | wc -l
-```
-
-The watchdog auto-rollback fires if the canary fallback rate is more than 10% higher than the baseline over a 60-second rolling window. Set `Canary.AutoRollbackEnabled: false` to disable it.
-
-### 12.4 Manual retrain
-
-```bash
-# Trigger a retrain from the CLI (dev mode)
 dotnet run --project src/SmartRouter.Cli -- --retrain
-
-# Or against the deployed binary
-cd ~/llm-system/services/smart-router
-dotnet SmartRouter.Cli.dll --retrain
+# or in production:
+cd ~/llm-system/services/smart-router && dotnet SmartRouter.Cli.dll --retrain
 ```
 
-This runs the full Loop B pipeline synchronously: FailureDetector → TeacherLabeler → DatasetMerger → Retrainer → Validator → File.Move. If the Validator rejects the new model, the current `models/router.zip` is unchanged and the rejection is logged to `logs/retraining-rejections.jsonl`.
+Runs the full Loop B pipeline synchronously. If Validator rejects, `models/router.zip` is unchanged and rejection is logged to `logs/retraining-rejections.jsonl`.
 
-**Seed hard cases before first retrain:**
+**Seed before first retrain:**
 ```bash
 dotnet fsi scripts/seed-hard-cases.fsx
 dotnet run --project src/SmartRouter.Cli -- --retrain
 ```
 
-### 12.5 Tune ConsecutiveFailureThreshold
-
-`Routing.Health.ConsecutiveFailureThreshold` (default: `1`) controls how many consecutive failed health probes are needed before an upstream is marked unreachable.
-
-- Default of `1` is aggressive: a single transient network blip marks 122B unreachable and triggers fallback for all in-flight non-graph_indexing requests.
-- Raise to `2` or `3` in production if you observe spurious fallback activation (visible as brief `fallback_used: true` bursts with `reachable` immediately recovering).
-- Trade-off: higher threshold means slower activation when 122B genuinely goes down.
-
-### 12.6 CLI flags
-
-| Flag | Effect |
-|------|--------|
-| `--retrain` | Run offline retrain pipeline (Phase 7); exits after completion |
-| `--log-level=LEVEL` | Set Serilog minimum level (verbose/debug/information/warning/error/fatal) |
-| `--trace-responses` | Enable trace logging to `logs/trace/<date>.jsonl` (Phase 14) |
-| `--cold-start` | Backup existing models/router.zip + datasets/ with timestamp suffix; ensureDummyModel generates fresh model on this same startup (Phase 14) |
-
-**`--cold-start` example**:
+### 11.5 Cold start (recover from corrupted model)
 
 ```bash
 dotnet run --project src/SmartRouter.Cli -- --cold-start
-# Logs:
-#   [INF] Cold-start: backed up 2 file(s) with timestamp=20260510-153422; files=[...]
-#   [WRN] No ML classifier model found at models/router.zip. Generating random dummy 1024-dim model.
-#   [INF] Dummy classifier model written to models/router.zip
-#   [INF] SmartRouter starting ...
-
-# To recover:
-mv models/router.zip.cold-start-backup-20260510-153422 models/router.zip
-# Then restart router.
+# Backs up models/router.zip and datasets/ files with timestamp suffix,
+# then auto-generates a fresh dummy classifier on the same startup.
+# Recovery: mv models/router.zip.cold-start-backup-YYYYMMDD-HHMMSS models/router.zip
 ```
+
+### 11.6 Reduce flapping
+
+Default `Routing.Health.ConsecutiveFailureThreshold: 1` is aggressive. Raise to `2`–`3` if you observe brief `fallback_used: true` bursts that immediately recover. Trade-off: slower activation when 122B genuinely goes down.
+
+---
+
+## 12. CLI Flags
+
+| Flag | Effect |
+|---|---|
+| `--port=N` | Override listen port (1024..65535; default 4000) |
+| `--log-level=LEVEL` | `verbose`/`debug`/`information`/`warning`/`error`/`fatal` (or short aliases). Invalid → fail-fast |
+| `--trace-responses` | Enable trace log to `logs/trace/<date>.jsonl` (off by default) |
+| `--cold-start` | Backup `models/router.zip` + `datasets/*` with timestamp; regenerate dummy classifier on this run |
+| `--retrain` | Run offline retrain pipeline once and exit |
+
+The legacy `--trace` boolean flag was removed — use `--log-level=debug`. Using `--trace` raises a fail-fast migration error.
 
 ---
 
 ## 13. Troubleshooting
 
-### model_unavailable returned for graph_indexing
+### `model_unavailable` returned for `graph_indexing`
 
-**Symptom:** Graphify gets HTTP 503 with `{"error": {"type": "model_unavailable"}}`.
-
-**Diagnostic:**
-```bash
-curl http://127.0.0.1:4000/health | jq '.qwen122b.reachable'
-# → false
-```
-
-**Fix:** 122B is down. Restart its mlx_lm.server:
+`/health` shows `qwen122b.reachable: false`. Restart 122B:
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.ohama.qwen122b.plist
-launchctl load -w ~/Library/LaunchAgents/com.ohana.qwen122b.plist
+launchctl load -w ~/Library/LaunchAgents/com.ohama.qwen122b.plist
 ```
-Then wait for `PollingIntervalSeconds` (default 10s) and check `/health` again. This is expected behavior — `graph_indexing` must not reroute to 35B.
+Wait `PollingIntervalSeconds` (default 10), check `/health`. This is intentional — graph_indexing must not silently degrade.
 
----
+### `fallback_used` flapping (alternates true/false)
 
-### Fallback flapping (fallback_used alternates true/false rapidly)
-
-**Symptom:** The DecisionLog shows `fallback_used` flickering between `true` and `false` even when 122B appears healthy.
-
-**Diagnostic:**
-```bash
-tail -20 logs/decisions/$(date +%F).jsonl | jq '.fallback_used'
-# → true, false, true, false, true ...
+122B intermittently failing single health probe. Raise threshold:
+```jsonc
+"Routing": { "Health": { "ConsecutiveFailureThreshold": 2 } }
 ```
 
-**Fix:** 122B is intermittently failing health probes (single-probe sensitivity). Raise `ConsecutiveFailureThreshold`:
-```json
-"Routing": {
-  "Health": {
-    "ConsecutiveFailureThreshold": 2
-  }
-}
-```
-Restart after editing.
+### Quality fallback firing too often (35B → 122B retry erodes latency wins)
 
----
+Check rate: `grep '"routing_reason":"fallback_to_122b"' logs/decisions/$(date +%F).jsonl | wc -l`. If high:
+1. Inspect `initial_response_excerpt` in trace log — if 35B's responses look fine but trip your `BadKeywords`, tune the keyword list.
+2. Lower `Routing.ML.Threshold` so borderline prompts pre-route to 122B (avoiding the wasted 35B call).
+3. Set `Routing.QualityFallback.Enabled: false` as a kill switch while investigating.
+
+### Canary auto-rollback cascade (every promote → rollback ~60s later)
+
+Canary genuinely worse than baseline. Options: retrain with more labeled data; raise `Canary.AutoRollbackThreshold` to 0.20 if delta is acceptable; or `AutoRollbackEnabled: false` and monitor manually.
 
 ### HF-id trap (upstream returns "model not found")
 
-**Symptom:** The upstream returns an error like `"model not found"` or `"invalid model id"` when you explicitly send a model alias in the request body.
+mlx_lm advertises models by local filesystem path, not HF id. Send `"model": "auto"`/`"35b"`/`"122b"` — the router maps aliases internally. Don't send raw HF ids like `Qwen/Qwen3-35B`.
 
-**Diagnostic:**
-```bash
-# Check the actual id mlx_lm advertises for the 35B instance
-curl http://127.0.0.1:8000/v1/models | jq '.data[].id'
-# → "/Users/ohama/llm-system/models/qwen36-35b"
-```
+### `dotnet not found` in launchd context
 
-**Fix:** mlx_lm uses the local filesystem path as the model id, not a HuggingFace-style id like `Qwen/Qwen3-35B`. The router's `tryParseModelAlias` maps common aliases (`"35b"`, `"122b"`, `"auto"`) to the correct model IDs internally. Only send those aliases in the `model` field, not raw HF ids.
-
-If you have a client sending an explicit HF-style id, configure it to send `"auto"`, `"35b"`, or `"122b"` instead.
-
----
-
-### Canary auto-rollback cascade (canary keeps getting rolled back)
-
-**Symptom:** Every `POST /canary/promote` is followed ~60s later by an automatic rollback. `curl /canary` shows `percentage: 0` shortly after promotion.
-
-**Diagnostic:**
-```bash
-tail -f ~/llm-system/services/logs/smart-router.log | grep AUTO-ROLLBACK
-```
-
-**Fix:** The canary classifier is genuinely worse than the primary (fallback delta > `Canary.AutoRollbackThreshold` over the rolling window). Options:
-1. Retrain with more labeled data before promoting.
-2. Raise `Canary.AutoRollbackThreshold` (e.g., `0.20`) if the delta is within acceptable range.
-3. Set `Canary.AutoRollbackEnabled: false` and monitor manually.
-
----
-
-### dotnet not found in launchd context
-
-**Symptom:** `smart-router.err` shows `command not found: dotnet` or the service exits immediately.
-
-**Diagnostic:**
-```bash
-which dotnet
-# → /opt/homebrew/bin/dotnet
-cat ~/Library/LaunchAgents/com.ohama.smart-router.plist | grep ProgramArguments -A 5
-```
-
-**Fix:** launchd does not inherit `~/.zshrc` PATH. The plist `ProgramArguments` must use an absolute path:
+launchd doesn't inherit `~/.zshrc` PATH. Plist `ProgramArguments` must use absolute path:
 ```xml
-<key>ProgramArguments</key>
 <array>
   <string>/opt/homebrew/bin/dotnet</string>
   <string>/Users/ohama/llm-system/services/smart-router/SmartRouter.Cli.dll</string>
 </array>
 ```
-Re-run `./scripts/install-launchd.sh` and restart the service.
-
----
+Re-run `./scripts/install-launchd.sh` and reload.
 
 ### Gatekeeper quarantine blocks the service
 
-**Symptom:** Service exits silently shortly after `launchctl load`. No crash in `.err`.
-
-**Diagnostic:**
-```bash
-xattr -lr ~/llm-system/services/smart-router/ | grep com.apple.quarantine
-```
-
-**Fix:**
+Service exits silently after `launchctl load`; no crash log:
 ```bash
 xattr -dr com.apple.quarantine ~/llm-system/services/smart-router/
 launchctl unload ~/Library/LaunchAgents/com.ohama.smart-router.plist
@@ -1283,28 +663,7 @@ launchctl load -w ~/Library/LaunchAgents/com.ohama.smart-router.plist
 
 ## 14. Further Reading
 
-### How-to guides
-
-Internal development notes in `documentation/howto/` — written during implementation, useful if you're extending the router:
-
-| File | Topic |
-|------|-------|
-| `build-priority-queue-on-semaphoreslim.md` | Phase 3: fair priority queue with SemaphoreSlim |
-| `bypass-concurrency-gated-upstream-with-named-httpclient.md` | Named HttpClient patterns |
-| `debug-kestrel-request-aborted.md` | RequestAborted cancellation token edge cases |
-| `force-task-yield-in-fake-async-doubles.md` | Test doubles for async flows |
-| `handle-fsharp-task-finally-disposal.md` | F# task {} disposal in finally blocks |
-| `handle-fsharp-try-with-semicolon-trap.md` | F# try-with semicolon pitfall |
-| `order-mlnet-traintest-split-before-fit.md` | ML.NET train/test split ordering |
-| `propagate-cancellation-through-fsharp-task-trywith.md` | Cancellation propagation |
-| `setup-aspnetcore-config-override-test.md` | Integration test config overrides |
-| `use-semaphoreslim-not-mutex-for-async-idempotency.md` | SemaphoreSlim for async idempotency |
-| `wire-fsharp-namedhttpclient-with-configurehttpclient.md` | Named HttpClient DI wiring |
-
-### Planning artifacts
-
-- `.planning/ROADMAP.md` — phase-by-phase goals and success criteria
-- `.planning/REQUIREMENTS.md` — functional and non-functional requirements (REL-01..04, ROUT-01..07, etc.)
-- `.planning/phases/` — per-phase CONTEXT.md, RESEARCH.md, and SUMMARY.md files
-
-These are for developers extending smart-router, not for operators using it. Everything an operator needs to run and tune the router is in this README.
+- `documentation/howto/` — implementation notes (priority queue on SemaphoreSlim, ML.NET train/test ordering, F# `task {}` cancellation, launchd traps, etc.)
+- `.planning/docs/` — design references (distillation fallback origin; quality fallback test walkthroughs)
+- `.planning/ROADMAP.md`, `.planning/REQUIREMENTS.md` — phase-by-phase goals; functional/non-functional traceability
+- `archive/heuristic-baseline` branch + `v0.5-heuristic-baseline` tag — pre-ML routing snapshot
