@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 16 IN PROGRESS (122B-as-Judge for Borderline Cases). Plans 16-01 and 16-02 complete (wave 1). Phase 15 COMPLETE.
+**Current focus:** Phase 17 NEXT (QualityClassifier distillation endgame). Phase 16 COMPLETE (122B-as-Judge for Borderline Cases).
 
 ## Current Position
 
-Phase: 16 of 17 IN PROGRESS
-Plan: 2 of N in Phase 16 — 16-01 and 16-02 complete (wave 1)
-Status: 16-02 COMPLETE (commits 510fa22 + 94291c6 + 014bf5b). IJudgeClient + IJudgeStats + JudgeClient (LRU cache, named HttpClient consumer). prompts/judge-prompt.md. fsproj: QualityCheck.fs (23) → BorderlineClassifier.fs (24) → JudgeClient.fs (25) → ChatCompletions.fs (60). Build: 0 warnings, 0 errors. Tests: 102+16+0 (baseline preserved).
-Last activity: 2026-05-11 — Completed 16-02-JUDGE-ADAPTER-PLAN.md.
+Phase: 16 of 17 COMPLETE — Phase 17 not yet started
+Plan: 4 of 4 in Phase 16 — 16-01..04 all complete
+Status: Phase 16 COMPLETE. Tests: 113 passed, 16 ignored, 0 failed. OPT-IN judge cascade (Routing.Judge.Enabled=false default), LRU cache, JDG-01..05 integration tests, README §5.5.5/§7/§8/§9.3 updated, REQUIREMENTS.md JDG-01..05 marked Complete.
+Last activity: 2026-05-11 — Completed 16-04-TESTS-AND-DOCS-PLAN.md.
 
-Progress: [████████████████████████████████████░░░░] 60 of 65 plans (Phases 1-15 complete; Phase 16 plans 1-2 complete; Phases 16 plans 3+ and 17 remaining)
+Progress: [████████████████████████████████████████░░░░░] 60 of 65 plans (Phases 1-16 complete; Phase 17 remaining ~5 plans)
 
 ## Performance Metrics
 
@@ -276,6 +276,8 @@ Recent decisions affecting current work:
 - 16-02: Wave-1 fsproj bundling — Edit tool applied JudgeClient.fs line before 16-01 committed fsproj; result: both entries in commit 014bf5b, both at correct positions (line 24 BorderlineClassifier, line 25 JudgeClient)
 - 16-02: prompts/judge-prompt.md uses {{QUESTION}}/{{RESPONSE}} placeholders + ROUTE_YES/ROUTE_NO sentinels; ROUTE_NO wins on collision (safety bias, mirrors Phase 7 ROUTE_122B-wins)
 - 16-02: 2 retries at 200ms/400ms for judge (OQ #5) — documented in JudgeClient.fs module comment; AddResilienceHandler wiring deferred to 16-03 (faster than teacher's 3x1s/2s/4s; judge is hot path of borderline)
+- 16-03: Routing.Judge.Enabled=false default (OPT-IN, mirrors Phase 14 Trace:Enabled); Endpoint="" → CompositionRoot resolves to Upstreams.Model122B at DI time; clean two-branch if/else for DI (not last-registration-wins); fallback_kind='quality' only when substitution happened (not on judge-NO-but-retry-failed)
+- 16-04: configureWithoutMl + full manual DI for judge integration tests (configureRequestPipeline requires IEmbedder/ML model files); ICanaryState 5-member stub required in test router setup (configureWithoutMl omits it; /stats needs GetRequiredService<ICanaryState>()); chain form AddHttpClient only in unit tests (2-arg form silently drops BaseAddress in F#); JDG-01 entropy fixture "abcdefgh"×20 (entropy=log2(8)=3.0 ∈ [2.5,3.5); "abcabc"×30 was entropy=1.585 below threshold)
 
 ### Pending Todos
 
@@ -292,5 +294,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-11
-Stopped at: Completed 16-02-JUDGE-ADAPTER-PLAN.md. Wave 1 complete (16-01 + 16-02). IJudgeClient + IJudgeStats + JudgeClient (328 lines) + prompts/judge-prompt.md created. Key commits: 510fa22 (prompt), 94291c6 (JudgeClient.fs), 014bf5b (fsproj bundled wave-1).
+Stopped at: Completed 16-04-TESTS-AND-DOCS-PLAN.md. Phase 16 fully complete. Key commits: 014bf5b (16-01+16-02 wave-1 fsproj bundle), 510fa22 (judge-prompt.md), 94291c6 (JudgeClient.fs), 0a52557 (TraceRecord), a7cfefd (appsettings), 13128c8 (DI), c4685e2 (ChatCompletions wiring), a0c1c8c (JudgeIntegrationTests.fs), dae2604 (README), afba9f2 (CHANGELOG), 6264825 (REQUIREMENTS.md).
 Resume file: None
