@@ -31,6 +31,8 @@
     <Compile Include="MLLiveVersionTests.fs" />
     <!-- Phase 14: quality fallback integration tests -->
     <Compile Include="QualityFallbackTests.fs" />
+    <!-- Phase 15: quality signal enrichment tests -->
+    <Compile Include="QualitySignalEnrichmentTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
