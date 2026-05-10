@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Phase 16 — 122B-as-Judge for Borderline Cases (OPT-IN).** When `Routing.Judge.Enabled = true`, 35B responses that pass Phase 15's heuristic but fall in the entropy/length band edge get a 1-token verification call to 122B (`ROUTE_YES`/`ROUTE_NO`). Cached by `(prompt_hash, response_hash)` LRU (default 10000 entries). New trace fields `judge_called` / `judge_verdict` / `judge_latency_ms` (schema_version=1 unchanged — additive). New `/stats` fields `judge_cache_hits` / `judge_cache_misses` / `judge_call_count`. New `Routing.Judge.*` config block (5 keys). Streaming responses bypass the judge. **Default OFF** — operators opt in after evaluating borderline rate via Phase 15's `quality_check_hits_*` /stats counters.
+
 ## [1.2.0] - 2026-05-10
 
 Quality signal enrichment release. The fallback heuristic now reads

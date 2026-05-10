@@ -176,6 +176,10 @@ Trade-off:
 
 ### Tier 3 — 큰 구조 변경, 높은 가치 (3-5 일)
 
+> **Phase 16 implemented Tier 3-A** (2026-05-10) — 122B-as-judge for borderline cases.
+> See `.planning/phases/16-122b-as-judge-for-borderline-cases/` for plans + summary.
+> Tier 3-B (judge result self-distillation as Loop B input) is candidate for Phase 17.
+
 #### 3-A. 122B-as-judge (lazy verification)
 
 borderline 케이스 (Tier 1+2 통과했지만 confidence 낮음) 만 **별도의 짧은 prompt 로 122B 에 물음**:
