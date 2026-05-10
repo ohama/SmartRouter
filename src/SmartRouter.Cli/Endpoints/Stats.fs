@@ -19,38 +19,46 @@ open SmartRouter.Cli.Adapters.CanaryState
 /// canary_percent, canary_active so monitoring tooling can scrape a single
 /// endpoint instead of hitting /stats + /canary in lockstep.
 type private StatsWire =
-    { timestamp                 : string
-      active_122b               : int
-      queue_depth_122b_high     : int
-      queue_depth_122b_low      : int
-      active_35b                : int
-      requests_per_sec          : float
-      avg_latency_ms_60s        : float
-      failure_count_total       : int64
-      fairness_picks_high       : int64
-      fairness_picks_low        : int64
-      semaphore_available       : int
-      baseline_model_version    : string
-      canary_model_version      : string option
-      canary_percent            : int
-      canary_active             : bool }
+    { timestamp                          : string
+      active_122b                        : int
+      queue_depth_122b_high              : int
+      queue_depth_122b_low               : int
+      active_35b                         : int
+      requests_per_sec                   : float
+      avg_latency_ms_60s                 : float
+      failure_count_total                : int64
+      fairness_picks_high                : int64
+      fairness_picks_low                 : int64
+      semaphore_available                : int
+      baseline_model_version             : string
+      canary_model_version               : string option
+      canary_percent                     : int
+      canary_active                      : bool
+      quality_check_hits_finish_reason   : int64    // NEW Phase 15
+      quality_check_hits_length          : int64    // NEW Phase 15
+      quality_check_hits_entropy         : int64    // NEW Phase 15
+      quality_check_hits_keyword         : int64 }  // NEW Phase 15
 
 let private snapshotToWireFields (s: StatsSnapshot) : StatsWire =
-    { timestamp                 = s.Timestamp.ToString("o")
-      active_122b               = s.Active122B
-      queue_depth_122b_high     = s.QueueDepth122BHigh
-      queue_depth_122b_low      = s.QueueDepth122BLow
-      active_35b                = s.Active35B
-      requests_per_sec          = s.RequestsPerSec
-      avg_latency_ms_60s        = s.AvgLatencyMs60s
-      failure_count_total       = s.FailureCountTotal
-      fairness_picks_high       = s.FairnessPicksHigh
-      fairness_picks_low        = s.FairnessPicksLow
-      semaphore_available       = s.SemaphoreAvailable
-      baseline_model_version    = ""
-      canary_model_version      = None
-      canary_percent            = 0
-      canary_active             = false }
+    { timestamp                          = s.Timestamp.ToString("o")
+      active_122b                        = s.Active122B
+      queue_depth_122b_high              = s.QueueDepth122BHigh
+      queue_depth_122b_low               = s.QueueDepth122BLow
+      active_35b                         = s.Active35B
+      requests_per_sec                   = s.RequestsPerSec
+      avg_latency_ms_60s                 = s.AvgLatencyMs60s
+      failure_count_total                = s.FailureCountTotal
+      fairness_picks_high                = s.FairnessPicksHigh
+      fairness_picks_low                 = s.FairnessPicksLow
+      semaphore_available                = s.SemaphoreAvailable
+      baseline_model_version             = ""
+      canary_model_version               = None
+      canary_percent                     = 0
+      canary_active                      = false
+      quality_check_hits_finish_reason   = s.QualityCheckHits.FinishReason
+      quality_check_hits_length          = s.QualityCheckHits.Length
+      quality_check_hits_entropy         = s.QualityCheckHits.Entropy
+      quality_check_hits_keyword         = s.QualityCheckHits.Keyword }
 
 /// Register GET /stats. Resolves IStatsProvider, IModelVersionProvider, and
 /// ICanaryState from DI on each request and serializes a single self-contained

@@ -20,6 +20,15 @@ type QueueDispatcherOptions =
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
+/// Phase 15 — Quality-check hit counters (process-lifetime).
+/// Each counter tracks how many times a given detection dimension fired as the
+/// winning (first-match) Bad reason in the cheap-first cascade.
+type QualityCheckHits =
+    { FinishReason : int64
+      Length       : int64
+      Entropy      : int64
+      Keyword      : int64 }
+
 /// Stats snapshot returned by GET /stats. JSON shape uses snake_case
 /// (OpenAI convention). All counters are read under appropriate locks /
 /// Volatile.Read so the snapshot is internally consistent.
@@ -34,11 +43,25 @@ type StatsSnapshot =
       FailureCountTotal   : int64
       FairnessPicksHigh   : int64
       FairnessPicksLow    : int64
-      SemaphoreAvailable  : int }
+      SemaphoreAvailable  : int
+      QualityCheckHits    : QualityCheckHits }   // NEW Phase 15
 
 /// Cli-only port — implemented by QueueDispatcher; consumed by /stats endpoint.
 type IStatsProvider =
     abstract member GetSnapshot : unit -> StatsSnapshot
+
+/// Phase 15 — Quality-check hit counters exposed via /stats.
+/// QueueDispatcher is the natural home (it already aggregates counters);
+/// ChatCompletions resolves IQualityCheckStats and calls Record* on each Bad verdict.
+/// Counters are process-lifetime (never reset) — same convention as failureCount.
+type IQualityCheckStats =
+    abstract member RecordFinishReasonHit : unit -> unit
+    abstract member RecordLengthHit       : unit -> unit
+    abstract member RecordEntropyHit      : unit -> unit
+    abstract member RecordKeywordHit      : unit -> unit
+    /// Returns (finish_reason, length, entropy, keyword) tuple.
+    /// struct tuple avoids tiny allocations on the /stats hot path.
+    abstract member GetHits               : unit -> struct (int64 * int64 * int64 * int64)
 
 // ── Ticket ────────────────────────────────────────────────────────────────────
 
@@ -98,6 +121,12 @@ type QueueDispatcher
     let mutable failureCount      = 0L
     let mutable fairnessPicksHigh = 0L
     let mutable fairnessPicksLow  = 0L
+
+    // Phase 15 — quality-check hit counters (process-lifetime; Interlocked.Increment for thread safety)
+    let mutable qcHitFinishReason = 0L
+    let mutable qcHitLength       = 0L
+    let mutable qcHitEntropy      = 0L
+    let mutable qcHitKeyword      = 0L
 
     // Rolling-window stats: lock-protected per-second buckets trimmed on read.
     // Latency samples and request timestamps kept for up to 60s.
@@ -416,4 +445,27 @@ type QueueDispatcher
               FailureCountTotal   = Volatile.Read(&failureCount)
               FairnessPicksHigh   = Volatile.Read(&fairnessPicksHigh)
               FairnessPicksLow    = Volatile.Read(&fairnessPicksLow)
-              SemaphoreAvailable  = sem122b.CurrentCount }
+              SemaphoreAvailable  = sem122b.CurrentCount
+              QualityCheckHits    =
+                { FinishReason = Volatile.Read(&qcHitFinishReason)
+                  Length       = Volatile.Read(&qcHitLength)
+                  Entropy      = Volatile.Read(&qcHitEntropy)
+                  Keyword      = Volatile.Read(&qcHitKeyword) } }
+
+    // ── IQualityCheckStats ────────────────────────────────────────────────────
+
+    interface IQualityCheckStats with
+        member _.RecordFinishReasonHit () =
+            Interlocked.Increment(&qcHitFinishReason) |> ignore
+        member _.RecordLengthHit () =
+            Interlocked.Increment(&qcHitLength) |> ignore
+        member _.RecordEntropyHit () =
+            Interlocked.Increment(&qcHitEntropy) |> ignore
+        member _.RecordKeywordHit () =
+            Interlocked.Increment(&qcHitKeyword) |> ignore
+        member _.GetHits () =
+            struct (
+                Volatile.Read(&qcHitFinishReason),
+                Volatile.Read(&qcHitLength),
+                Volatile.Read(&qcHitEntropy),
+                Volatile.Read(&qcHitKeyword))
