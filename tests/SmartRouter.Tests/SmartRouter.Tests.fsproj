@@ -33,6 +33,8 @@
     <Compile Include="QualityFallbackTests.fs" />
     <!-- Phase 15: quality signal enrichment tests -->
     <Compile Include="QualitySignalEnrichmentTests.fs" />
+    <!-- Phase 16: 122B-as-judge for borderline cases -->
+    <Compile Include="JudgeIntegrationTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
