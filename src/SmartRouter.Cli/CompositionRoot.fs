@@ -467,6 +467,13 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         sp.GetRequiredService<QueueDispatcher>() :> IStatsProvider)
         |> ignore
 
+    // Phase 15 — IQualityCheckStats unconditional registration.
+    // QueueDispatcher is registered as the concrete type above; resolve the same
+    // singleton instance here for the IQualityCheckStats interface.
+    services.AddSingleton<IQualityCheckStats>(fun sp ->
+        sp.GetRequiredService<QueueDispatcher>() :> IQualityCheckStats)
+        |> ignore
+
     // Bind DecisionLog options from "DecisionLog" section in appsettings.json.
     services.Configure<DecisionLogOptions>(config.GetSection("DecisionLog")) |> ignore
 
@@ -891,6 +898,19 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
     services.AddSingleton<QualityFallbackOptions>(fun sp ->
         let opts = sp.GetRequiredService<IOptions<RoutingOptions>>().Value
         normalizeQualityFallback opts)
+        |> ignore
+
+    // Phase 15 — IQualityCheckStats NoOp for offline path.
+    // The offline --retrain pipeline doesn't run ChatCompletions, but DI graph
+    // integrity requires this resolvable (Pitfall 10).
+    // QueueDispatcher is not registered in configureWithoutMl (excludes request routing).
+    services.AddSingleton<IQualityCheckStats>(fun _ ->
+        { new IQualityCheckStats with
+            member _.RecordFinishReasonHit () = ()
+            member _.RecordLengthHit       () = ()
+            member _.RecordEntropyHit      () = ()
+            member _.RecordKeywordHit      () = ()
+            member _.GetHits               () = struct (0L, 0L, 0L, 0L) })
         |> ignore
 
     // DecisionLog — same triple-reg as configureRequestPipeline.

@@ -22,6 +22,7 @@ open SmartRouter.Cli.Adapters.CorrelationMiddleware
 open SmartRouter.Cli.Adapters.RoutingAlgorithm
 open SmartRouter.Cli.Adapters.CanaryMetrics
 open SmartRouter.Cli.Adapters.QualityCheck
+open SmartRouter.Cli.Adapters.QueueDispatcher   // IQualityCheckStats
 open SmartRouter.Cli.Adapters.TraceLogger
 
 // ── Phase 14 — string truncation for trace excerpts ──────────────────────────
@@ -291,6 +292,8 @@ let handler
                 // no semantic completeness) or full server-side buffering (defeats the
                 // latency advantage of streaming entirely). Operators who want quality
                 // fallback should send non-streaming requests (stream=false).
+                // Phase 15 — streaming branch INTENTIONALLY SKIPPED for quality enrichment too.
+                // chunks already shipped to client; analyzeResponse cannot retract.
                 //
                 // STRM-04 / PITFALL-6: Set all SSE headers BEFORE writing any body bytes.
                 // Once any WriteAsync runs, headers are committed and cannot be changed.
@@ -401,20 +404,48 @@ let handler
                 // traceLogger: null when --trace-responses absent — skip trace block entirely.
                 let qualityFallbackOpts = ctx.RequestServices.GetRequiredService<QualityFallbackOptions>()
                 let traceLogger = ctx.RequestServices.GetService<ITraceLogger>()
+                let qualityCheckStats = ctx.RequestServices.GetRequiredService<IQualityCheckStats>()
 
                 let initialDecision = decision
                 let! initialResult = upstream.CompleteAsync req initialDecision ctx.RequestAborted
 
                 match initialResult with
                 | Ok initialBody ->
-                    // ── Phase 14: Quality fallback (35B → 122B retry) ────────────────
+                    // ── Phase 15: Quality fallback (35B → 122B retry) ────────────────
                     // Streaming branch skips this entirely; chunks already shipped to client.
-                    // qualityFallbackTriggered is set only when 35B was the initial target
-                    // AND the response fails the configured heuristic (isBadResponse returns
-                    // false when QualityFallback.Enabled = false — operator kill-switch).
+                    // Phase 15 — extract finish_reason from initialBody and run the full cascade.
+                    // Verdict is structured (Good | Bad of BadReason) so we can serialize bad_reason
+                    // for the trace and increment the right /stats counter without re-parsing.
+                    let initialFinishReason = extractFinishReason initialBody
+                    let initialVerdict =
+                        if initialDecision.Target = Qwen35B then
+                            analyzeResponse qualityFallbackOpts initialFinishReason initialBody
+                        else
+                            Good   // 122B initial target — quality fallback never fires (no further escalation possible)
+
                     let qualityFallbackTriggered =
-                        initialDecision.Target = Qwen35B
-                        && isBadResponse qualityFallbackOpts initialBody
+                        match initialVerdict with
+                        | Bad _ -> true
+                        | Good  -> false
+
+                    // Phase 15 — record the dimension that fired so /stats exposes it.
+                    // Only counts the WINNING (first-match) reason per cheap-first cascade.
+                    match initialVerdict with
+                    | Bad (FinishReasonMatch _) -> qualityCheckStats.RecordFinishReasonHit()
+                    | Bad (LengthBelow _)       -> qualityCheckStats.RecordLengthHit()
+                    | Bad (LowEntropy _)        -> qualityCheckStats.RecordEntropyHit()
+                    | Bad (KeywordMatch _)      -> qualityCheckStats.RecordKeywordHit()
+                    | Good                      -> ()
+
+                    // Phase 15 — serialize Verdict into bad_reason wire form ("tag=value").
+                    // '=' separator matches operator jq workflow (`split("=")[0]`).
+                    let badReasonStr =
+                        match initialVerdict with
+                        | Good                          -> None
+                        | Bad (LengthBelow n)           -> Some (sprintf "length=%d" n)
+                        | Bad (KeywordMatch kw)         -> Some (sprintf "keyword=%s" kw)
+                        | Bad (FinishReasonMatch fr)    -> Some (sprintf "finish_reason=%s" fr)
+                        | Bad (LowEntropy s)            -> Some (sprintf "entropy=%.2f" s)
 
                     let! (finalDecision, finalBody) = task {
                         if qualityFallbackTriggered then
@@ -485,6 +516,7 @@ let handler
                             final_response_excerpt   = truncate 500 finalBody
                             total_latency_ms         = (DateTimeOffset.UtcNow - started).TotalMilliseconds
                             timestamp                = DateTimeOffset.UtcNow
+                            bad_reason               = badReasonStr   // NEW Phase 15
                         })
 
                     let isCanary, isFb = metricCohort finalDecision okReason
