@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 14 IN PROGRESS — Wave 4 (14-04 ChatCompletions fallback branch) complete. Quality fallback branch live in non-streaming path: 35B → 122B retry on `isBadResponse`; TraceLogger emitted; streaming branch documented as exempt. QualityFallbackOptions registered as standalone DI singleton (fsproj compile-order fix). ARCH-01 preserved. Test baseline: 80 passed + 16 ignored + 0 failed.
+**Current focus:** Phase 14 IN PROGRESS — Wave 5 (14-05 Tests) complete. Quality fallback integration tests live: QF-01 (35B good → no fallback) + QF-02 (35B TODO → 122B retry) both pass, verified via JsonDocument.Parse of JSONL logs. Test baseline raised to 82 passed + 16 ignored + 0 failed.
 
 ## Current Position
 
 Phase: 14 of 14 (Quality Fallback and Trace)
-Plan: 4 of 6 in current phase — 14-04 complete
-Status: Wave 4 plan 14-04 complete. Non-streaming quality fallback (35B → 122B retry) + trace JSONL emission + graceful degradation (122B unreachable / retry fails → 35B response as-is) + DecisionLog final-decision semantics. Streaming branch unchanged (INTENTIONALLY SKIPPED comment). QualityFallbackOptions DI singleton in CompositionRoot. Build clean (TreatWarningsAsErrors=true). **80 passed + 16 ignored + 0 failed**.
-Last activity: 2026-05-10 — Completed 14-04-CHATCOMPLETIONS-QUALITY-FALLBACK-PLAN.md.
+Plan: 5 of 6 in current phase — 14-05 complete
+Status: Wave 5 plan 14-05 complete. Two integration tests (QF-01 + QF-02) verify the quality fallback path end-to-end via JSONL log inspection using fake-Kestrel upstreams, stub IHealthProbe, and stub RoutingAlgorithmRegistration. TraceLogger triple-reg in fixture. Build clean (TreatWarningsAsErrors=true). **82 passed + 16 ignored + 0 failed**.
+Last activity: 2026-05-10 — Completed 14-05-TESTS-PLAN.md.
 
-Progress: [████████████████████████████████████████] 51 of 53 plans (Phase 14 Wave 4 done)
+Progress: [████████████████████████████████████████] 52 of 53 plans (Phase 14 Wave 5 done)
 
 ## Performance Metrics
 
