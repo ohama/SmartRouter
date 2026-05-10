@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 16 IN PROGRESS (122B-as-Judge for Borderline Cases). Plan 16-01 complete. Phase 15 COMPLETE.
+**Current focus:** Phase 16 IN PROGRESS (122B-as-Judge for Borderline Cases). Plans 16-01 and 16-02 complete (wave 1). Phase 15 COMPLETE.
 
 ## Current Position
 
 Phase: 16 of 17 IN PROGRESS
-Plan: 1 of N in Phase 16 — 16-01 complete
-Status: 16-01 COMPLETE (commit 014bf5b). BorderlineClassifier.fs (77 lines, BCL-only) added. fsproj compile order: QualityCheck.fs (23) → BorderlineClassifier.fs (24) → ChatCompletions.fs (59). Build: 0 warnings, 0 errors. Tests: 102+16+0 (baseline preserved).
-Last activity: 2026-05-11 — Completed 16-01-BORDERLINE-CLASSIFIER-PLAN.md.
+Plan: 2 of N in Phase 16 — 16-01 and 16-02 complete (wave 1)
+Status: 16-02 COMPLETE (commits 510fa22 + 94291c6 + 014bf5b). IJudgeClient + IJudgeStats + JudgeClient (LRU cache, named HttpClient consumer). prompts/judge-prompt.md. fsproj: QualityCheck.fs (23) → BorderlineClassifier.fs (24) → JudgeClient.fs (25) → ChatCompletions.fs (60). Build: 0 warnings, 0 errors. Tests: 102+16+0 (baseline preserved).
+Last activity: 2026-05-11 — Completed 16-02-JUDGE-ADAPTER-PLAN.md.
 
-Progress: [████████████████████████████████████░░░░] 59 of 65 plans (Phases 1-15 complete; Phase 16 plan 1 complete; Phases 16 plans 2+ and 17 remaining)
+Progress: [████████████████████████████████████░░░░] 60 of 65 plans (Phases 1-15 complete; Phase 16 plans 1-2 complete; Phases 16 plans 3+ and 17 remaining)
 
 ## Performance Metrics
 
@@ -269,6 +269,13 @@ Recent decisions affecting current work:
 - 16-01: OQ #2 resolved — koreanRatio + effectiveLength re-implemented inline as private helpers in BorderlineClassifier.fs; charEntropy is module-public in QualityCheck.fs so reused via open import; QualityCheck.fs visibility unchanged
 - 16-01: Keyword and finish_reason excluded from borderline detection — binary signals (present/absent, decisive); no natural partial zone
 - 16-01: fsproj Edit-not-Write pattern — concurrent 16-02 also edited fsproj (adding JudgeClient.fs at line 25); both edits coexist correctly because Edit tool operates on string replacement, not file overwrite
+- 16-02: IJudgeClient abstract member VerdictAsync — all 5 tuple params on single line (F# FS0010 rejects multi-line `*` splits in abstract member tuple signatures)
+- 16-02: JudgeFailed/JudgeSkipped NOT cached — failures may be transient; Skipped may resolve if operator adds template at runtime; only RouteYes/RouteNo are cached
+- 16-02: IJudgeStats is a SEPARATE interface (not extending IQualityCheckStats from Phase 15) — judge stats owned by JudgeClient, not QueueDispatcher; GetJudgeStats() returns struct (int64 * int64 * int64) allocation-free
+- 16-02: JudgeOptions.Endpoint default "" — CompositionRoot (16-03) resolves "" to Upstreams.Model122B at DI time; avoids operator updating two config keys when 122B port changes
+- 16-02: Wave-1 fsproj bundling — Edit tool applied JudgeClient.fs line before 16-01 committed fsproj; result: both entries in commit 014bf5b, both at correct positions (line 24 BorderlineClassifier, line 25 JudgeClient)
+- 16-02: prompts/judge-prompt.md uses {{QUESTION}}/{{RESPONSE}} placeholders + ROUTE_YES/ROUTE_NO sentinels; ROUTE_NO wins on collision (safety bias, mirrors Phase 7 ROUTE_122B-wins)
+- 16-02: 2 retries at 200ms/400ms for judge (OQ #5) — documented in JudgeClient.fs module comment; AddResilienceHandler wiring deferred to 16-03 (faster than teacher's 3x1s/2s/4s; judge is hot path of borderline)
 
 ### Pending Todos
 
@@ -285,5 +292,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-11
-Stopped at: Completed 16-01-BORDERLINE-CLASSIFIER-PLAN.md. BorderlineClassifier.fs (77 lines, BCL-only) created. Key commits: 014bf5b (feat+fsproj).
+Stopped at: Completed 16-02-JUDGE-ADAPTER-PLAN.md. Wave 1 complete (16-01 + 16-02). IJudgeClient + IJudgeStats + JudgeClient (328 lines) + prompts/judge-prompt.md created. Key commits: 510fa22 (prompt), 94291c6 (JudgeClient.fs), 014bf5b (fsproj bundled wave-1).
 Resume file: None
