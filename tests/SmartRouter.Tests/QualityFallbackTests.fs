@@ -476,7 +476,7 @@ let tests =
         // keyword matches in envelope-only fields do not trigger fallback.
 
         testCase "QF-03 (#13): short content triggers MinResponseLength even though envelope is long" <| fun () ->
-            let opts = { Enabled = true; MinResponseLength = 30; BadKeywords = [|"TODO"; "I think"|] }
+            let opts = { Enabled = true; MinResponseLength = 30; BadKeywords = [|"TODO"; "I think"|]; BadFinishReasons = [||]; EntropyThreshold = 0.0 }
             // Realistic OpenAI-compatible envelope where 35B answered "Yes" (3 chars).
             // Envelope total is ~100 chars but content is 3 — must be flagged bad.
             let body = """{"id":"chatcmpl-x","choices":[{"message":{"role":"assistant","content":"Yes"},"finish_reason":"stop"}]}"""
@@ -485,14 +485,14 @@ let tests =
                 "3-char content must fail MinResponseLength=30 regardless of envelope size (issue #13 reproduction)"
 
         testCase "QF-04 (#13): keyword match runs against content, not envelope" <| fun () ->
-            let opts = { Enabled = true; MinResponseLength = 5; BadKeywords = [|"I think"|] }
+            let opts = { Enabled = true; MinResponseLength = 5; BadKeywords = [|"I think"|]; BadFinishReasons = [||]; EntropyThreshold = 0.0 }
             let body = """{"id":"chatcmpl-x","choices":[{"message":{"role":"assistant","content":"I think this is fine. The answer is correct enough."},"finish_reason":"stop"}]}"""
             Expect.isTrue
                 (isBadResponse opts body)
                 "BadKeyword present inside content must trigger fallback"
 
         testCase "QF-05 (#13): keyword in envelope-only fields does NOT trigger" <| fun () ->
-            let opts = { Enabled = true; MinResponseLength = 5; BadKeywords = [|"TODO"|] }
+            let opts = { Enabled = true; MinResponseLength = 5; BadKeywords = [|"TODO"|]; BadFinishReasons = [||]; EntropyThreshold = 0.0 }
             // Wrapper has "TODO" in the id field but content does not. Pre-fix this
             // would have triggered fallback because the heuristic checked the whole
             // string; post-fix it must NOT trigger.
@@ -502,14 +502,14 @@ let tests =
                 "BadKeyword in envelope-only fields must NOT trigger — issue #13 root cause"
 
         testCase "QF-06 (#13): malformed JSON degrades to empty content (triggers MinResponseLength)" <| fun () ->
-            let opts = { Enabled = true; MinResponseLength = 30; BadKeywords = [||] }
+            let opts = { Enabled = true; MinResponseLength = 30; BadKeywords = [||]; BadFinishReasons = [||]; EntropyThreshold = 0.0 }
             let malformed = """{"id":"x","choices":[{"message":{"role":"assistant","content"""
             Expect.isTrue
                 (isBadResponse opts malformed)
                 "malformed JSON must not throw; treated as empty content → fallback fires (safe-on-fail)"
 
         testCase "QF-07 (#13): kill switch (Enabled=false) returns false even on short content" <| fun () ->
-            let opts = { Enabled = false; MinResponseLength = 30; BadKeywords = [|"TODO"|] }
+            let opts = { Enabled = false; MinResponseLength = 30; BadKeywords = [|"TODO"|]; BadFinishReasons = [||]; EntropyThreshold = 0.0 }
             let body = """{"id":"chatcmpl-x","choices":[{"message":{"role":"assistant","content":"Yes"},"finish_reason":"stop"}]}"""
             Expect.isFalse
                 (isBadResponse opts body)

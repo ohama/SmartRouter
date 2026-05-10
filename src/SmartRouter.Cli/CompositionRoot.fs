@@ -124,14 +124,33 @@ let buildRoutingConfig (opts: RoutingOptions) : RoutingConfig =
 /// Defensive helper: normalize QualityFallbackOptions from the JSON binding.
 /// Called by configureRequestPipeline and configureWithoutMl before injecting
 /// into DI. Handles absent-section (null), zero MinResponseLength, null BadKeywords.
+///
+/// Phase 15 extension — two new fields with silent-enable defaults
+/// (15-CONTEXT.md §"새 config keys 의 default 정책 — Silent enable"):
+///   - BadFinishReasons: ["length","content_filter"] when null/empty
+///   - EntropyThreshold: 2.5 when <=0.0 (CLIMutable float defaults to 0.0 when JSON key absent)
 let normalizeQualityFallback (opts: RoutingOptions) : QualityFallbackOptions =
+    let defaultBadFinishReasons = [| "length"; "content_filter" |]
+    let defaultEntropyThreshold = 2.5
+
     if obj.ReferenceEquals(opts.QualityFallback, null) then
-        { Enabled = false; MinResponseLength = 30; BadKeywords = [||] }
+        { Enabled            = false
+          MinResponseLength  = 30
+          BadKeywords        = [||]
+          BadFinishReasons   = defaultBadFinishReasons
+          EntropyThreshold   = defaultEntropyThreshold }
     else
         let qf = opts.QualityFallback
-        { Enabled           = qf.Enabled
-          MinResponseLength = (if qf.MinResponseLength <= 0 then 30 else qf.MinResponseLength)
-          BadKeywords       = (if obj.ReferenceEquals(qf.BadKeywords, null) then [||] else qf.BadKeywords) }
+        { Enabled            = qf.Enabled
+          MinResponseLength  = (if qf.MinResponseLength <= 0 then 30 else qf.MinResponseLength)
+          BadKeywords        = (if obj.ReferenceEquals(qf.BadKeywords, null) then [||] else qf.BadKeywords)
+          BadFinishReasons   =
+            if obj.ReferenceEquals(qf.BadFinishReasons, null) || qf.BadFinishReasons.Length = 0
+            then defaultBadFinishReasons
+            else qf.BadFinishReasons
+          EntropyThreshold   =
+            if qf.EntropyThreshold <= 0.0 then defaultEntropyThreshold
+            else qf.EntropyThreshold }
 
 // ── validateConfig ───────────────────────────────────────────────────────────
 
