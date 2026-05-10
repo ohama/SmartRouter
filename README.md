@@ -214,6 +214,30 @@ To add refusal-pattern detection (operator opt-in only — not in default):
 grep '"routing_reason":"fallback_to_122b"' logs/decisions/$(date +%F).jsonl | wc -l
 ```
 
+### 5.5.5 Borderline judge (Phase 16 — OPT-IN)
+
+When `Routing.Judge.Enabled = true` AND the Phase 15 cascade returned `Good`, an
+additional check classifies the response as **clearly good** or **borderline**:
+
+- **Clearly good** (entropy ≥ EntropyThreshold + 1.0, OR effective length ≥ MinResponseLength × 1.5): forward 35B's response unchanged. No judge call.
+- **Borderline** (entropy in `[EntropyThreshold, EntropyThreshold + 1.0)` OR length in `[MinResponseLength, MinResponseLength × 1.5)`): send a 1-token verification call to 122B asking "Is this response correct and helpful for the question?" — model emits `ROUTE_YES` or `ROUTE_NO`.
+  - `ROUTE_NO` + 122B reachable + retry succeeds: substitute 122B's response (same `FallbackTo122B` path as § 5.5.1's Bad-verdict fallback). `fallback_kind = "quality"` in trace.
+  - `ROUTE_NO` + 122B retry FAILS: trace records `judge_called=true, judge_verdict="no"`, but `fallback_kind=null` (no actual substitution occurred — the client receives the original 35B response).
+  - `ROUTE_YES`, judge skipped (no template), or judge failed: forward 35B's response unchanged (fail-open).
+
+Cached by `(prompt_hash, response_hash)`; identical content pays the judge cost once.
+Cache size capped by `Routing.Judge.MaxCacheEntries` (default 10000).
+
+**Keyword and finish_reason dimensions are deliberately excluded from borderline detection** — they're binary signals (present/absent, decisive) with no natural uncertainty band. Borderline = entropy/length band edges only.
+
+**OPT-IN by default** — `Routing.Judge.Enabled = false` in shipped `appsettings.json`.
+Enable only after evaluating your borderline rate via `quality_check_hits_*` counters
+on `/stats` (Phase 15) and confirming you have headroom for an extra 122B call on
+borderline cases.
+
+Streaming responses (`stream=true`) intentionally bypass the judge — chunks are already
+shipped to the client; retract is impossible (same constraint as Phase 14 quality fallback).
+
 ---
 
 ## 6. ML Feedback Loop
@@ -278,6 +302,24 @@ All keys in `src/SmartRouter.Cli/appsettings.json`. The router reads at startup;
 | `Routing.QualityFallback.BadKeywords` | string[] | `["TODO","I think"]` | Case-insensitive (since Phase 15) substring matches against assistant content. Operator may add refusal patterns like `"I cannot"`, `"As an AI"` — not in default to avoid false positives. |
 | `Routing.QualityFallback.BadFinishReasons` | string[] | `["length","content_filter"]` | **Phase 15.** Match `choices[0].finish_reason` (case-insensitive). `"length"` = max-tokens truncation; `"content_filter"` = moderation rejection. Empty array disables this check. |
 | `Routing.QualityFallback.EntropyThreshold` | float | `2.5` | **Phase 15.** Shannon character-entropy threshold. Content below this value is considered a repetition loop. Set to `0` or omit to use default; set to a very small value (e.g. `0.01`) to effectively disable entropy checks. |
+
+### Routing.Judge
+
+| Key | Default | Description |
+|---|---|---|
+| `Enabled` | `false` | **OPT-IN.** Enables 122B-as-judge for borderline 35B responses (Phase 16). When `false`, no judge call is made — Phase 15 behavior preserved. |
+| `Endpoint` | `""` (empty) | Judge endpoint URL. Empty string means "reuse `Upstreams.Model122B`" — operator only updates one config entry when 122B moves. |
+| `PromptPath` | `prompts/judge-prompt.md` | Path to the operator-tunable judge prompt template. Uses `{{QUESTION}}` and `{{RESPONSE}}` placeholders; instructs the model to emit `ROUTE_YES` or `ROUTE_NO` only. |
+| `TimeoutSeconds` | `5` | Judge HTTP call timeout. 1-token responses are typically <500ms; 5s gives 10× safety margin. Per-attempt; 2 retries with 200ms/400ms exponential backoff. |
+| `MaxCacheEntries` | `10000` | LRU cache size. Eviction is O(n) min-AccessSeq scan when count exceeds this; at 10000 entries the scan is microseconds. |
+
+**Operator workflow to enable judge (§ 12 Operations cross-reference):**
+
+1. Ensure `prompts/judge-prompt.md` exists (shipped in repo; verify after deploy).
+2. Set `Routing:Judge:Enabled` to `true` in `appsettings.json`.
+3. Restart the router (`launchctl unload && launchctl load`).
+4. Monitor judge effectiveness via `/stats`: `judge_cache_hits`, `judge_cache_misses`, `judge_call_count`.
+5. Monitor borderline rate via Phase 15's `quality_check_hits_*` counters — if low (< 1% of requests), the judge ROI is marginal.
 
 ### Routing.Health
 
@@ -409,6 +451,14 @@ curl -s http://127.0.0.1:4000/stats | \
   jq '{quality_check_hits_finish_reason, quality_check_hits_length, quality_check_hits_entropy, quality_check_hits_keyword}'
 ```
 
+**Phase 16 — judge counters** (all `int64`, process-lifetime, 0 when `Routing.Judge.Enabled=false`):
+
+| Field | Description |
+|---|---|
+| `judge_cache_hits` | Number of judge LRU cache hits (Phase 16). 0 when `Routing.Judge.Enabled=false`. |
+| `judge_cache_misses` | Number of judge LRU cache misses. Each miss MAY result in 1 HTTP call (unless prompt template missing → JudgeSkipped). |
+| `judge_call_count` | Number of upstream HTTP calls to the named "judge" client. Equals cache_misses minus skips. |
+
 ### GET /canary
 
 ```json
@@ -495,6 +545,11 @@ For end-to-end debugging of routing + fallback. Disabled by default (file not cr
 |---|---|---|
 | `fallback_kind` | string \| null | `"quality"` (35B bad → 122B retry), `"availability"` (122B down → 35B reroute), or `null` |
 | `bad_reason` | string \| null | **Phase 15.** Format `"tag=value"` when quality fallback fired; `null` when response was judged good or fallback was availability-driven. Tags: `finish_reason` (e.g. `"finish_reason=length"`), `length` (e.g. `"length=12"`), `entropy` (e.g. `"entropy=1.85"`), `keyword` (e.g. `"keyword=TODO"`). |
+| `judge_called` | bool | **Phase 16.** `true` when the Phase 16 judge was invoked (Routing.Judge.Enabled=true + response was borderline). `false` otherwise. |
+| `judge_verdict` | `"yes" \| "no" \| null` | **Phase 16.** Judge's first-token verdict. `null` when judge_called=false; `null` also when judge_called=true but result was `JudgeSkipped`/`JudgeFailed` (fail-open path). |
+| `judge_latency_ms` | float \| null | **Phase 16.** Wall-clock time of the judge HTTP call (including retries). `null` when judge_called=false. |
+
+schema_version = 1 (Phase 14-16 — additive only; readers ignoring unknown fields stay forward-compatible).
 
 **`bad_reason` operator workflows:**
 
@@ -506,6 +561,19 @@ jq -r 'select(.bad_reason != null) | .bad_reason | split("=")[0]' \
 # Show all requests where entropy detection fired
 jq 'select(.bad_reason | startswith("entropy=")) | {prompt_excerpt, bad_reason, final_target}' \
   logs/trace/$(date -u +%F).jsonl
+```
+
+**Phase 16 — judge operator workflows:**
+
+```bash
+# Find borderline requests where judge said NO (and quality fallback fired)
+jq -c 'select(.judge_called == true and .judge_verdict == "no")' logs/trace/*.jsonl
+
+# Compute judge verdict distribution over the last day
+jq -r 'select(.judge_called == true) | .judge_verdict' logs/trace/$(date -u +%Y-%m-%d).jsonl | sort | uniq -c
+
+# Find requests with high judge latency (potential 122B saturation)
+jq 'select(.judge_called and (.judge_latency_ms > 1000)) | .correlation_id' logs/trace/*.jsonl
 ```
 
 **Privacy:** prompts and excerpts stored in plaintext, truncated to 200/500 chars. Operator's responsibility to manage retention. No auto-cleanup currently.
