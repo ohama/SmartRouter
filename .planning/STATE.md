@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 15 COMPLETE (Quality Signal Enrichment). All 3 plans done. Phase 16 next. Phase 14 COMPLETE + v1.1.0 released.
+**Current focus:** Phase 16 IN PROGRESS (122B-as-Judge for Borderline Cases). Plan 16-01 complete. Phase 15 COMPLETE.
 
 ## Current Position
 
-Phase: 15 of 17 COMPLETE → 16 next
-Plan: 3 of 3 in Phase 15 — all complete
-Status: 15-03 COMPLETE (commits da35014 + cf97738 + 34bc979). 14 QSE tests (13 unit + 1 fake-Kestrel integration) for all 5 detection dimensions. README §5.5/§7/§9.3/§8 updated. CHANGELOG [Unreleased] silent-enable entry added. Final baseline: 102 passed + 16 ignored + 0 failed.
-Last activity: 2026-05-10 — Completed 15-03-TESTS-AND-DOCS-PLAN.md. Phase 15 COMPLETE.
+Phase: 16 of 17 IN PROGRESS
+Plan: 1 of N in Phase 16 — 16-01 complete
+Status: 16-01 COMPLETE (commit 014bf5b). BorderlineClassifier.fs (77 lines, BCL-only) added. fsproj compile order: QualityCheck.fs (23) → BorderlineClassifier.fs (24) → ChatCompletions.fs (59). Build: 0 warnings, 0 errors. Tests: 102+16+0 (baseline preserved).
+Last activity: 2026-05-11 — Completed 16-01-BORDERLINE-CLASSIFIER-PLAN.md.
 
-Progress: [███████████████████████████████████░░░░░] 58 of 65 plans (Phases 1-15 complete; Phases 16-17 remaining)
+Progress: [████████████████████████████████████░░░░] 59 of 65 plans (Phases 1-15 complete; Phase 16 plan 1 complete; Phases 16 plans 2+ and 17 remaining)
 
 ## Performance Metrics
 
@@ -264,6 +264,11 @@ Recent decisions affecting current work:
 - 15-03: IQualityCheckStats NoOp from configureWithoutMl overridden with real QueueDispatcher-backed instance via last-registration-wins AddSingleton (after configureWithoutMl call) so counter assertions work in integration test
 - 15-03: 14 QSE test cases (13 unit + 1 fake-Kestrel integration); all pass; Phase 14 QF-01..08 baseline preserved; PITFALL-10 flake pre-existing
 - 15-03: SUMMARY.md files created: 15-03-SUMMARY.md + 15-SUMMARY.md (phase-level aggregate)
+- 16-01: BorderlineKind DU is SEPARATE from QualityCheck.Verdict — borderline is a qualifier on Good, not a third verdict; avoids 6 ChatCompletions.fs match-arm updates (planner decision, researcher HIGH confidence)
+- 16-01: OQ #1 resolved — entropy upper band = EntropyThreshold + 1.0; length upper band = int(MinResponseLength * 1.5); hard-coded (not config) per Phase 14/15 precedent; expose knobs only when operators demand them
+- 16-01: OQ #2 resolved — koreanRatio + effectiveLength re-implemented inline as private helpers in BorderlineClassifier.fs; charEntropy is module-public in QualityCheck.fs so reused via open import; QualityCheck.fs visibility unchanged
+- 16-01: Keyword and finish_reason excluded from borderline detection — binary signals (present/absent, decisive); no natural partial zone
+- 16-01: fsproj Edit-not-Write pattern — concurrent 16-02 also edited fsproj (adding JudgeClient.fs at line 25); both edits coexist correctly because Edit tool operates on string replacement, not file overwrite
 
 ### Pending Todos
 
@@ -279,6 +284,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-10
-Stopped at: Completed 15-03-TESTS-AND-DOCS-PLAN.md. Phase 15 fully complete. 14 QSE tests (102 total passed). README §5.5/§7/§9.3/§8 updated. CHANGELOG [Unreleased] updated. Key commits: da35014 (tests), cf97738 (README), 34bc979 (CHANGELOG+planning docs).
+Last session: 2026-05-11
+Stopped at: Completed 16-01-BORDERLINE-CLASSIFIER-PLAN.md. BorderlineClassifier.fs (77 lines, BCL-only) created. Key commits: 014bf5b (feat+fsproj).
 Resume file: None
