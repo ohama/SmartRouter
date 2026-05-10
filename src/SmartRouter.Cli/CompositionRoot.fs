@@ -46,6 +46,7 @@ open SmartRouter.Cli.Adapters.CanaryService
 open SmartRouter.Cli.Adapters.RetrainLock
 open SmartRouter.Cli.Adapters.HealthService
 open SmartRouter.Cli.Adapters.LogRetentionService
+open SmartRouter.Cli.Adapters.TraceLogger
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -445,6 +446,31 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
     services.AddHostedService<DecisionLogWriter>(fun sp ->
         sp.GetRequiredService<DecisionLogWriter>())
     |> ignore
+
+    // ── Phase 14: TraceLogger (optional; --trace-responses CLI flag enables) ──
+    // Reads Trace:Enabled from IConfiguration (injected by applyTraceFlagFromArgs in Program.fs).
+    // When true: triple-reg pattern (concrete + IInterface alias + AddHostedService) —
+    // single instance for all three roles, mirroring DecisionLogWriter.
+    // When false: ITraceLogger is NOT registered; consumers use GetService<ITraceLogger>()
+    // (returns null) instead of GetRequiredService (would throw). 14-04 owns the consumer-side
+    // defensive null check in ChatCompletions.fs.
+    // Note: --trace-responses has no effect when combined with --retrain (offline pipeline
+    // does not go through ChatCompletions; configureWithoutMl omits this block entirely).
+    let traceEnabled =
+        let raw = config.["Trace:Enabled"]
+        not (isNull raw) && raw.Equals("true", StringComparison.OrdinalIgnoreCase)
+    if traceEnabled then
+        services.Configure<TraceLoggerOptions>(fun (o: TraceLoggerOptions) ->
+            o.Directory       <- "logs/trace"
+            o.ChannelCapacity <- 1000) |> ignore
+        services.AddSingleton<TraceLogger>(fun sp ->
+            new TraceLogger(
+                sp.GetRequiredService<IOptions<TraceLoggerOptions>>(),
+                sp.GetRequiredService<ILogger<TraceLogger>>())) |> ignore
+        services.AddSingleton<ITraceLogger>(fun sp ->
+            sp.GetRequiredService<TraceLogger>() :> ITraceLogger) |> ignore
+        services.AddHostedService<TraceLogger>(fun sp ->
+            sp.GetRequiredService<TraceLogger>()) |> ignore
 
     // ── Phase 7: Failure detection + teacher labeling ─────────────────────────
     services.Configure<TeacherLabelerOptions>(config.GetSection("TeacherLabeler")) |> ignore
