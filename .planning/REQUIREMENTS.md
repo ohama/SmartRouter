@@ -314,12 +314,12 @@ distillation 디자인의 "Failure = Gold Data" 패턴을 smart-router 에 첫 �
 | QF-08 | Phase 14 | Complete |
 | QF-09 | Phase 14 | Complete |
 | QF-10 | Phase 14 | Complete |
-| QSE-01 | Phase 15 | Pending |
-| QSE-02 | Phase 15 | Pending |
-| QSE-03 | Phase 15 | Pending |
-| QSE-04 | Phase 15 | Pending |
-| QSE-05 | Phase 15 | Pending |
-| QSE-06 | Phase 15 | Pending |
+| QSE-01 | Phase 15 | Complete |
+| QSE-02 | Phase 15 | Complete |
+| QSE-03 | Phase 15 | Complete |
+| QSE-04 | Phase 15 | Complete |
+| QSE-05 | Phase 15 | Complete |
+| QSE-06 | Phase 15 | Complete |
 | JDG-01 | Phase 16 | Pending |
 | JDG-02 | Phase 16 | Pending |
 | JDG-03 | Phase 16 | Pending |
@@ -368,13 +368,13 @@ Phase 15 heuristic 통과했지만 quality 가 borderline (entropy/length/keywor
 
 **Coverage:**
 - v1 requirements: 100 (Complete; Phases 1-14)
-- v2 requirements: 18 planned — 6 QSE (Phase 15) + 5 JDG (Phase 16) + 7 QCLS (Phase 17)
+- v2 requirements: 18 planned — 6 QSE (Phase 15 ✓) + 5 JDG (Phase 16) + 7 QCLS (Phase 17)
 - Total v1+v2: 118
 - Mapped to phases: 118 ✓
 - Unmapped: 0
-- Complete: 99 (v1 ✓ except retroactive marks)
-- Pending: 18 (v2 quality enrichment arc — Phases 15-17)
+- Complete: 105 (v1 99 + QSE-01..06 ✓)
+- Pending: 12 (Phase 16 JDG-01..05 + Phase 17 QCLS-01..07)
 
 ---
 *Requirements defined: 2026-05-07*
-*Last updated: 2026-05-10 after Phase 14 (Quality Fallback + Trace) completion — 10 QF requirements added documenting distillation's fallback design implementation. Same day Phase 15-17 (Quality Signal Enrichment / 122B-as-Judge / QualityClassifier) planned — 18 new requirements (QSE/JDG/QCLS) mapped to v2 quality-enrichment arc per `.planning/docs/quality-check-improvement-options.md`.*
+*Last updated: 2026-05-10 after Phase 15 (Quality Signal Enrichment) completion — QSE-01..06 marked Complete. 102 tests passing. Phases 16-17 (122B-as-Judge / QualityClassifier) remain Pending per quality-enrichment arc roadmap.*
