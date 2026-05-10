@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 14 IN PROGRESS — Wave 5 (14-05 Tests) complete. Quality fallback integration tests live: QF-01 (35B good → no fallback) + QF-02 (35B TODO → 122B retry) both pass, verified via JsonDocument.Parse of JSONL logs. Test baseline raised to 82 passed + 16 ignored + 0 failed.
+**Current focus:** Phase 14 COMPLETE — All 6 plans done. Quality fallback (35B → 122B retry), trace logging, cold-start, and docs all shipped. Test baseline: 82 passed + 16 ignored + 0 failed.
 
 ## Current Position
 
 Phase: 14 of 14 (Quality Fallback and Trace)
-Plan: 5 of 6 in current phase — 14-05 complete
-Status: Wave 5 plan 14-05 complete. Two integration tests (QF-01 + QF-02) verify the quality fallback path end-to-end via JSONL log inspection using fake-Kestrel upstreams, stub IHealthProbe, and stub RoutingAlgorithmRegistration. TraceLogger triple-reg in fixture. Build clean (TreatWarningsAsErrors=true). **82 passed + 16 ignored + 0 failed**.
-Last activity: 2026-05-10 — Completed 14-05-TESTS-PLAN.md.
+Plan: 6 of 6 in current phase — 14-06 complete
+Status: Phase 14 COMPLETE. All 6 plans executed: core types (14-01), TraceLogger adapter (14-02), QualityCheck adapter (14-03), ChatCompletions quality fallback branch (14-04), integration tests QF-01+QF-02 (14-05), documentation (14-06). README updated with §5.5, §7 QualityFallback config table, §9.1 routing_reason value, §9.10 trace logging, §12.6 CLI flags. Planning docs updated to reflect Phase 14 reality. **82 passed + 16 ignored + 0 failed**.
+Last activity: 2026-05-10 — Completed 14-06-DOCS-PLAN.md.
 
-Progress: [████████████████████████████████████████] 52 of 53 plans (Phase 14 Wave 5 done)
+Progress: [████████████████████████████████████████] 53 of 53 plans (Phase 14 COMPLETE — all phases done)
 
 ## Performance Metrics
 
@@ -264,5 +264,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-10
-Stopped at: Completed 14-04-CHATCOMPLETIONS-QUALITY-FALLBACK-PLAN.md. Non-streaming quality fallback (35B → 122B retry on isBadResponse), TraceLogger emission, graceful degradation, streaming exemption comment, QualityFallbackOptions DI singleton. Build clean. 80+16+0 test baseline. Key commit: 38b75f3.
+Stopped at: Completed 14-06-DOCS-PLAN.md. README updated (§5.5 quality fallback, §7 QualityFallback config, §9.1 routing_reason, §9.10 trace logging, §12.6 CLI flags). Planning docs updated (cold-start-request-flow.md, distillation-fallback-design-references.md). Phase 14 complete. Key commits: be59b89 (README), 26e1c98 (planning docs).
 Resume file: None
