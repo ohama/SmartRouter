@@ -277,6 +277,50 @@ curl -d '{"task": "compiler_debug", "messages": [...]}'   # task table → 122B 
 
 **Watch the classifier improve over time** — Loop B retrains every `Retraining.IntervalMinutes` (default 60) using `fallback_used=true` records as hard cases. New models are validated against a held-out set before going live; rejected models are logged to `logs/retraining-rejections.jsonl`. The active `model_version` appears in every DecisionLog row — watch it bump after a successful retrain.
 
+### 5.5 Quality fallback (35B → 122B retry)
+
+When a non-streaming chat-completion request is routed to 35B and the response fails a configured quality heuristic, smart-router automatically retries the same request on 122B and forwards 122B's response to the client. This is the distillation design's "Failure = Gold Data" pattern (Phase 14).
+
+**Trigger conditions** (all must hold):
+- Stage 3 ML classifier routes to 35B (initial decision)
+- 35B returns HTTP 200 with a body
+- `Routing.QualityFallback.Enabled = true`
+- The 35B response body fails `isBadResponse` check:
+  - Length < `MinResponseLength` (default 30 chars), OR
+  - Contains any of `BadKeywords` (default `["TODO", "I think"]`)
+- 122B is reachable per HealthService
+
+**When fallback fires**:
+- Final response = 122B's response (35B's bad response is discarded)
+- DecisionLog: `target = "Qwen122B"`, `routing_reason = "fallback_to_122b"`, `fallback_used = true`
+- TraceLog (if enabled): captures both 35B and 122B response excerpts joined by `prompt_uid`
+
+**When fallback doesn't fire**:
+- Streaming requests (`stream=true`) — chunks already shipped; cannot retract
+- 122B unreachable — graceful degradation; 35B response forwarded as-is
+- 122B retry also fails — graceful degradation; 35B response forwarded as-is
+
+**Tuning** (`appsettings.json:Routing.QualityFallback`):
+
+```json
+"Routing": {
+  ...,
+  "QualityFallback": {
+    "Enabled": true,
+    "MinResponseLength": 30,
+    "BadKeywords": [ "TODO", "I think", "I don't know", "cannot help" ]
+  }
+}
+```
+
+Add domain-specific keywords your team observes in low-quality responses. Set `Enabled: false` to disable the path entirely (kill switch).
+
+**Cost note**: When fallback fires, total latency = 35B latency + 122B latency. For frequent fallbacks, the 122B usage savings (the original ML routing benefit) is partially eroded. Monitor fallback rate via `/stats` (future enhancement) or grep:
+
+```bash
+grep '"routing_reason":"fallback_to_122b"' logs/decisions/$(date +%F).jsonl | wc -l
+```
+
 ---
 
 ## 6. ML Feedback Loop
@@ -381,6 +425,14 @@ All keys live in `src/SmartRouter.Cli/appsettings.json`. The router reads them a
 | `Routing.ML.TokenizerPath` | string | `models/embed/sentencepiece.bpe.model` | Tokenizer for bge-m3 |
 | `Routing.ML.Threshold` | float | `0.5` | ML confidence threshold; above → 122B |
 | `Routing.ML.MaxTokens` | int | `512` | Max tokens fed to the embedder |
+
+### Routing.QualityFallback
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `Routing.QualityFallback.Enabled` | bool | `true` | Master switch; false disables quality fallback entirely |
+| `Routing.QualityFallback.MinResponseLength` | int | `30` | Responses shorter than this trigger fallback |
+| `Routing.QualityFallback.BadKeywords` | string[] | `["TODO", "I think"]` | Substrings that mark a response as bad (case-sensitive) |
 
 ### Routing.Health
 
@@ -675,7 +727,7 @@ Every request produces one row in `logs/decisions/YYYY-MM-DD.jsonl`. The file ro
 | `correlation_id` | string | UUID injected by `CorrelationMiddleware`; sticky key for canary bucketing |
 | `timestamp` | string | ISO 8601 UTC — time the DecisionLog row was written |
 | `target` | string | `"Qwen35B"` or `"Qwen122B"` — the model that actually served the request |
-| `routing_reason` | string | `explicit_model:{alias}`, `explicit_task:{TaskType}`, `default`, `ml`, `fallback_to_35b`, or a compound like `ml;upstream_error`, `ml;cancelled`, `ml;stream_error` |
+| `routing_reason` | string | `explicit_model:{alias}`, `explicit_task:{TaskType}`, `default`, `ml`, `fallback_to_35b` (Phase 10 — 122B unreachable), `fallback_to_122b` (Phase 14 — 35B response failed quality check), or a compound like `ml;upstream_error`, `ml;cancelled`, `ml;stream_error` |
 | `routing_algorithm` | string | `"ml"` (only valid value as of Phase 12; the seam is retained for future algorithm additions) |
 | `latency_ms` | float | End-to-end time from request start to last byte written |
 | `model_version` | string | Active classifier version (e.g., `"v3"` baseline, `"v3-canary"` for canary cohort) |
@@ -846,6 +898,51 @@ The following keys in `appsettings.json` control logging behavior:
 | CLI flag `--log-level=...` | enum | absent (defaults to Information) | Sets LoggingLevelSwitch for the lifetime of the process |
 
 Note: the `--trace` flag was removed in Phase 13. Using it causes a startup error directing the operator to `--log-level=debug`.
+
+### 9.10 Trace logging — `--trace-responses` flag (operator debugging)
+
+For end-to-end debugging of routing decisions and fallback behavior, the router has an optional trace log that captures intermediate request state. Operator opts in via CLI flag:
+
+```bash
+dotnet run --project src/SmartRouter.Cli -- --trace-responses
+# or in production deployment:
+dotnet SmartRouter.Cli.dll --trace-responses
+```
+
+When enabled, each non-streaming chat-completion request appends one row to `logs/trace/YYYY-MM-DD.jsonl`. Schema (12 fields):
+
+| Field | Description |
+|-------|-------------|
+| `schema_version` | Currently 1 |
+| `correlation_id` | UUID per request (matches DecisionLog) |
+| `prompt_uid` | First 12 hex of `prompt_hash` (stable per prompt content) |
+| `prompt_hash` | Full SHA-256 (matches DecisionLog) |
+| `prompt_excerpt` | First 200 chars of concatenated prompt messages |
+| `initial_target` | First routing decision (`Qwen35B` or `Qwen122B`) |
+| `initial_response_excerpt` | First 500 chars of the initial-target response (null if no fallback) |
+| `fallback_kind` | `"quality"` (Phase 14), `"availability"` (Phase 10), or null |
+| `final_target` | Model that actually produced the response sent to client |
+| `final_response_excerpt` | First 500 chars of the final response |
+| `total_latency_ms` | End-to-end time from request start to last byte written |
+| `timestamp` | ISO 8601 UTC |
+
+**Operator workflow — grep by prompt UID**:
+
+```bash
+# Compute UID from your prompt text
+PROMPT="explain recursion in Python"
+UID=$(echo -n "$PROMPT" | sha256sum | cut -c1-12)
+
+# Find the trace row(s) for that prompt
+jq "select(.prompt_uid == \"$UID\")" logs/trace/$(date +%F).jsonl
+
+# What did 35B say? What did 122B say? Did fallback fire?
+jq "select(.prompt_uid == \"$UID\") | {initial_target, fallback_kind, initial_response_excerpt, final_target, final_response_excerpt}" logs/trace/$(date +%F).jsonl
+```
+
+**Privacy / size note**: prompts and response excerpts are stored in plaintext. Default state is **off** (file not created). Enable only for diagnostics, not for production-default. The 200/500 char truncation limits storage but doesn't fully sanitize PII — operator's responsibility to manage retention.
+
+**Retention**: Phase 14 ships without auto-cleanup of `logs/trace/`. Operator manually prunes or relies on Phase 13 LogRetentionService extension (future).
 
 ---
 
@@ -1040,6 +1137,30 @@ dotnet run --project src/SmartRouter.Cli -- --retrain
 - Default of `1` is aggressive: a single transient network blip marks 122B unreachable and triggers fallback for all in-flight non-graph_indexing requests.
 - Raise to `2` or `3` in production if you observe spurious fallback activation (visible as brief `fallback_used: true` bursts with `reachable` immediately recovering).
 - Trade-off: higher threshold means slower activation when 122B genuinely goes down.
+
+### 12.6 CLI flags
+
+| Flag | Effect |
+|------|--------|
+| `--retrain` | Run offline retrain pipeline (Phase 7); exits after completion |
+| `--log-level=LEVEL` | Set Serilog minimum level (verbose/debug/information/warning/error/fatal) |
+| `--trace-responses` | Enable trace logging to `logs/trace/<date>.jsonl` (Phase 14) |
+| `--cold-start` | Backup existing models/router.zip + datasets/ with timestamp suffix; ensureDummyModel generates fresh model on this same startup (Phase 14) |
+
+**`--cold-start` example**:
+
+```bash
+dotnet run --project src/SmartRouter.Cli -- --cold-start
+# Logs:
+#   [INF] Cold-start: backed up 2 file(s) with timestamp=20260510-153422; files=[...]
+#   [WRN] No ML classifier model found at models/router.zip. Generating random dummy 1024-dim model.
+#   [INF] Dummy classifier model written to models/router.zip
+#   [INF] SmartRouter starting ...
+
+# To recover:
+mv models/router.zip.cold-start-backup-20260510-153422 models/router.zip
+# Then restart router.
+```
 
 ---
 
