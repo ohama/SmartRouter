@@ -11,6 +11,7 @@ open SmartRouter.Core.RetrainingPorts
 open SmartRouter.Cli.Adapters.QueueDispatcher
 open SmartRouter.Cli.Adapters.Json
 open SmartRouter.Cli.Adapters.CanaryState
+open SmartRouter.Cli.Adapters.JudgeClient    // Phase 16: IJudgeStats
 
 /// Wire shape for GET /stats. snake_case to match OpenAI conventions.
 /// Built fresh from a StatsSnapshot on every request — no caching.
@@ -37,7 +38,10 @@ type private StatsWire =
       quality_check_hits_finish_reason   : int64    // NEW Phase 15
       quality_check_hits_length          : int64    // NEW Phase 15
       quality_check_hits_entropy         : int64    // NEW Phase 15
-      quality_check_hits_keyword         : int64 }  // NEW Phase 15
+      quality_check_hits_keyword         : int64
+      judge_cache_hits                   : int64    // NEW Phase 16
+      judge_cache_misses                 : int64    // NEW Phase 16
+      judge_call_count                   : int64 }  // NEW Phase 16
 
 let private snapshotToWireFields (s: StatsSnapshot) : StatsWire =
     { timestamp                          = s.Timestamp.ToString("o")
@@ -58,7 +62,10 @@ let private snapshotToWireFields (s: StatsSnapshot) : StatsWire =
       quality_check_hits_finish_reason   = s.QualityCheckHits.FinishReason
       quality_check_hits_length          = s.QualityCheckHits.Length
       quality_check_hits_entropy         = s.QualityCheckHits.Entropy
-      quality_check_hits_keyword         = s.QualityCheckHits.Keyword }
+      quality_check_hits_keyword         = s.QualityCheckHits.Keyword
+      judge_cache_hits                   = 0L      // overridden in mapEndpoints after IJudgeStats resolve
+      judge_cache_misses                 = 0L      // overridden in mapEndpoints
+      judge_call_count                   = 0L }    // overridden in mapEndpoints
 
 /// Register GET /stats. Resolves IStatsProvider, IModelVersionProvider, and
 /// ICanaryState from DI on each request and serializes a single self-contained
@@ -79,12 +86,22 @@ let mapEndpoints (app: WebApplication) =
                 if String.IsNullOrWhiteSpace(v) then None else Some v
             let canaryPct = canarySt.GetPercentage()
             let canaryActive = canaryVer.IsSome && canaryPct > 0
+            // Phase 16 — judge stats: null-safe resolve (GetService returns null when judge disabled or offline mode).
+            // Both composition paths guarantee IJudgeStats is resolvable (real or NoOp), so this is
+            // defense-in-depth for future test fixtures that may forget to register it.
+            let judgeStats = ctx.RequestServices.GetService<IJudgeStats>()
+            let struct (jHits, jMisses, jCalls) =
+                if isNull (box judgeStats) then struct (0L, 0L, 0L)
+                else judgeStats.GetJudgeStats()
             let wire =
                 { baseFields with
                     baseline_model_version = versionP.CurrentVersion
                     canary_model_version   = canaryVer
                     canary_percent         = canaryPct
-                    canary_active          = canaryActive }
+                    canary_active          = canaryActive
+                    judge_cache_hits       = jHits        // NEW Phase 16
+                    judge_cache_misses     = jMisses      // NEW Phase 16
+                    judge_call_count       = jCalls }     // NEW Phase 16
             logger.LogDebug(
                 "/stats hit; queue_depth_high={H} active_122b={A} model_version={V} canary_active={C}",
                 wire.queue_depth_122b_high, wire.active_122b, wire.baseline_model_version, wire.canary_active)

@@ -24,6 +24,8 @@ open SmartRouter.Cli.Adapters.CanaryMetrics
 open SmartRouter.Cli.Adapters.QualityCheck
 open SmartRouter.Cli.Adapters.QueueDispatcher   // IQualityCheckStats
 open SmartRouter.Cli.Adapters.TraceLogger
+open SmartRouter.Cli.Adapters.BorderlineClassifier   // Phase 16: classifyBorderline
+open SmartRouter.Cli.Adapters.JudgeClient            // Phase 16: IJudgeClient + JudgeVerdict
 
 // ── Phase 14 — string truncation for trace excerpts ──────────────────────────
 
@@ -33,6 +35,19 @@ let private truncate (n: int) (s: string) : string =
     if isNull s then ""
     elif s.Length <= n then s
     else s.Substring(0, n) + "…"
+
+// ── Phase 16 — SHA-256 hash helper for judge cache key ───────────────────────
+
+/// Phase 16 — SHA-256 hex of arbitrary string for judge cache key.
+/// Uses the assistant content (NOT the JSON envelope) so identical responses
+/// across requests with different created/id timestamps share cache entries.
+/// See 16-RESEARCH.md §"Pattern 4" — Cache key: content hash, not envelope hash.
+let private computeContentHash (content: string) : string =
+    let bytes = System.Text.Encoding.UTF8.GetBytes(content)
+    use sha = System.Security.Cryptography.SHA256.Create()
+    sha.ComputeHash(bytes)
+    |> Array.map (fun b -> b.ToString("x2"))
+    |> String.concat ""
 
 // ── Wire types ───────────────────────────────────────────────────────────────
 
@@ -402,15 +417,20 @@ let handler
                 //   singleton in CompositionRoot (compile-order safe; QualityCheck.fs precedes
                 //   ChatCompletions.fs in fsproj; CompositionRoot.fs follows both).
                 // traceLogger: null when --trace-responses absent — skip trace block entirely.
+                // judgeClient: null when Routing.Judge.Enabled=false (opt-in, autonomous decision A).
                 let qualityFallbackOpts = ctx.RequestServices.GetRequiredService<QualityFallbackOptions>()
-                let traceLogger = ctx.RequestServices.GetService<ITraceLogger>()
-                let qualityCheckStats = ctx.RequestServices.GetRequiredService<IQualityCheckStats>()
+                let traceLogger        = ctx.RequestServices.GetService<ITraceLogger>()
+                let qualityCheckStats  = ctx.RequestServices.GetRequiredService<IQualityCheckStats>()
+                let judgeClient        = ctx.RequestServices.GetService<IJudgeClient>()   // Phase 16: null when disabled
 
                 let initialDecision = decision
                 let! initialResult = upstream.CompleteAsync req initialDecision ctx.RequestAborted
 
                 match initialResult with
                 | Ok initialBody ->
+                    // Phase 16: hoist promptHash so it's shared between judge cache key and trace block (OQ #3).
+                    let promptHash = computePromptHash req.Messages
+
                     // ── Phase 15: Quality fallback (35B → 122B retry) ────────────────
                     // Streaming branch skips this entirely; chunks already shipped to client.
                     // Phase 15 — extract finish_reason from initialBody and run the full cascade.
@@ -447,15 +467,23 @@ let handler
                         | Bad (FinishReasonMatch fr)    -> Some (sprintf "finish_reason=%s" fr)
                         | Bad (LowEntropy s)            -> Some (sprintf "entropy=%.2f" s)
 
-                    let! (finalDecision, finalBody) = task {
-                        if qualityFallbackTriggered then
+                    // Phase 16: judge cascade — only on Good 35B responses + judge enabled + borderline.
+                    // Returns judge metadata so the trace block can emit the 3 new fields.
+                    //
+                    // Tuple element 6 (judgeTriggeredFallback : bool) is the SUBSTITUTION flag —
+                    // true ONLY when a 122B retry actually replaced the 35B response. False on
+                    // judge-NO-but-retry-failed (judge fired but no substitution happened — B3 fix).
+                    let! (finalDecision, finalBody, judgeCalled, judgeVerdictStr, judgeLatencyMs, judgeTriggeredFallback) = task {
+                        match initialVerdict with
+                        | Bad _ ->
+                            // Existing Phase 15 fast-fallback path — judge never called on Bad verdict.
                             if not (healthProbe.IsReachable(Qwen122B)) then
                                 // 122B down + 35B quality bad → return 35B response as-is.
                                 // Graceful degradation; no infinite retry; no error to client.
                                 logger.LogWarning(
                                     "ChatCompletions: 35B response failed quality check but 122B unreachable; returning 35B response as-is; cid={Cid}",
                                     correlationId)
-                                return (initialDecision, initialBody)
+                                return (initialDecision, initialBody, false, None, None, false)
                             else
                                 logger.LogInformation(
                                     "ChatCompletions: 35B response failed quality check; retrying on 122B; cid={Cid}",
@@ -470,15 +498,91 @@ let handler
                                 let! retryResult = upstream.CompleteAsync req retryDecision ctx.RequestAborted
                                 match retryResult with
                                 | Ok retryBody ->
-                                    return (retryDecision, retryBody)
+                                    return (retryDecision, retryBody, false, None, None, false)
                                 | Error _ ->
                                     // 122B reachable but returned Error → return 35B response as-is.
                                     logger.LogWarning(
                                         "ChatCompletions: quality-fallback retry to 122B also failed; returning 35B response as-is; cid={Cid}",
                                         correlationId)
-                                    return (initialDecision, initialBody)
-                        else
-                            return (initialDecision, initialBody)
+                                    return (initialDecision, initialBody, false, None, None, false)
+                        | Good ->
+                            // Phase 16: borderline → judge → optional FallbackTo122B
+                            if isNull (box judgeClient) then
+                                // Judge disabled (Routing.Judge.Enabled=false OR offline mode) → pass through.
+                                return (initialDecision, initialBody, false, None, None, false)
+                            else
+                                // Extract content once — shared with response_hash and judge body.
+                                let initialContent = extractAssistantText initialBody
+                                if initialDecision.Target <> Qwen35B then
+                                    // 122B initial target — skip judge (no further escalation possible)
+                                    return (initialDecision, initialBody, false, None, None, false)
+                                else
+                                    match classifyBorderline qualityFallbackOpts initialContent with
+                                    | None ->
+                                        // Confidently good — no judge call; fast path preserved.
+                                        return (initialDecision, initialBody, false, None, None, false)
+                                    | Some _borderlineKind ->
+                                        let judgeStart = DateTimeOffset.UtcNow
+                                        let responseHash = computeContentHash initialContent
+                                        let promptText =
+                                            req.Messages
+                                            |> List.map (fun m -> m.Content)
+                                            |> String.concat " "
+                                        let! verdict =
+                                            judgeClient.VerdictAsync(
+                                                promptHash, responseHash,
+                                                promptText, initialContent,
+                                                ctx.RequestAborted)
+                                        let judgeMs = (DateTimeOffset.UtcNow - judgeStart).TotalMilliseconds
+                                        match verdict with
+                                        | RouteNo ->
+                                            // Judge says bad — fire quality fallback (same path as Phase 15 Bad)
+                                            if not (healthProbe.IsReachable(Qwen122B)) then
+                                                // B3 fix: judge fired (judge_called=true, judge_verdict="no")
+                                                // BUT 122B unreachable → no substitution occurs → judgeTriggeredFallback=false.
+                                                // Result: trace records judge invocation, but fallback_kind=null
+                                                // because the client receives the original 35B response unchanged.
+                                                logger.LogWarning(
+                                                    "ChatCompletions: judge said NO but 122B unreachable; returning 35B response as-is; cid={Cid}",
+                                                    correlationId)
+                                                return (initialDecision, initialBody, true, Some "no", Some judgeMs, false)
+                                            else
+                                                logger.LogInformation(
+                                                    "ChatCompletions: judge said NO; retrying on 122B; cid={Cid}",
+                                                    correlationId)
+                                                let retryDecision = {
+                                                    initialDecision with
+                                                        Target       = Qwen122B
+                                                        Reason       = FallbackTo122B
+                                                        IsFallback   = true
+                                                        ModelVersion = versionProvider.CurrentVersion
+                                                }
+                                                let! retryResult = upstream.CompleteAsync req retryDecision ctx.RequestAborted
+                                                match retryResult with
+                                                | Ok retryBody ->
+                                                    // Substitution succeeded → judgeTriggeredFallback=true → fallback_kind="quality"
+                                                    return (retryDecision, retryBody, true, Some "no", Some judgeMs, true)
+                                                | Error _ ->
+                                                    // B3 fix: 122B retry failed → no substitution → judgeTriggeredFallback=false.
+                                                    // The trace records judge_called=true, judge_verdict="no", but fallback_kind=null
+                                                    // because the client receives the original 35B response (no substitution occurred).
+                                                    logger.LogWarning(
+                                                        "ChatCompletions: judge-triggered 122B retry failed; returning 35B response as-is; cid={Cid}",
+                                                        correlationId)
+                                                    return (initialDecision, initialBody, true, Some "no", Some judgeMs, false)
+                                        | RouteYes ->
+                                            return (initialDecision, initialBody, true, Some "yes", Some judgeMs, false)
+                                        | JudgeSkipped reason ->
+                                            logger.LogDebug(
+                                                "ChatCompletions: judge skipped ({Reason}); forwarding 35B response; cid={Cid}",
+                                                reason, correlationId)
+                                            return (initialDecision, initialBody, true, None, Some judgeMs, false)
+                                        | JudgeFailed err ->
+                                            // Fail-open: judge infrastructure error must NOT suppress good 35B responses.
+                                            logger.LogWarning(
+                                                "ChatCompletions: judge call failed ({Err}); fail-open forwarding 35B response; cid={Cid}",
+                                                err, correlationId)
+                                            return (initialDecision, initialBody, true, None, Some judgeMs, false)
                     }
 
                     // Forward final response to client.
@@ -489,18 +593,29 @@ let handler
                     let okReason = formatReason finalDecision.Reason
                     decisionLogger.Log(buildDecisionLog req regn versionProvider correlationId started (Some finalDecision) (sprintf "%A" finalDecision.Target) okReason finalDecision.IsFallback)
 
-                    // Phase 14 — Trace JSONL row (only when --trace-responses enabled).
+                    // Phase 14/15/16 — Trace JSONL row (only when --trace-responses enabled).
                     // traceLogger = null when flag is absent; skip entirely (no perf cost).
                     if not (isNull (box traceLogger)) then
-                        let promptHash = computePromptHash req.Messages
                         let promptText =
                             req.Messages
                             |> List.map (fun m -> m.Content)
                             |> String.concat " "
+                        // qualityFallbackTriggered = true when initialVerdict was Bad (Phase 15)
+                        // judgeTriggeredFallback   = true when judge said NO and 122B retry SUBSTITUTED successfully (Phase 16)
+                        // Either one means the client received the 122B response — record initial excerpt.
+                        // (If judge fired but retry failed, judgeTriggeredFallback=false — see B3 fix.)
                         let initialResponseExcerpt =
-                            if qualityFallbackTriggered then Some (truncate 500 initialBody) else None
+                            if qualityFallbackTriggered || judgeTriggeredFallback then
+                                Some (truncate 500 initialBody)
+                            else None
+                        // OQ #6 + B3 resolution: fallback_kind describes whether SUBSTITUTION happened.
+                        //   - Some "quality" — Phase 15 Bad triggered, retry succeeded
+                        //                     OR judge said NO, retry succeeded (same value; judge_* fields disambiguate)
+                        //   - None          — judge said NO but retry failed (no substitution); judge_called/_verdict still
+                        //                     record the judge invocation in the trace fields
+                        //   - Some "availability" — non-quality fallback path (existing Phase 13/14 semantic)
                         let fallbackKind =
-                            if qualityFallbackTriggered then Some "quality"
+                            if qualityFallbackTriggered || judgeTriggeredFallback then Some "quality"
                             elif finalDecision.IsFallback then Some "availability"
                             else None
                         traceLogger.Log({
@@ -516,7 +631,10 @@ let handler
                             final_response_excerpt   = truncate 500 finalBody
                             total_latency_ms         = (DateTimeOffset.UtcNow - started).TotalMilliseconds
                             timestamp                = DateTimeOffset.UtcNow
-                            bad_reason               = badReasonStr   // NEW Phase 15
+                            bad_reason               = badReasonStr             // Phase 15
+                            judge_called             = judgeCalled               // NEW Phase 16
+                            judge_verdict            = judgeVerdictStr           // NEW Phase 16
+                            judge_latency_ms         = judgeLatencyMs            // NEW Phase 16
                         })
 
                     let isCanary, isFb = metricCohort finalDecision okReason
