@@ -57,6 +57,17 @@ let private parsePortFromArgs (args: string array) : int option =
         | _ ->
             failwithf "--port=%s is not a valid integer" raw)
 
+/// Phase 14 — `--trace-responses` flag detection. When the flag is present,
+/// inject `Trace:Enabled=true` into the per-branch IConfigurationBuilder BEFORE
+/// configureRequestPipeline / configureWithoutMl runs. CompositionRoot reads
+/// this key to conditionally register ITraceLogger (triple-registration pattern:
+/// concrete + interface alias + AddHostedService). Has no effect on --retrain
+/// branch since configureWithoutMl omits ITraceLogger registration.
+let private applyTraceFlagFromArgs (configBuilder: IConfigurationBuilder) (args: string array) : unit =
+    if args |> Array.contains "--trace-responses" then
+        configBuilder.AddInMemoryCollection(dict [ "Trace:Enabled", "true" ]) |> ignore
+        Log.Information("Trace logging enabled via --trace-responses CLI flag; output: logs/trace/{Date}.jsonl")
+
 /// Detect --trace (migration guard) and apply --log-level if present.
 /// Called in BOTH the --retrain branch and the main Kestrel branch.
 let private applyLogLevelFromArgs (args: string array) : unit =
@@ -123,6 +134,9 @@ let main args =
                 // bootstrap preamble above; no need to repeat here.
                 // configureWithoutMl skips IEmbedder/IClassifier/RoutingAlgorithmRegistration/ML model checks.
                 // The retrain pipeline needs IFailureDetector + ITeacherLabeler + IHardCaseDatasetWriter only.
+                // Phase 14: inject Trace:Enabled=true if --trace-responses present (no-op in retrain path;
+                // configureWithoutMl does not register ITraceLogger, but the key is harmless to inject).
+                applyTraceFlagFromArgs (retrainBuilder.Configuration :> IConfigurationBuilder) args
                 CompositionRoot.configureWithoutMl retrainBuilder.Services retrainBuilder.Configuration |> ignore
                 use host = retrainBuilder.Build()
                 do host.StartAsync().GetAwaiter().GetResult()
@@ -226,6 +240,11 @@ let main args =
                 |> ignore
                 Log.Information("Listening port overridden to {Port} via --port CLI flag", port)
             | None -> ()
+
+            // Phase 14: inject Trace:Enabled=true if --trace-responses present.
+            // Must run BEFORE configureServices so CompositionRoot.configureRequestPipeline
+            // can read Trace:Enabled from builder.Configuration.
+            applyTraceFlagFromArgs (builder.Configuration :> IConfigurationBuilder) args
 
             // Register all DI services: named HttpClients, IUpstreamClient, RoutingConfig
             CompositionRoot.configureServices builder.Services builder.Configuration
