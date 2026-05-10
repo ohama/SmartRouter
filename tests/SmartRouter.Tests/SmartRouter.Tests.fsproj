@@ -29,6 +29,8 @@
     <Compile Include="ProductionDiTests.fs" />
     <!-- Issue #12: ML.makeApplyML reads IModelVersionProvider live (post-retrain) -->
     <Compile Include="MLLiveVersionTests.fs" />
+    <!-- Phase 14: quality fallback integration tests -->
+    <Compile Include="QualityFallbackTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
