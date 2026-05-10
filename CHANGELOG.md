@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-05-10
+
+Patch release fixing a critical bug in the v1.1.0 quality fallback path.
+
 ### Fixed
 
 - **Quality fallback (35B → 122B retry) was broken for real model
