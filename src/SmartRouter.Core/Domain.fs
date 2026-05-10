@@ -34,6 +34,7 @@ type RoutingReason =
     | Default
     | ML
     | FallbackTo35B   // Phase 10: 122B unavailable, rerouted to 35B
+    | FallbackTo122B  // Phase 14: 35B response failed quality check, retried on 122B
 
 /// LLM wire message (same shape as blueCode; needed by IUpstreamClient port).
 type MessageRole = System | User | Assistant
