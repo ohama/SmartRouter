@@ -13,7 +13,11 @@ open Microsoft.Extensions.Options
 
 /// Phase 14 — trace JSONL row for end-to-end request tracing.
 /// Prompt UID = first 12 hex of prompt_hash (Phase 5 LOG-01).
-/// 13 fields (Phase 15 added bad_reason; schema_version=1 unchanged — additive change).
+/// 16 fields total:
+///   - 12 from Phase 14 (schema_version..timestamp)
+///   - bad_reason (Phase 15, additive)
+///   - judge_called / judge_verdict / judge_latency_ms (Phase 16, additive)
+/// schema_version = 1 unchanged — additive-only extension per JDG-05.
 [<CLIMutable>]
 type TraceRecord = {
     [<JsonPropertyName("schema_version")>]
@@ -42,6 +46,12 @@ type TraceRecord = {
     timestamp                   : DateTimeOffset
     [<JsonPropertyName("bad_reason")>]
     bad_reason                  : string option   // NEW Phase 15 — null on Good, "tag=value" on Bad
+    [<JsonPropertyName("judge_called")>]
+    judge_called                : bool            // NEW Phase 16 — true when judge was invoked
+    [<JsonPropertyName("judge_verdict")>]
+    judge_verdict               : string option   // NEW Phase 16 — "yes" | "no" | null
+    [<JsonPropertyName("judge_latency_ms")>]
+    judge_latency_ms            : float option    // NEW Phase 16 — null when judge not called
 }
 
 /// Options bound from the CompositionRoot Configure<TraceLoggerOptions> action.
