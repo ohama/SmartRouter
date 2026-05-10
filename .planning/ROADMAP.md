@@ -258,12 +258,12 @@ Plans:
   3. Judge cache hit — 같은 (prompt, response) 쌍에 대해 두 번째 호출은 cache hit (judge HttpClient counter +0); /stats 에 `judge_cache_hits`, `judge_cache_misses` 노출.
   4. Judge call latency p95 < 100ms (1-token 응답; 실제 122B normal call 의 ~50× 빠름) — 통합 테스트에서 fake-Kestrel 으로 측정.
   5. Trace JSONL 신규 필드 `judge_called`, `judge_verdict` (`"yes"|"no"|null`), `judge_latency_ms` 추가; 운영자가 borderline 케이스 비율 모니터링 가능. schema_version 유지 (필드 추가만; rename/remove 안 함).
-**Plans**: 4 plans (예상)
+**Plans**: 4 plans
 
 Plans:
-- [ ] 16-01-BORDERLINE-CLASSIFIER-PLAN.md — `Adapters/BorderlineClassifier.fs` (pure F#, BCL only): Phase 15 의 entropy/length/keyword band edge 임계값 (예: entropy 2.5..3.5, length 30..60) 기반 3 클래스 분류; `Verdict = Good | Bad | Borderline of reason: string`
+- [ ] 16-01-BORDERLINE-CLASSIFIER-PLAN.md — `Adapters/BorderlineClassifier.fs` (pure F#, BCL only): hard-coded entropy band [EntropyThreshold, EntropyThreshold + 1.0) + length band [MinResponseLength, MinResponseLength × 1.5); `BorderlineKind = UncertainEntropy of float | UncertainLength of int`; `classifyBorderline opts content : BorderlineKind option` (precondition: caller verified analyzeResponse returned Good). Phase 15 Verdict DU NOT extended (researcher's primary recommendation — preserves 6 ChatCompletions match arms)
 - [ ] 16-02-JUDGE-ADAPTER-PLAN.md — `Adapters/JudgeClient.fs` (IJudgeClient 포트 + named "judge" HttpClient + prompt template `prompts/judge-prompt.md` + 1-token max_tokens + ROUTE_YES/ROUTE_NO parser); LRU cache (`(prompt_hash, response_hash) → verdict`; bounded ~10000 entries; in-memory `ConcurrentDictionary` + LRU eviction); cache stats counter for /stats
-- [ ] 16-03-CHATCOMPLETIONS-WIRING-PLAN.md — `ChatCompletions.fs` non-streaming branch: 35B 응답 → BorderlineClassifier 분류 → Borderline 일 때 JudgeClient.Verdict → No 면 122B 로 fallback; trace 에 judge 필드 emit; null-safe `GetService<IJudgeClient>` (judge 비활성 시 borderline = good 으로 처리; backward-compat)
+- [ ] 16-03-WIRING-PLAN.md — `ChatCompletions.fs` non-streaming branch: 35B 응답 → BorderlineClassifier 분류 → Borderline 일 때 JudgeClient.Verdict → No 면 122B 로 fallback; trace 에 judge 필드 emit; null-safe `GetService<IJudgeClient>` (judge 비활성 시 borderline = good 으로 처리; backward-compat)
 - [ ] 16-04-TESTS-AND-DOCS-PLAN.md — `JudgeIntegrationTests.fs` (JDG-01..05 5 testCase, fake-Kestrel + cache hit/miss assertions + latency 측정); README §5.5 judge step 흐름 추가 + §7 `Routing.Judge` 신규 config 표 + §9.3 trace schema 에 judge 필드 3 개 추가; planning docs 업데이트
 
 ### Phase 17: QualityClassifier (distillation endgame)
