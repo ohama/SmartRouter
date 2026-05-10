@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 14 IN PROGRESS — Wave 2 (14-02 trace logging infrastructure) complete. `--trace-responses` CLI flag + TraceLogger BackgroundService (Channel, BoundedChannelFullMode.Wait, daily JSONL to logs/trace/YYYY-MM-DD.jsonl) + conditional ITraceLogger triple-reg DI in configureRequestPipeline. Test baseline: 80 passed + 16 ignored + 0 failed.
+**Current focus:** Phase 14 IN PROGRESS — Wave 3 (14-03 core types) complete. `RoutingReason.FallbackTo122B` (6th DU case) + `formatReason` exhaustive 6-arm match + `QualityCheck.fs` (pure BCL `isBadResponse` + `QualityFallbackOptions`) + `appsettings.json` Routing.QualityFallback subsection. ARCH-01 preserved. Test baseline: 80 passed + 16 ignored + 0 failed.
 
 ## Current Position
 
 Phase: 14 of 14 (Quality Fallback and Trace)
-Plan: 2 of 6 in current phase — 14-02 complete
-Status: Wave 2 plan 14-02 complete. TraceLogger.fs (145 lines, Channel+BackgroundService) + Program.fs --trace-responses flag + CompositionRoot conditional ITraceLogger triple-reg. Build clean (TreatWarningsAsErrors=true). **80 passed + 16 ignored + 0 failed**.
-Last activity: 2026-05-10 — Completed 14-02-PROMPT-UID-AND-TRACE-PLAN.md.
+Plan: 3 of 6 in current phase — 14-03 complete
+Status: Wave 3 plan 14-03 complete. RoutingReason.FallbackTo122B DU case + formatReason 6-arm exhaustive match + QualityCheck.fs (isBadResponse + QualityFallbackOptions, BCL-only Cli adapter) + appsettings.json QualityFallback subsection + RoutingOptions.QualityFallback field + normalizeQualityFallback helper. Build clean (TreatWarningsAsErrors=true). **80 passed + 16 ignored + 0 failed**.
+Last activity: 2026-05-10 — Completed 14-03-CORE-TYPES-PLAN.md.
 
-Progress: [████████████████████████████████████████] 49 of 53 plans (Phase 14 Wave 2 done)
+Progress: [████████████████████████████████████████] 50 of 53 plans (Phase 14 Wave 3 done)
 
 ## Performance Metrics
 
@@ -242,6 +242,9 @@ Recent decisions affecting current work:
 - 14-02: TraceLoggerOptions fields declared mutable (not just [<CLIMutable>]) — F# Configure<T>(Action<T>) mutation pattern requires it; CLIMutable alone only helps reflection-based JSON binders (mirrors 13-05 decision)
 - 14-02: TraceLogger.StopAsync overrides synchronously (no task{} CE) — FS0405 forbids base.* access inside CE lambdas; drain is sync; base.StopAsync called directly outside CE (mirrors DecisionLogWriter.StopAsync pattern)
 - 14-02: ITraceLogger NOT registered when Trace:Enabled=false — consumers must use GetService<ITraceLogger>() (returns null) not GetRequiredService (throws); 14-04 owns the ChatCompletions defensive null check
+- 14-03: QualityCheck.fs placed in Cli/Adapters (not Core) — ARCH-01 compliance; pure BCL, zero framework deps; isBadResponse is case-sensitive by design (operator adds lowercase variants explicitly to BadKeywords array)
+- 14-03: normalizeQualityFallback returns Enabled=false (safe-off) when config section absent — production behavior: quality fallback does not fire on missing config; operator must explicitly set Enabled=true
+- 14-03: FallbackTo122B placed after FallbackTo35B in DU declaration — semantic pairing; 6-arm formatReason exhaustive match enforced by TreatWarningsAsErrors=true (no FS0025)
 
 ### Pending Todos
 
@@ -258,5 +261,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-10
-Stopped at: Completed 14-02-PROMPT-UID-AND-TRACE-PLAN.md. TraceLogger.fs (Channel+BackgroundService, BoundedChannelFullMode.Wait, 145 lines) + Program.fs --trace-responses wiring + CompositionRoot conditional ITraceLogger triple-reg. Build clean. 80+16+0 test baseline. Key commits: 4fccb6e, 8b83006, 73e94f7.
+Stopped at: Completed 14-03-CORE-TYPES-PLAN.md. RoutingReason.FallbackTo122B + formatReason 6-arm match + QualityCheck.fs (isBadResponse + QualityFallbackOptions) + appsettings.json QualityFallback + RoutingOptions.QualityFallback + normalizeQualityFallback. Build clean. 80+16+0 test baseline. Key commits: 30afc1f, 8f21cba, 5318a32.
 Resume file: None
