@@ -48,6 +48,7 @@ open SmartRouter.Cli.Adapters.HealthService
 open SmartRouter.Cli.Adapters.LogRetentionService
 open SmartRouter.Cli.Adapters.TraceLogger
 open SmartRouter.Cli.Adapters.QualityCheck
+open SmartRouter.Cli.Adapters.JudgeClient    // Phase 16: JudgeOptions, JudgeClient, IJudgeClient, IJudgeStats
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -523,6 +524,104 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         services.AddHostedService<TraceLogger>(fun sp ->
             sp.GetRequiredService<TraceLogger>()) |> ignore
 
+    // ── Phase 16: Judge (optional; Routing.Judge.Enabled gates entire feature) ──
+    // OPT-IN by default (Routing.Judge.Enabled=false in appsettings.json) — judge
+    // adds 122B HTTP latency on every borderline case (autonomous decision A).
+    //
+    // DI shape:
+    //   if judgeEnabled: register concrete JudgeClient + IJudgeClient alias +
+    //     IJudgeStats alias (single instance carries both interfaces so the LRU
+    //     cache and counters are shared across all callers). Named HttpClient "judge"
+    //     also registered here with its 2-retry resilience handler (OQ #5).
+    //   else: register ONLY IJudgeStats NoOp (returns struct(0L,0L,0L)) so the /stats
+    //     endpoint resolves cleanly. IJudgeClient deliberately NOT registered;
+    //     ChatCompletions's GetService<IJudgeClient>() returns null → borderline
+    //     check skipped → Phase 15 behavior preserved bit-stable.
+    //
+    // The two branches are mutually exclusive — there is no override conflict (B4 fix).
+    //
+    // Endpoint normalization (researcher OQ #4): empty Endpoint string =
+    // derive from Upstreams.Model122B at registration time.
+    //
+    // Config-read pattern (I9): mirrors the existing Trace:Enabled feature-flag idiom
+    // above (config.["Routing:Judge:Enabled"] + raw.Equals("true", ...)).
+    let judgeEnabled =
+        let raw = config.["Routing:Judge:Enabled"]
+        not (isNull raw) && raw.Equals("true", StringComparison.OrdinalIgnoreCase)
+    if judgeEnabled then
+        services.Configure<JudgeOptions>(config.GetSection("Routing:Judge")) |> ignore
+
+        // Resolve effective endpoint: empty Endpoint → reuse Upstreams.Model122B.
+        let upstreams = config.GetSection("Upstreams").Get<UpstreamOptions>()
+        let judgeRaw  = config.GetSection("Routing:Judge").Get<JudgeOptions>()
+        let effectiveEndpoint =
+            if not (isNull (box judgeRaw)) && not (String.IsNullOrWhiteSpace(judgeRaw.Endpoint))
+            then judgeRaw.Endpoint
+            else upstreams.Model122B
+        let effectiveTimeoutSec =
+            if isNull (box judgeRaw) || judgeRaw.TimeoutSeconds <= 0 then 5
+            else judgeRaw.TimeoutSeconds
+
+        // Named "judge" HttpClient — separate from "teacher" and from the queue-gated
+        // upstream clients. Mirrors teacher-pipeline retry shape but with shorter
+        // backoff (researcher OQ #5: 2 retries at 200ms/400ms — judge is on the hot
+        // path; teacher's 1s/2s/4s is too slow).
+        services.AddHttpClient("judge", fun (c: System.Net.Http.HttpClient) ->
+            c.BaseAddress <- Uri(effectiveEndpoint)
+            c.Timeout     <- TimeSpan.FromSeconds(float effectiveTimeoutSec))
+            .AddResilienceHandler("judge-pipeline", fun (builder: Polly.ResiliencePipelineBuilder<System.Net.Http.HttpResponseMessage>) ->
+                let retryOpts = HttpRetryStrategyOptions()
+                retryOpts.MaxRetryAttempts <- 2
+                retryOpts.BackoffType      <- DelayBackoffType.Exponential
+                retryOpts.Delay            <- TimeSpan.FromMilliseconds(200.0)
+                retryOpts.ShouldHandle     <-
+                    Func<RetryPredicateArguments<System.Net.Http.HttpResponseMessage>, System.Threading.Tasks.ValueTask<bool>>(
+                        fun args ->
+                            let retry =
+                                match args.Outcome.Exception with
+                                | :? System.Net.Http.HttpRequestException -> true
+                                | :? System.Threading.Tasks.TaskCanceledException -> true
+                                | null ->
+                                    let resp = args.Outcome.Result
+                                    not (isNull resp) && int resp.StatusCode >= 500
+                                | _ -> false
+                            System.Threading.Tasks.ValueTask.FromResult(retry))
+                builder.AddRetry(retryOpts) |> ignore
+                builder.AddTimeout(TimeSpan.FromSeconds(float effectiveTimeoutSec)) |> ignore)
+            |> ignore
+
+        // Triple-reg: concrete JudgeClient + IJudgeClient alias + IJudgeStats alias.
+        // Single instance — LRU cache must be shared across requests.
+        services.AddSingleton<JudgeClient>(fun sp ->
+            let opts = sp.GetRequiredService<IOptions<JudgeOptions>>().Value
+            // Defensive defaults if the section parsed to null fields.
+            let normalized =
+                { Endpoint        = effectiveEndpoint
+                  PromptPath      = if String.IsNullOrWhiteSpace(opts.PromptPath)  then "prompts/judge-prompt.md" else opts.PromptPath
+                  TimeoutSeconds  = effectiveTimeoutSec
+                  MaxCacheEntries = if opts.MaxCacheEntries <= 0 then 10000 else opts.MaxCacheEntries }
+            JudgeClient(
+                sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(),
+                normalized,
+                sp.GetRequiredService<ILogger<JudgeClient>>()))
+            |> ignore
+
+        services.AddSingleton<IJudgeClient>(fun sp ->
+            sp.GetRequiredService<JudgeClient>() :> IJudgeClient)
+            |> ignore
+
+        services.AddSingleton<IJudgeStats>(fun sp ->
+            sp.GetRequiredService<JudgeClient>() :> IJudgeStats)
+            |> ignore
+    else
+        // Judge disabled — register IJudgeStats NoOp so /stats endpoint resolves
+        // (judge_cache_hits/_misses/_call_count = 0L). IJudgeClient deliberately
+        // NOT registered: ChatCompletions resolves null and skips borderline check.
+        services.AddSingleton<IJudgeStats>(fun _ ->
+            { new IJudgeStats with
+                member _.GetJudgeStats() = struct (0L, 0L, 0L) })
+            |> ignore
+
     // ── Phase 7: Failure detection + teacher labeling ─────────────────────────
     services.Configure<TeacherLabelerOptions>(config.GetSection("TeacherLabeler")) |> ignore
     services.Configure<HardCaseDatasetOptions>(config.GetSection("HardCaseDataset")) |> ignore
@@ -911,6 +1010,15 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
             member _.RecordEntropyHit      () = ()
             member _.RecordKeywordHit      () = ()
             member _.GetHits               () = struct (0L, 0L, 0L, 0L) })
+        |> ignore
+
+    // Phase 16 — IJudgeStats NoOp for offline path. /stats may be invoked
+    // even in offline mode (e.g. `--retrain` doesn't run /stats but DI graph
+    // integrity requires this resolvable). IJudgeClient deliberately NOT
+    // registered offline — borderline check is skipped (Phase 15 behavior).
+    services.AddSingleton<IJudgeStats>(fun _ ->
+        { new IJudgeStats with
+            member _.GetJudgeStats() = struct (0L, 0L, 0L) })
         |> ignore
 
     // DecisionLog — same triple-reg as configureRequestPipeline.
