@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 14 COMPLETE + v1.1.0 released. Phases 15-17 (Quality Signal Enrichment / 122B-as-Judge / QualityClassifier) PLANNED — quality enrichment arc designed per `.planning/docs/quality-check-improvement-options.md`. ROADMAP/REQUIREMENTS updated; plans not yet authored.
+**Current focus:** Phase 15 IN PROGRESS (Quality Signal Enrichment). 15-01 COMPLETE (types + helpers + config). 15-02 next (analyzeResponse cascade + ChatCompletions.fs caller update). Phase 14 COMPLETE + v1.1.0 released.
 
 ## Current Position
 
-Phase: 14 of 17 done; 15-17 PLANNED (no plans authored yet)
-Plan: 6 of 6 in Phase 14 — 14-06 complete; Phase 15 next (3 plans projected)
-Status: Phase 14 COMPLETE + v1.1.0 released (commit 9fed265, tag v1.1.0). Quality enrichment arc planned: Phase 15 (Tier 1+2 — finish_reason wiring + case-insensitive keywords + refusal patterns + Korean length boost + Shannon entropy), Phase 16 (Tier 3-A — 122B-as-judge for borderline cases with caching), Phase 17 (Tier 4 — distillation endgame: separate ML.NET QualityClassifier with closed-loop self-improvement reusing Phase 8 RetrainingService + Phase 9 canary patterns). ROADMAP entries + REQUIREMENTS rows added (18 new IDs: QSE-01..06, JDG-01..05, QCLS-01..07). Test baseline: 82 passed + 16 ignored + 0 failed. Next concrete action: `/gsd:discuss-phase 15` (or skip to `/gsd:plan-phase 15`).
-Last activity: 2026-05-10 — Designed Phases 15-17 (ROADMAP + REQUIREMENTS only; no PLAN.md files yet).
+Phase: 15 of 17 in progress
+Plan: 1 of 3 in Phase 15 — 15-01 complete; 15-02 next
+Status: 15-01 COMPLETE (commits 8d5408e + 91a2489). Verdict/BadReason DUs, 5 BCL helpers, QualityFallbackOptions 5-field extension, normalizeQualityFallback extended, appsettings.json defaults wired. Test baseline preserved: 88 passed + 16 ignored + 0 failed. Next: 15-02 (analyzeResponse cascade + ChatCompletions.fs caller update).
+Last activity: 2026-05-10 — Completed 15-01-CONFIG-AND-DOMAIN-PLAN.md.
 
-Progress: [████████████████████████████████░░░░░░░░] 53 of 65 plans (Phases 1-14 complete; 15-17 planned with 12 projected plans — 3+4+5)
+Progress: [█████████████████████████████████░░░░░░░] 54 of 65 plans (Phases 1-14 complete; 15-01 complete; 15-02/03 + Phases 16-17 remaining)
 
 ## Performance Metrics
 
@@ -248,6 +248,12 @@ Recent decisions affecting current work:
 - 14-04: QualityFallbackOptions registered as standalone DI singleton in CompositionRoot (not via IOptions<RoutingOptions>) because ChatCompletions.fs (fsproj pos 58) compiles before CompositionRoot.fs (fsproj pos 63); QualityCheck.fs (pos 23) precedes both — compile-order-safe
 - 14-04: isNull (box traceLogger) null-guard pattern for ITraceLogger optional DI resolve (interface type requires boxing for F# isNull); no Option wrapper — avoids allocation on hot path
 - 14-04: qualityFallbackTriggered captured before task{} block to make it available in trace emission after finalDecision is resolved; fallback_kind derived post-task to correctly reflect actual outcome
+- 15-01: BadReason DU wire format uses '=' separator: "length=12", "keyword=TODO", "finish_reason=length", "entropy=1.85" — operator can split in jq: `.bad_reason | split("=")[0]`
+- 15-01: extractFinishReason + charEntropy are public (for 15-03 unit tests); koreanRatio, effectiveLength, matchKeyword are private (used only by analyzeResponse in Plan 15-02)
+- 15-01: Zero-means-default for EntropyThreshold in normalizeQualityFallback (CLIMutable float defaults to 0.0 when JSON key absent — same pattern as MinResponseLength); null/empty-means-default for BadFinishReasons
+- 15-01: F# record extension (3→5 fields) breaks all construction sites atomically — QualityFallbackTests.fs QF-03..07 sites updated in same commit as QualityCheck.fs + CompositionRoot.fs; isBadResponse body unchanged so behavior preserved
+- 15-01: Refusal-default policy enforced: default BadKeywords stays ["TODO","I think"]; CONTEXT.md §"Refusal pattern default 정책" takes precedence over ROADMAP SC#3 wording; README §7 opt-in guidance deferred to 15-03
+- 15-01: Plan 15-02 call pattern: analyzeResponse introduced as primary; isBadResponse becomes 3-line wrapper (match analyzeResponse opts None body with Bad _ -> true | Good -> false); zero churn on QF-03..QF-08
 
 ### Pending Todos
 
@@ -264,5 +270,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-10
-Stopped at: Completed 14-06-DOCS-PLAN.md. README updated (§5.5 quality fallback, §7 QualityFallback config, §9.1 routing_reason, §9.10 trace logging, §12.6 CLI flags). Planning docs updated (cold-start-request-flow.md, distillation-fallback-design-references.md). Phase 14 complete. Key commits: be59b89 (README), 26e1c98 (planning docs).
+Stopped at: Completed 15-01-CONFIG-AND-DOMAIN-PLAN.md. Verdict/BadReason DUs + 5 helpers + QualityFallbackOptions 5-field extension + normalizeQualityFallback + appsettings.json defaults. Test baseline preserved: 88 passed + 16 ignored. Key commits: 8d5408e (domain types), 91a2489 (appsettings.json).
 Resume file: None
