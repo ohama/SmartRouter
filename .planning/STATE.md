@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 14 IN PROGRESS — Wave 1 (14-01 cold-start CLI) complete. `--cold-start` flag with BCL-only `runColdStartBackup` function: timestamp-suffixed backup of 4 model/dataset files, then continues startup for fresh dummy model generation. DRY bootstrap preamble pattern (Logging.configure hoisted before --retrain/Kestrel split). Test baseline: 80 passed + 16 ignored + 0 failed.
+**Current focus:** Phase 14 IN PROGRESS — Wave 2 (14-02 trace logging infrastructure) complete. `--trace-responses` CLI flag + TraceLogger BackgroundService (Channel, BoundedChannelFullMode.Wait, daily JSONL to logs/trace/YYYY-MM-DD.jsonl) + conditional ITraceLogger triple-reg DI in configureRequestPipeline. Test baseline: 80 passed + 16 ignored + 0 failed.
 
 ## Current Position
 
 Phase: 14 of 14 (Quality Fallback and Trace)
-Plan: 1 of 6 in current phase — 14-01 complete
-Status: Wave 1 plan 14-01 complete. ColdStart.fs (43 lines, BCL only) + Program.fs --cold-start wiring (DRY bootstrap preamble). Build clean (TreatWarningsAsErrors=true). **80 passed + 16 ignored + 0 failed**.
-Last activity: 2026-05-10 — Completed 14-01-COLD-START-CLI-PLAN.md.
+Plan: 2 of 6 in current phase — 14-02 complete
+Status: Wave 2 plan 14-02 complete. TraceLogger.fs (145 lines, Channel+BackgroundService) + Program.fs --trace-responses flag + CompositionRoot conditional ITraceLogger triple-reg. Build clean (TreatWarningsAsErrors=true). **80 passed + 16 ignored + 0 failed**.
+Last activity: 2026-05-10 — Completed 14-02-PROMPT-UID-AND-TRACE-PLAN.md.
 
-Progress: [████████████████████████████████████████] 48 of 53 plans (Phase 14 Wave 1 done)
+Progress: [████████████████████████████████████████] 49 of 53 plans (Phase 14 Wave 2 done)
 
 ## Performance Metrics
 
@@ -239,6 +239,9 @@ Recent decisions affecting current work:
 - 13-05: LogRetentionService registered via AddHostedService<LogRetentionService>() (not triple-reg) — no IInterface consumer; DI needs only the hosted service leg. Options wired via Configure<LogRetentionOptions> action reading Logging + DecisionLog sections.
 - 14-01: DRY bootstrap preamble — Logging.configure + applyLogLevelFromArgs hoisted before --retrain/Kestrel split using a minimal ConfigurationBuilder(appsettings.json, optional=true). Removed duplicate calls from both branches. --cold-start checked BEFORE --retrain (flags combinable). ColdStart.fs is BCL-only (no Serilog/HTTP deps; ILogger parameter supplied by caller).
 - 14-01: XML comment with -- inside <!-- --> is invalid XML in .fsproj — auto-fixed to 'cold-start' without leading dashes.
+- 14-02: TraceLoggerOptions fields declared mutable (not just [<CLIMutable>]) — F# Configure<T>(Action<T>) mutation pattern requires it; CLIMutable alone only helps reflection-based JSON binders (mirrors 13-05 decision)
+- 14-02: TraceLogger.StopAsync overrides synchronously (no task{} CE) — FS0405 forbids base.* access inside CE lambdas; drain is sync; base.StopAsync called directly outside CE (mirrors DecisionLogWriter.StopAsync pattern)
+- 14-02: ITraceLogger NOT registered when Trace:Enabled=false — consumers must use GetService<ITraceLogger>() (returns null) not GetRequiredService (throws); 14-04 owns the ChatCompletions defensive null check
 
 ### Pending Todos
 
@@ -255,5 +258,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-10
-Stopped at: Completed 14-01-COLD-START-CLI-PLAN.md. ColdStart.fs (BCL-only runColdStartBackup, 4 candidate files, idempotent) + Program.fs --cold-start wiring (DRY bootstrap preamble). Build clean. 80+16+0 test baseline. Key commits: 428b30b, fe12164.
+Stopped at: Completed 14-02-PROMPT-UID-AND-TRACE-PLAN.md. TraceLogger.fs (Channel+BackgroundService, BoundedChannelFullMode.Wait, 145 lines) + Program.fs --trace-responses wiring + CompositionRoot conditional ITraceLogger triple-reg. Build clean. 80+16+0 test baseline. Key commits: 4fccb6e, 8b83006, 73e94f7.
 Resume file: None
