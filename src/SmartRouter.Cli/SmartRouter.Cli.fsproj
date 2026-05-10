@@ -22,6 +22,7 @@
     <Compile Include="Adapters/ColdStart.fs" />           <!-- Phase 14: cold-start backup handler (BCL only) -->
     <Compile Include="Adapters/DecisionLogger.fs" />
     <Compile Include="Adapters/DecisionLogWriter.fs" />
+    <Compile Include="Adapters/TraceLogger.fs" />           <!-- Phase 14: trace JSONL writer (Channel + BackgroundService) -->
     <Compile Include="Adapters/CorrelationMiddleware.fs" />
     <Compile Include="Adapters/RoutingAlgorithm.fs" />
     <Compile Include="Adapters/MlNetClassifier.fs" />          <!-- NEW: schema types come first -->
