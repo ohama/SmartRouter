@@ -8,15 +8,15 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 19 (35B Self-Routing) COMPLETE (all 4 plans). Phase 20 (Hermes Agent Integration) is next.
+**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 19 VERIFIED + CLOSED 2026-05-12. Phase 20 (Hermes Agent Integration + Documentation) is the final v2.0 phase.
 
 ## Current Position
 
-Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-12
-Phase: 19 — 35B Self-Routing (Stage 4 Self-Classify) — COMPLETE (4/4 plans)
-Plan: 19-04 complete — README §5.7/§7/§8/§9.1 + CHANGELOG [Unreleased] Phase 19 documentation
-Status: 19-04 COMPLETE (2/2 tasks, 3 auto-fixed stale-doc deviations). README and CHANGELOG fully document v2.0 self-routing for operators. 167 + 18 + 0 unchanged.
-Last activity: 2026-05-12 — Phase 19 Plan 04 executed; Phase 19 COMPLETE. All 9 SR-* requirements satisfied. Phase 20 next.
+Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-12 (10 of 12 plans complete)
+Phase: 20 — Hermes Agent Integration + Documentation — Not started
+Plan: —
+Status: Phase 19 verified by gsd-verifier (5/5 ROADMAP must-haves, 9/9 SR-* requirements). 167 passed + 18 ignored + 0 failed. One non-blocking human-verification item recorded in 19-VERIFICATION.md: live mlx_lm.server validation that 35B actually returns SAFE/UNSAFE tokens for the shipped prompt template — prompt-quality validation, not a code correctness gap. Ready to plan Phase 20.
+Last activity: 2026-05-12 — Phase 19 closed; verifier passed; ROADMAP/STATE/REQUIREMENTS updated for milestone progression.
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -42,7 +42,7 @@ Last activity: 2026-05-12 — Phase 19 Plan 04 executed; Phase 19 COMPLETE. All 
 - `.planning/research/SUMMARY.md` — v2.0 research synthesis (HIGH confidence; phase order locked by Domain.fs compile dependency)
 - Memory note `v2_selfrouting_pivot.md` — pivot rationale + locked decisions
 
-Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 6 of 12 plans complete (Phase 17 + Phase 18 both complete; Phase 19-20 next).
+Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 10 of 12 plans complete (Phases 17, 18, 19 all complete; Phase 20 remaining — final v2.0 phase).
 
 ## Performance Metrics
 
