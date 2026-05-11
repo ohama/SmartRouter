@@ -36,7 +36,7 @@ A local-only HTTP gateway at `http://127.0.0.1:4000` fronting two `mlx_lm.server
         ▼
   smart-router :4000
     ├─ CorrelationMiddleware     → injects correlation_id
-    ├─ Routing (3 stages, pure)  → 1. model override → 2. task table → 3. ML
+    ├─ Routing (4 stages, pure)  → 0. Hard Rules → 1. model override → 2. task table → 3. algorithm (mode-dependent)
     ├─ QueueDispatcher           → SemaphoreSlim(1) on 122B
     ├─ QualityFallback           → 35B response bad → retry on 122B (non-streaming)
     ├─ CanaryService             → FileSystemWatcher on router-canary.zip
@@ -51,7 +51,7 @@ A local-only HTTP gateway at `http://127.0.0.1:4000` fronting two `mlx_lm.server
 
 **Hexagonal:** `SmartRouter.Core` (pure, BCL-only — no Microsoft.ML, no HttpClient, no ASP.NET Core, no Serilog). Adapters live in `SmartRouter.Cli`. Project boundary enforced via `.fsproj` references.
 
-**Routing algorithm:** Stage 3 always runs ML. bge-m3 int8 ONNX → 1024-dim L2-normalized vector → ML.NET `LbfgsLogisticRegression` → confidence ≥ `Routing.ML.Threshold` (default 0.5) routes to 122B, else 35B. Heuristic routing was retired; snapshot at `archive/heuristic-baseline` branch + `v0.5-heuristic-baseline` tag.
+**Routing algorithm (Phase 17 v2.0):** Stage 0 Hard Rules runs first (keyword scan; 0 ms). Stage 3 is mode-dependent: `Routing.Mode="selfrouting"` (default) uses the Phase 17 stub (35B fallback; Phase 19 ships real SAFE/UNSAFE self-classify); `Routing.Mode="ml"` runs bge-m3 int8 ONNX → 1024-dim L2-normalized vector → ML.NET `LbfgsLogisticRegression` → confidence ≥ `Routing.ML.Threshold` (default 0.5) routes to 122B, else 35B. Heuristic routing was retired; snapshot at `archive/heuristic-baseline` branch + `v0.5-heuristic-baseline` tag.
 
 **Two feedback loops:**
 - **Loop A (real-time):** 122B unreachable + non-graph_indexing → reroute to 35B (`fallback_used=true`, `routing_reason=fallback_to_35b`). Quality-bad 35B response → retry on 122B (`routing_reason=fallback_to_122b`). DecisionLog row written for every request.
@@ -118,9 +118,36 @@ For deployment as a launchd service: see [§11 Operations](#11-operations).
 
 ## 5. Routing Pipeline
 
-### 5.1 Three-stage decision
+Phase 17 (v2.0) added Stage 0 — keyword-driven Hard Rules — and a `Routing.Mode` switch
+(`"selfrouting"` default; `"ml"` for v1.x rollback). The cascade is now four stages.
+
+### 5.0 Hard Rules pre-routing (Stage 0, Phase 17)
+
+A pure-function keyword scan runs **before everything else**, including model override and task table.
+If any message content contains one of six hardcoded keywords (case-insensitive) —
+`LLVM`, `MLIR`, `compiler`, `segfault`, `optimization`, `concurrency` —
+the request routes **immediately to Qwen 122B** with `routing_reason="hard_rule"` and
+`priority=High`.
+
+**Rationale:** these tasks are pathologically hard for 35B and historically burned its routing
+decisions in v0.5 (heuristic baseline). A 0-ms keyword check protects 122B from being
+bypassed even when the caller passes `{"model": "35b"}` — Hard Rules wins over model override.
+
+**The keyword list is hardcoded** in `src/SmartRouter.Core/HardRules.fs`. Adding or removing a keyword
+requires a source edit, rebuild, and restart. This is intentional: Hard Rules is a safety
+mechanism and we don't want operators accidentally widening or narrowing it via `appsettings.json`.
+
+Hard Rules applies to **both streaming and non-streaming requests** — the keyword check is
+cheap enough that the first SSE chunk's latency budget is not threatened.
+
+### 5.1 Four-stage decision
 
 ```
+Stage 0: Hard Rules (Phase 17)
+   any message content contains LLVM/MLIR/compiler/segfault/optimization/concurrency?
+     → 122B, routing_reason=hard_rule, priority=High. DONE.
+   no match → continue.
+
 Stage 1: model override
    request.model in {"35b","qwen35b","122b","qwen122b"}? → use it. DONE.
    "auto" or absent → continue.
@@ -130,8 +157,9 @@ Stage 2: task table
    unknown task → HTTP 400.
    no task → continue.
 
-Stage 3: ML classifier
-   bge-m3 embed → LbfgsLogisticRegression → confidence ≥ Threshold? → 122B; else 35B.
+Stage 3: routing algorithm (mode-dependent)
+   Routing.Mode="ml":          bge-m3 embed → LbfgsLogisticRegression → confidence ≥ Threshold? → 122B; else 35B.
+   Routing.Mode="selfrouting": Phase 17 stub returns 35B/Default; full SAFE/UNSAFE self-classify lands in Phase 19.
 ```
 
 ### 5.2 Task table
@@ -279,6 +307,7 @@ All keys in `src/SmartRouter.Cli/appsettings.json`. The router reads at startup;
 
 | Key | Type | Default | Description |
 |---|---|---|---|
+| `Routing.Mode` | string | `"selfrouting"` | Routing paradigm: `"selfrouting"` (v2.0 default; Hard Rules + 35B self-classify) or `"ml"` (v1.x rollback path; ML classifier). Invalid values fail startup. Requires restart after change. Phase 17. |
 | `Routing.TimeoutSeconds` | int | 300 | Per-request upstream timeout |
 | `Routing.TaskTable` | object | (7 tasks) | Per-task model + priority |
 | `Routing.ModelAliases` | object | auto/35b/122b | Stage-1 alias mapping |
@@ -499,8 +528,8 @@ One row per request. Daily rotation by filename. Auto-pruned after `DecisionLog.
 | `schema_version` | Currently 1 |
 | `correlation_id` | UUID; sticky for canary bucketing; joinable with operational log + trace log |
 | `target` | `Qwen35B` or `Qwen122B` — model that actually served |
-| `routing_reason` | `explicit_model:{alias}`, `explicit_task:{task}`, `default`, `ml`, `fallback_to_35b` (122B unreachable), `fallback_to_122b` (35B response quality-bad), or compounds (`ml;upstream_error`, `ml;cancelled`, `ml;stream_error`) |
-| `routing_algorithm` | `ml` (only valid value; seam preserved for future) |
+| `routing_reason` | `explicit_model:{alias}`, `explicit_task:{task}`, `default`, `ml`, `fallback_to_35b` (122B unreachable), `fallback_to_122b` (35B response quality-bad), `hard_rule` (Phase 17: keyword-driven Stage 0 → 122B), or compounds (`ml;upstream_error`, `ml;cancelled`, `ml;stream_error`). `schema_version=1` unchanged — `hard_rule` is an additive enum value. |
+| `routing_algorithm` | `ml` (v1.x ML classifier, when `Routing.Mode="ml"`), `selfrouting` (v2.0 default — Phase 17 ships stub; Phase 19 ships real 35B self-classify), or `ml-canary` (canary cohort, ml mode only) |
 | `model_version` | `v1`, `v2`, ... baseline; `v3-canary` for canary cohort |
 | `fallback_used` | `true` if reroute happened (either direction) |
 | `prompt_hash` | SHA-256 of concat'd message content; first 12 hex = `prompt_uid` joining to TraceLog |
