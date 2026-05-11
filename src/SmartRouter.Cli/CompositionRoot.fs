@@ -388,9 +388,40 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
             sp.GetRequiredKeyedService<IClassifier>("baseline"))
             |> ignore
 
-    // RoutingAlgorithmRegistration as a DI singleton — pairs the ML algorithm function
-    // with its name and model_version so the endpoint can populate DecisionLog.
-    // Always ML: makeApplyML closure / "ml" / "ml-{8hexchars}"
+    // Phase 17 (MODE-01..04): Routing.Mode config switch.
+    //
+    // Read pattern mirrors Phase 16 Routing:Judge:Enabled (line ~549 below):
+    // direct config.["Routing:Mode"] string read, no IOptions binding.
+    // Default = "selfrouting" (v2.0 paradigm). Operator can flip to "ml" via
+    // appsettings.json + restart (no rebuild) to re-activate the v1.x ML routing
+    // path; all ML adapters remain registered and warm (MODE-03 invariant).
+    //
+    // Fail-fast validation: any unrecognized value throws InvalidOperationException
+    // at startup BEFORE Kestrel binds to :4000. Mirrors buildRoutingConfig's
+    // unknown-task error pattern (line ~100-111 above).
+    let routingMode =
+        let raw = config.["Routing:Mode"]
+        if isNull raw || String.IsNullOrWhiteSpace(raw) then "selfrouting"
+        else raw.Trim().ToLowerInvariant()
+
+    match routingMode with
+    | "selfrouting" | "ml" -> ()   // valid; proceed
+    | other ->
+        raise (InvalidOperationException(
+            sprintf
+                "appsettings.json Routing.Mode value '%s' is not recognized; valid values are 'selfrouting' or 'ml'"
+                other))
+
+    // Phase 17 (MODE-02): RoutingAlgorithmRegistration factory branches on routingMode.
+    // - "ml"          → existing v1.x ML closure (unchanged behavior; v1.3 baseline)
+    // - "selfrouting" → Phase 17 STUB that returns Qwen35B/Default for unmatched prompts.
+    //                   Hard Rules (Stage 0, Plan 17-01) still fires for keyword matches.
+    //                   The real makeSelfRoutingAlgorithm ships in Phase 19; this stub is
+    //                   a deliberate placeholder that makes the mode switch functional now.
+    //
+    // ML adapter DI (embedder, baseline/canary classifiers, retraining, canary) remains
+    // unconditional above (MODE-03): RetrainingService accumulates hard cases regardless
+    // of mode so an operator can re-activate ML routing with a config edit + restart.
     services.AddSingleton<RoutingAlgorithmRegistration>(
         Func<IServiceProvider, RoutingAlgorithmRegistration>(fun sp ->
             // ML branch — resolve adapters once; close over them in the makeApplyML factory.
