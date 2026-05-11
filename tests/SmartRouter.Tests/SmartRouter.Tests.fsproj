@@ -35,6 +35,8 @@
     <Compile Include="QualitySignalEnrichmentTests.fs" />
     <!-- Phase 16: 122B-as-judge for borderline cases -->
     <Compile Include="JudgeIntegrationTests.fs" />
+    <!-- Phase 17: Hard Rules layer + Routing.Mode switch -->
+    <Compile Include="HardRulesTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
