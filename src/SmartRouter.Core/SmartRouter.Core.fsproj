@@ -8,6 +8,7 @@
     <Compile Include="MLPorts.fs" />     <!-- NEW: Phase 6 -->
     <Compile Include="CanaryPorts.fs" /> <!-- NEW: Phase 9 — placed before ML.fs so ML.fs can open it; BCL-only (ARCH-01) -->
     <Compile Include="RetrainingPorts.fs" />   <!-- Issue #12: moved before ML.fs so makeApplyML can open IModelVersionProvider; BCL-only (ARCH-01) -->
+    <Compile Include="HardRules.fs" />   <!-- NEW: Phase 17 — depends on Domain only; placed before Routing.fs which references it -->
     <Compile Include="ML.fs" />
     <Compile Include="Routing.fs" />
     <Compile Include="Ports.fs" />
