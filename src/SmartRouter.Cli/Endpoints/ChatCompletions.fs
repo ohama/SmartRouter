@@ -27,6 +27,7 @@ open SmartRouter.Cli.Adapters.TraceLogger
 open SmartRouter.Cli.Adapters.BorderlineClassifier   // Phase 16: classifyBorderline
 open SmartRouter.Cli.Adapters.JudgeClient            // Phase 16: IJudgeClient + JudgeVerdict
 open SmartRouter.Cli.Adapters.SessionStore           // Phase 18: ISessionStore
+open SmartRouter.Cli.Adapters.SelfRouter             // Phase 19: ISelfRouter + SelfRouteVerdict
 
 // ── Phase 14 — string truncation for trace excerpts ──────────────────────────
 
@@ -330,6 +331,14 @@ let handler
                 // Phase 15 — streaming branch INTENTIONALLY SKIPPED for quality enrichment too.
                 // chunks already shipped to client; analyzeResponse cannot retract.
                 //
+                // ── Phase 19 (SR-06): Self-classify INTENTIONALLY SKIPPED for streaming requests ──
+                // Latency budget cannot accommodate a classify round-trip (5s timeout + 35B inference
+                // ~200-500ms) before the first SSE chunk must FlushAsync. Hard Rules (Stage 0) +
+                // sticky escalation (Stage 3) still apply to streaming via `routeRequest` above —
+                // both arrive in `decision` already-decided. Explicit skip mirrors Phase 14
+                // quality-fallback streaming-skip pattern. SR-09 dormant test asserts ml-mode
+                // wiring stays intact across this skip.
+                //
                 // STRM-04 / PITFALL-6: Set all SSE headers BEFORE writing any body bytes.
                 // Once any WriteAsync runs, headers are committed and cannot be changed.
                 ctx.Response.ContentType <- "text/event-stream"
@@ -442,6 +451,51 @@ let handler
                 logger.LogDebug(
                     "Routing target={Target} reason={Reason} priority={Priority}",
                     decision.Target, decision.Reason, decision.Priority)
+
+                // ── Phase 19 (SR-08): self-classify for non-streaming Default-reason decisions ──
+                // Streaming branch never reaches this code (handled in the if-branch above).
+                // Only Default reason warrants classify — Hard Rules / overrides / task / sticky
+                // already arrived with decided Targets and would not benefit from re-evaluation.
+                // ISelfRouter null when Routing.Mode="ml" or configureWithoutMl path — fail-open
+                // to existing decision (Default = 35B). RESEARCH §9 PITFALL #1 — parser is
+                // safety-biased; RouteFailed/RouteSkipped also fail open.
+                let! decision = task {
+                    if decision.Reason = Default then
+                        let selfRouter = ctx.RequestServices.GetService<ISelfRouter>()
+                        if isNull (box selfRouter) then
+                            return decision
+                        else
+                            let promptHash = computePromptHash req.Messages
+                            let promptText = req.Messages |> List.map (fun m -> m.Content) |> String.concat " "
+                            let! verdict = selfRouter.ClassifyAsync(promptHash, promptText, ctx.RequestAborted)
+                            match verdict with
+                            | RouteSafe ->
+                                return { decision with
+                                            Target       = Qwen35B
+                                            Priority     = Low
+                                            Reason       = SelfRoute
+                                            ModelVersion = selfRouter.PromptVersion }
+                            | RouteUnsafe ->
+                                return { decision with
+                                            Target       = Qwen122B
+                                            Priority     = High
+                                            Reason       = SelfRoute
+                                            ModelVersion = selfRouter.PromptVersion }
+                            | RouteSkipped reason ->
+                                logger.LogDebug("SelfRouter skipped: {Reason}", reason)
+                                return decision   // fail-open to Default = 35B
+                            | RouteFailed err ->
+                                logger.LogWarning("SelfRouter failed: {Error}", err)
+                                return decision   // fail-open to Default = 35B
+                    else
+                        return decision           // Hard Rule / sticky / override already decided; never re-classify
+                }
+                // After this block, `decision` is either:
+                //   - Original (non-Default reason; never classified)
+                //   - Original (Default + selfrouter null; fail-open)
+                //   - Original (Default + RouteSkipped/RouteFailed; fail-open)
+                //   - Rebound { Target=35B/122B, Reason=SelfRoute, ModelVersion=PromptVersion }
+                // Continue with existing judge + upstream dispatch logic using this final `decision`.
 
                 // Phase 14: resolve optional dependencies for quality fallback + trace.
                 // qualityFallbackOpts: QualityFallbackOptions registered as a standalone DI
