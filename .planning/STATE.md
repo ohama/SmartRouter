@@ -8,15 +8,15 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 19 (35B Self-Routing) IN PROGRESS. Plans 19-01, 19-02, and 19-03 complete.
+**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 19 (35B Self-Routing) COMPLETE (all 4 plans). Phase 20 (Hermes Agent Integration) is next.
 
 ## Current Position
 
 Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-12
-Phase: 19 — 35B Self-Routing (Stage 5 Self-Classify) — In progress (3/4 plans complete)
-Plan: 19-03 complete — cascade wiring + streaming-skip + 3 test files
-Status: 19-03 COMPLETE (4/4 tasks, 2 auto-fixed deviations). ISelfRouter.ClassifyAsync wired into ChatCompletions non-streaming branch; SR-06 streaming-skip comment; 17 new tests (SelfRouterTests 9 + SelfRoutingIntegrationTests 7 + MlDormantTests 1 skip-guarded). 167 + 18 + 0.
-Last activity: 2026-05-12 — Phase 19 Plan 03 executed; SC-1/2/3/4 testable; SC-5 skip-guarded (19-04 next: README/CHANGELOG).
+Phase: 19 — 35B Self-Routing (Stage 4 Self-Classify) — COMPLETE (4/4 plans)
+Plan: 19-04 complete — README §5.7/§7/§8/§9.1 + CHANGELOG [Unreleased] Phase 19 documentation
+Status: 19-04 COMPLETE (2/2 tasks, 3 auto-fixed stale-doc deviations). README and CHANGELOG fully document v2.0 self-routing for operators. 167 + 18 + 0 unchanged.
+Last activity: 2026-05-12 — Phase 19 Plan 04 executed; Phase 19 COMPLETE. All 9 SR-* requirements satisfied. Phase 20 next.
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -138,6 +138,23 @@ Progress: [███████████████████████
 - MlDormantTests.fs: 1 test (skip-guarded) — Routing.Mode="ml" DI boots cleanly post-Phase-19
 - SR-06, SR-08, SR-09 satisfied; ROADMAP SC-1/2/3/4/5 all testable from dotnet test
 
+**v2.0 progress (post-19-04, Phase 19 COMPLETE):**
+- Tests: 167 passed + 18 ignored + 0 failed (docs-only wave; baseline preserved)
+- README §5.7 NEW: Stage 4 self-classify mechanics (35B → SAFE/UNSAFE classify, streaming-skip, LRU cache, fail-open, operator tuning, rollback via Routing.Mode="ml")
+- README §5.1 updated: "Four-stage decision" → "Six-stage decision" (Phases 17-19 cascade); §5.6 stale "Phase 19 will insert" forward-reference replaced; §2 stale Phase 17 stub description updated
+- README §7: Routing.SelfRouter.{Endpoint, PromptPath, TimeoutSeconds=5, MaxCacheEntries=10000} config block added
+- README §8: Phase 19 selfrouter_* counter table (4 fields with semantics matching Stats.fs exactly)
+- README §9.1: routing_reason=self_route + routing_algorithm=selfrouting + model_version=selfrouting-{hex8} documented; schema_version=1 reaffirmed
+- CHANGELOG [Unreleased] Phase 19 Added + Notes blocks appended after Phase 18
+- All source-of-truth cross-checks passed: 4 stats field names, 4 config key names, 1 routing_reason enum value — all match source files
+- Phase 19 COMPLETE: all 9 SR-* requirements satisfied (SR-01..09); all 5 ROADMAP SCs verifiable by operators
+
+**v2.0 summary (phases 17-19 complete; phase 20 next):**
+- Phase 17: Hard Rules Layer + Routing.Mode switch (10 reqs; 3 plans; 8 tests added; v1.x ML dormant)
+- Phase 18: Session Store + Sticky Escalation (9 reqs; 3 plans; 13 tests added; X-Session-Id opt-in)
+- Phase 19: 35B Self-Classify Stage 4 (9 reqs; 4 plans; 17 tests added; streaming-skip; LRU cache; operators can tune via prompts/self-router-prompt.md)
+- Phase 20: Hermes Agent Integration + Documentation — NEXT (4 reqs; 2 plans; README §10 update + fingerprint fallback)
+
 *Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
 
 ## Accumulated Context
@@ -212,7 +229,7 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 
 ### Pending Todos
 
-- v2.0 Phase 19 Plan 04 (`/gsd:execute-phase 19-04`) — next action (README + CHANGELOG documentation for Phase 19 changes)
+- v2.0 Phase 20 Plans 01-02 (`/gsd:execute-phase 20-01`) — next action (Hermes Agent Integration: X-Session-Id propagation + fingerprint fallback + README §10)
 - ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3; MODELS-01/02/03 currently erroring with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests)
 - Remove configureServices backwards-compat alias after ModelsTests migration
 
@@ -225,5 +242,5 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: Completed 19-02-PLAN.md — DI wiring + stats + config. Named "selfrouter" HttpClient, SelfRouter triple-reg (selfrouting mode), ISelfRouterStats NoOp (ml/offline), 4 /stats fields, Routing.SelfRouter config block. 150 + 17 + 0 preserved. SelfRouter registered but classify call not yet wired.
-Resume file: None. Next action: `/gsd:execute-phase 19-03` (cascade wiring in ChatCompletions.fs).
+Stopped at: Completed 19-04-PLAN.md — Phase 19 COMPLETE. README §5.7/§7/§8/§9.1 + CHANGELOG [Unreleased] Phase 19 documentation. 167 + 18 + 0 preserved. All 9 SR-* requirements satisfied.
+Resume file: None. Next action: `/gsd:execute-phase 20-01` (Hermes Agent Integration).
