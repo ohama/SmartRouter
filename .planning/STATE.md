@@ -5,16 +5,30 @@
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
-**Current focus:** Phase 17 NEXT (QualityClassifier distillation endgame). Phase 16 COMPLETE (122B-as-Judge for Borderline Cases).
+**Current focus:** **OPERATOR PIVOT 2026-05-11**: v1.x milestone (Quality-aware ML routing) closing at v1.3.0; Phase 17 (ML QualityClassifier distillation endgame) DEFERRED. New v2.0 milestone "Self-Routing + Session-Aware" starting per `.planning/docs/35b-selfrouting.md`. Ready for `/gsd:complete-milestone` → `/gsd:new-milestone`.
 
 ## Current Position
 
-Phase: 16 of 17 COMPLETE — Phase 17 not yet started
-Plan: 4 of 4 in Phase 16 — 16-01..04 all complete
-Status: Phase 16 COMPLETE. Tests: 113 passed, 16 ignored, 0 failed. OPT-IN judge cascade (Routing.Judge.Enabled=false default), LRU cache, JDG-01..05 integration tests, README §5.5.5/§7/§8/§9.3 updated, REQUIREMENTS.md JDG-01..05 marked Complete.
-Last activity: 2026-05-11 — Completed 16-04-TESTS-AND-DOCS-PLAN.md.
+Phase: 16 of 17 COMPLETE — Phase 17 DEFERRED (operator pivot)
+Plan: 4 of 4 in Phase 16 — all complete; Phase 17 plans never authored
+Status: v1.x milestone closing. Phase 16 COMPLETE @ v1.3.0 release. Tests: 113 passed + 16 ignored + 0 failed. Phase 17 deferred — ML classifier work paused; ML code (Phase 6-9, 14-16) retained but routing-path role will become dormant in v2.0 (similar to how Phase 12 retired heuristic routing). v2.0 milestone designed around selfrouting paradigm: Hard Rules + 35B self-classify + sticky escalation + Hermes Agent integration.
 
-Progress: [████████████████████████████████████████░░░░░] 60 of 65 plans (Phases 1-16 complete; Phase 17 remaining ~5 plans)
+**v2.0 design decisions (locked 2026-05-11 with operator):**
+1. **Milestone**: New v2.0 "Self-Routing + Session-Aware" — clean break from v1.x ML routing arc
+2. **ML+selfrouting coexistence**: Option A — selfrouting primary, ML dormant. ML code retained in repo but removed from request path. Future option C (`Routing.Mode = "ml" | "selfrouting"` config switch) preserved.
+3. **Router model**: 35B self-route (same 35B serves both routing classification + responses; KV cache shared; per selfrouting doc §3). NOT a separate 7B router server.
+4. **Heuristic scope**: Hard Rules only (keyword list — LLVM/MLIR/compiler/segfault/optimization/concurrency per doc §6,12). NOT full Phase 12 Heuristic.fs revival.
+
+**v2.0 projected phase sequence (~12 plans total):**
+- Phase 18: Hard Rules Layer (stage 0 pre-routing; keyword-driven immediate-122B) — ~3 plans
+- Phase 19: 35B Self-Routing (1-token SAFE/UNSAFE classify; cached) — ~4 plans
+- Phase 20: Sticky Escalation (session store; 122B continuity) — ~3 plans
+- Phase 21: Hermes Agent Integration (session_id propagation; smoke test against ~/hermes-agent) — ~2-3 plans
+- Phase 22 (optional): Speculative Routing (per doc §17)
+
+Last activity: 2026-05-11 — v1.3.0 released; operator pivot to selfrouting; preparing /gsd:complete-milestone.
+
+Progress: [████████████████████████████████████████░░░░░] 60 of 60 plans (v1.x ML arc; Phase 17 deferred). v2.0 not yet planned.
 
 ## Performance Metrics
 
