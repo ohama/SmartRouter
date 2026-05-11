@@ -49,6 +49,7 @@ open SmartRouter.Cli.Adapters.LogRetentionService
 open SmartRouter.Cli.Adapters.TraceLogger
 open SmartRouter.Cli.Adapters.QualityCheck
 open SmartRouter.Cli.Adapters.JudgeClient    // Phase 16: JudgeOptions, JudgeClient, IJudgeClient, IJudgeStats
+open SmartRouter.Cli.Adapters.SessionStore   // Phase 18: SessionOptions, SessionStore, ISessionStore
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -412,12 +413,34 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
                 "appsettings.json Routing.Mode value '%s' is not recognized; valid values are 'selfrouting' or 'ml'"
                 other))
 
+    // Phase 18 — SessionStore DI registration.
+    //
+    // Triple-reg pattern (mirrors DecisionLogWriter): one concrete instance resolved
+    // via three GetService<>() lookups (concrete type, ISessionStore interface, and
+    // IHostedService — the third lands in Plan 18-03 along with the TTL eviction loop).
+    //
+    // UNCONDITIONAL — not mode-gated. Session store benefits both Routing.Mode values:
+    // even if operator reverts to "ml", sticky escalation provides debugging continuity.
+    // Anti-Pattern 4 of 18-RESEARCH explicitly forbids mode-gating SessionStore DI.
+    //
+    // SessionOptions binding via Configure<>() — empty section binds to default CLIMutable
+    // record (TtlMinutes=0, MaxEntries=0 → SessionStore class normalizes to 30/10000).
+    services.Configure<SessionOptions>(config.GetSection("Routing:Session")) |> ignore
+
+    services.AddSingleton<SessionStore>(fun sp ->
+        let opts = sp.GetRequiredService<IOptions<SessionOptions>>().Value
+        new SessionStore(opts, sp.GetRequiredService<ILogger<SessionStore>>()))
+    |> ignore
+
+    services.AddSingleton<ISessionStore>(fun sp ->
+        sp.GetRequiredService<SessionStore>() :> ISessionStore)
+    |> ignore
+
     // Phase 17 (MODE-02): RoutingAlgorithmRegistration factory branches on routingMode.
     // - "ml"          → existing v1.x ML closure (unchanged behavior; v1.3 baseline)
-    // - "selfrouting" → Phase 17 STUB that returns Qwen35B/Default for unmatched prompts.
+    // - "selfrouting" → Phase 18 sticky-or-default closure (consults ISessionStore.TryGet).
     //                   Hard Rules (Stage 0, Plan 17-01) still fires for keyword matches.
-    //                   The real makeSelfRoutingAlgorithm ships in Phase 19; this stub is
-    //                   a deliberate placeholder that makes the mode switch functional now.
+    //                   Phase 19 inserts self-classify inside this closure before sticky check.
     //
     // ML adapter DI (embedder, baseline/canary classifiers, retraining, canary) remains
     // unconditional above (MODE-03): RetrainingService accumulates hard cases regardless
@@ -460,19 +483,40 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
                   Name         = "ml"
                   ModelVersion = baselineVersion }
             | _ ->
-                // ── Phase 17 STUB selfrouting branch (v2.0 default; "selfrouting") ──
-                // Phase 19 replaces this stub with makeSelfRoutingAlgorithm (named "selfrouter"
-                // HttpClient + 1-token SAFE/UNSAFE classify + prompt-hash LRU cache).
-                // For Phase 17, return Qwen35B/Default — Hard Rules (Stage 0) handles the
-                // safety-critical keyword matches; everything else falls through to 35B.
-                // "selfrouting" is the only value that reaches this arm: Task 1's fail-fast
-                // validation guarantees routingMode is in {"selfrouting", "ml"}.
-                { Algorithm    = fun _config _req ->
-                                   { Target       = Qwen35B
-                                     Priority     = Low
-                                     Reason       = Default
-                                     IsFallback   = false
-                                     ModelVersion = "selfrouting-v1" }
+                // ── Phase 18 selfrouting branch: sticky-or-default ─────────────────────
+                // Replaces the Phase 17 stub. Phase 19 will insert self-classify BEFORE
+                // the sticky check inside this closure, making the order:
+                //   Stage 3 algorithm closure: self-classify → sticky → default
+                //
+                // For Phase 18 standalone, the order is:
+                //   Stage 3 algorithm closure: sticky → default
+                //
+                // Hard Rules (Stage 0) + explicit overrides (Stage 1 + 2) still fire
+                // BEFORE this closure is reached, so a Hard Rule + sticky-to-35B request
+                // still routes to 122B (Hard Rules wins).
+                //
+                // ISessionStore resolved at closure construction time, NOT per-request —
+                // singleton lifetime; the closure captures the same instance forever.
+                let sessionStore = sp.GetRequiredService<ISessionStore>()
+                { Algorithm    = fun _config req ->
+                                   match sessionStore.TryGet(req.SessionId) with
+                                   | Some s when s.LastModel = Qwen122B ->
+                                       // Previous request in this session was served by 122B
+                                       // (initial routing, Hard Rule, or quality-fallback escalation).
+                                       // Continue continuity — route to 122B.
+                                       { Target       = Qwen122B
+                                         Priority     = High
+                                         Reason       = StickyEscalation
+                                         IsFallback   = false
+                                         ModelVersion = "selfrouting-v1" }
+                                   | _ ->
+                                       // No session, expired session, or last model was 35B → default 35B.
+                                       // Phase 19 will replace this branch with self-classify call.
+                                       { Target       = Qwen35B
+                                         Priority     = Low
+                                         Reason       = Default
+                                         IsFallback   = false
+                                         ModelVersion = "selfrouting-v1" }
                   Name         = "selfrouting"
                   ModelVersion = "selfrouting-v1" }))
     |> ignore
@@ -1069,6 +1113,20 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
         { new IJudgeStats with
             member _.GetJudgeStats() = struct (0L, 0L, 0L) })
         |> ignore
+
+    // Phase 18 — SessionStore DI for backward-compat test paths using configureWithoutMl.
+    // The --retrain offline pipeline doesn't route requests, but DI graph integrity
+    // requires ISessionStore resolvable (mirrors Phase 16 IJudgeStats NoOp registration).
+    services.Configure<SessionOptions>(config.GetSection("Routing:Session")) |> ignore
+
+    services.AddSingleton<SessionStore>(fun sp ->
+        let opts = sp.GetRequiredService<IOptions<SessionOptions>>().Value
+        new SessionStore(opts, sp.GetRequiredService<ILogger<SessionStore>>()))
+    |> ignore
+
+    services.AddSingleton<ISessionStore>(fun sp ->
+        sp.GetRequiredService<SessionStore>() :> ISessionStore)
+    |> ignore
 
     // DecisionLog — same triple-reg as configureRequestPipeline.
     services.Configure<DecisionLogOptions>(config.GetSection("DecisionLog")) |> ignore
