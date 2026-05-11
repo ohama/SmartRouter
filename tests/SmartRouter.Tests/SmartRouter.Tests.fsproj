@@ -43,6 +43,7 @@
     <Compile Include="StickyEscalationTests.fs" />
     <!-- Phase 19: 35B Self-Routing tests -->
     <Compile Include="SelfRouterTests.fs" />
+    <Compile Include="SelfRoutingIntegrationTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
