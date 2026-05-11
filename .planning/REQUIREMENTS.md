@@ -106,16 +106,16 @@ Filled by roadmapper during ROADMAP.md creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MODE-01 | Phase 17 | Pending |
-| MODE-02 | Phase 17 | Pending |
-| MODE-03 | Phase 17 | Pending |
-| MODE-04 | Phase 17 | Pending |
-| HR-01 | Phase 17 | Pending |
-| HR-02 | Phase 17 | Pending |
-| HR-03 | Phase 17 | Pending |
-| HR-04 | Phase 17 | Pending |
-| HR-05 | Phase 17 | Pending |
-| HR-06 | Phase 17 | Pending |
+| MODE-01 | Phase 17 | Complete |
+| MODE-02 | Phase 17 | Complete |
+| MODE-03 | Phase 17 | Complete |
+| MODE-04 | Phase 17 | Complete |
+| HR-01 | Phase 17 | Complete |
+| HR-02 | Phase 17 | Complete |
+| HR-03 | Phase 17 | Complete |
+| HR-04 | Phase 17 | Complete |
+| HR-05 | Phase 17 | Complete |
+| HR-06 | Phase 17 | Complete |
 | SES-01 | Phase 18 | Pending |
 | SES-02 | Phase 18 | Pending |
 | SES-03 | Phase 18 | Pending |
