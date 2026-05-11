@@ -12,6 +12,7 @@ open SmartRouter.Cli.Adapters.QueueDispatcher
 open SmartRouter.Cli.Adapters.Json
 open SmartRouter.Cli.Adapters.CanaryState
 open SmartRouter.Cli.Adapters.JudgeClient    // Phase 16: IJudgeStats
+open SmartRouter.Cli.Adapters.SelfRouter    // Phase 19: ISelfRouterStats
 
 /// Wire shape for GET /stats. snake_case to match OpenAI conventions.
 /// Built fresh from a StatsSnapshot on every request — no caching.
@@ -41,7 +42,11 @@ type private StatsWire =
       quality_check_hits_keyword         : int64
       judge_cache_hits                   : int64    // NEW Phase 16
       judge_cache_misses                 : int64    // NEW Phase 16
-      judge_call_count                   : int64 }  // NEW Phase 16
+      judge_call_count                   : int64    // NEW Phase 16
+      selfrouter_cache_hits              : int64    // NEW Phase 19 SR-05
+      selfrouter_cache_misses            : int64    // NEW Phase 19 SR-05
+      selfrouter_call_count              : int64    // NEW Phase 19 SR-05
+      selfrouter_skipped                 : int64 }  // NEW Phase 19 SR-05
 
 let private snapshotToWireFields (s: StatsSnapshot) : StatsWire =
     { timestamp                          = s.Timestamp.ToString("o")
@@ -65,7 +70,11 @@ let private snapshotToWireFields (s: StatsSnapshot) : StatsWire =
       quality_check_hits_keyword         = s.QualityCheckHits.Keyword
       judge_cache_hits                   = 0L      // overridden in mapEndpoints after IJudgeStats resolve
       judge_cache_misses                 = 0L      // overridden in mapEndpoints
-      judge_call_count                   = 0L }    // overridden in mapEndpoints
+      judge_call_count                   = 0L      // overridden in mapEndpoints
+      selfrouter_cache_hits              = 0L      // overridden in mapEndpoints after ISelfRouterStats resolve
+      selfrouter_cache_misses            = 0L      // overridden in mapEndpoints
+      selfrouter_call_count              = 0L      // overridden in mapEndpoints
+      selfrouter_skipped                 = 0L }    // overridden in mapEndpoints
 
 /// Register GET /stats. Resolves IStatsProvider, IModelVersionProvider, and
 /// ICanaryState from DI on each request and serializes a single self-contained
@@ -93,15 +102,26 @@ let mapEndpoints (app: WebApplication) =
             let struct (jHits, jMisses, jCalls) =
                 if isNull (box judgeStats) then struct (0L, 0L, 0L)
                 else judgeStats.GetJudgeStats()
+            // Phase 19 — self-router stats: null-safe resolve (GetService returns null when
+            // mode="ml" or offline; both paths guarantee ISelfRouterStats NoOp is registered
+            // so this guard is defense-in-depth only — mirrors judgeStats pattern above).
+            let selfRouterStats = ctx.RequestServices.GetService<ISelfRouterStats>()
+            let struct (srHits, srMisses, srCalls, srSkipped) =
+                if isNull (box selfRouterStats) then struct (0L, 0L, 0L, 0L)
+                else selfRouterStats.GetSelfRouterStats()
             let wire =
                 { baseFields with
-                    baseline_model_version = versionP.CurrentVersion
-                    canary_model_version   = canaryVer
-                    canary_percent         = canaryPct
-                    canary_active          = canaryActive
-                    judge_cache_hits       = jHits        // NEW Phase 16
-                    judge_cache_misses     = jMisses      // NEW Phase 16
-                    judge_call_count       = jCalls }     // NEW Phase 16
+                    baseline_model_version  = versionP.CurrentVersion
+                    canary_model_version    = canaryVer
+                    canary_percent          = canaryPct
+                    canary_active           = canaryActive
+                    judge_cache_hits        = jHits        // NEW Phase 16
+                    judge_cache_misses      = jMisses      // NEW Phase 16
+                    judge_call_count        = jCalls       // NEW Phase 16
+                    selfrouter_cache_hits   = srHits       // NEW Phase 19
+                    selfrouter_cache_misses = srMisses     // NEW Phase 19
+                    selfrouter_call_count   = srCalls      // NEW Phase 19
+                    selfrouter_skipped      = srSkipped }  // NEW Phase 19
             logger.LogDebug(
                 "/stats hit; queue_depth_high={H} active_122b={A} model_version={V} canary_active={C}",
                 wire.queue_depth_122b_high, wire.active_122b, wire.baseline_model_version, wire.canary_active)
