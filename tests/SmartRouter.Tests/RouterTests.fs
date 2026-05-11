@@ -37,6 +37,7 @@ let rootTests : Test list =
         SmartRouter.Tests.ModeSwitchTests.tests                // Phase 17 (Plan 17-03)
         SmartRouter.Tests.SessionStoreTests.tests              // Phase 18 (Plan 18-03)
         SmartRouter.Tests.StickyEscalationTests.tests          // Phase 18 (Plan 18-03)
+        SmartRouter.Tests.SelfRouterTests.selfRouterTests      // Phase 19 (Plan 19-03)
     ]
 
 [<EntryPoint>]
