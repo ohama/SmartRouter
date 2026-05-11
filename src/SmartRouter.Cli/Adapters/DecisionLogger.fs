@@ -36,6 +36,7 @@ let formatReason (reason: RoutingReason) : string =
     | FallbackTo35B               -> "fallback_to_35b"
     | FallbackTo122B              -> "fallback_to_122b"   // Phase 14
     | HardRule                    -> "hard_rule"          // Phase 17
+    | StickyEscalation            -> "sticky_to_122b"     // Phase 18
 
 /// One JSONL line per routing decision.
 /// Cli-only — pure F# record, no Core references beyond Domain.
