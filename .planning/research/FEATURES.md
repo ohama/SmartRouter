@@ -1,211 +1,201 @@
 # Feature Research
 
-**Domain:** OpenAI-compatible LLM router / gateway (local, single-host, task-typed routing)
-**Researched:** 2026-05-07
+**Domain:** LLM router — selfrouting + sticky session + Hermes Agent integration (v2.0 milestone)
+**Researched:** 2026-05-11
 **Confidence:** HIGH
 
 ---
 
-## Comparable Projects: Quick Reference
+## Scope Note
 
-Before categorizing features, here is a factual snapshot of each comparable product — what it exposes, its concurrency model, streaming support, task-based routing, and priority queue support. These inform which features are table stakes (everyone has them), which are differentiators (nobody does them for our use case), and which are anti-features (everyone builds them, but they have no relevance here).
-
-| Product | What it exposes | Concurrency model | Streaming | Task-based routing | Priority queue |
-|---------|----------------|-------------------|-----------|--------------------|----------------|
-| **LiteLLM proxy** | `/v1/chat/completions`, `/v1/models`, `/health`, `/metrics`; virtual keys, budget, guardrails, dashboards | Per-deployment `max_parallel_requests`; global cap via Redis; multi-instance via Redis queue | Yes — SSE pass-through | Semantic auto-router (utterance matching via embeddings; beta, opt-in); no explicit `task` field | [BETA] Redis-backed `priority` field passed via `extra_body`; polling at 3 ms; unstable in open issues |
-| **OpenRouter** | `/v1/chat/completions` cloud proxy; `extra_body.provider` for provider routing preferences; `x-title` / `http-referer` headers | Cloud-managed; no user-visible semaphore; load-balanced across providers | Yes — SSE pass-through | No task field; provider routing is model-selection, not task-selection | No |
-| **vLLM OpenAI server** | `/v1/chat/completions`, `/v1/models`, `/metrics`; vLLM-specific extras via `extra_body` (`top_k`, `priority`, `request_id`) | Continuous batching; `max_num_seqs` / `max_num_batched_tokens` limits; chunked-prefill default in v1 | Yes — SSE, streaming tool calls | No task routing — single model served | `priority` integer via `extra_body`; lower = earlier; internal scheduler only, not gateway-level |
-| **llama.cpp server** | `/v1/chat/completions`, `/v1/models`; `--parallel N` for concurrent slots; `--cont-batching` | N parallel generation slots; memory-limited; no gateway-level queue | Yes — SSE; streaming tool calls added recently (limited) | No | No |
-| **Ollama OpenAI shim** | `/v1/chat/completions`, `/v1/models`; Ollama-native extras via `extra_body.options` (e.g. `num_ctx`) | Internal request queue to model manager; models loaded/unloaded from memory per request | Yes — SSE; streaming tool calls 2025 | No | No |
-| **Portkey** | Cloud gateway: `/v1/chat/completions`; virtual keys, configs, guardrails, fallback chains, canary deployments, observability | Cloud-managed; batching/queuing via config objects; no user-visible semaphore | Yes | Conditional routing via config (cost, latency, model tag) — not task-typed | No |
-| **one-api / new-api** | Multi-provider aggregator; virtual keys; web dashboard; channel management; load balancing by channel weight | Per-channel rate limits; no semaphore | Yes | No task routing | No |
-
-**Key pattern across all comparables:** Every product exposes an OpenAI-compatible `/v1/chat/completions` endpoint with SSE streaming. None implement an explicit `task` field for deterministic workload-class routing. None enforce a per-model `SemaphoreSlim(1)` at the gateway level for local models. Priority queues exist only in LiteLLM (beta/unstable, Redis-dependent) and vLLM (internal, not gateway-visible). Task-typed routing is an open problem in the space — comparables approximate it with semantic similarity or model-name selection, not explicit task declarations.
+This file covers only **new v2.0 features**. All v1.x features (ML routing, quality fallback, 122B-as-judge, canary, retraining loop, DecisionLog/TraceLog, health probing, launchd) are validated and retained. Where v2.0 features interact with retained v1.x infrastructure, dependencies are called out explicitly.
 
 ---
 
 ## Feature Landscape
 
-### Table Stakes (Router Fails Its Job Without These)
+### Table Stakes (Users Expect These)
 
-These are the features any client expecting an OpenAI-compatible gateway will break without. They are non-negotiable for v1.
+Features required for selfrouting + session-awareness to work correctly. Missing any of these means the v2.0 paradigm is non-functional.
 
-| Feature | Why Expected | Complexity | Dependencies | blueCode/graphify_prompt Commit |
-|---------|--------------|------------|--------------|--------------------------------|
-| `POST /v1/chat/completions` — parse and proxy | Every OpenAI SDK client issues this call; Hermes uses `client.chat.completions.create()` unconditionally | LOW | None | Both briefs; PROJECT.md §API surface |
-| Streaming pass-through (SSE) | Hermes defaults `stream=True` (run_agent.py:6922-6941); Graphify spec §5; without it Hermes hangs | MEDIUM | HttpClient streaming pipeline | PROJECT.md §Streaming; graphify_prompt §5 |
-| Request field preservation (pass-through of unknown fields) | Hermes sends `stream_options: {include_usage: true}` (run_agent.py:6925); stripping unknown fields breaks clients silently | LOW | None | PROJECT.md §Request parsing; graphify_prompt §2 |
-| `GET /v1/models` | OpenAI SDK calls this for model discovery; LiteLLM, vLLM, Ollama, llama.cpp all expose it | LOW | Upstream health check | PROJECT.md §API surface |
-| `GET /health` | Standard liveness probe; Graphify spec requires it; all comparables expose it | LOW | Backend reachability tracking | PROJECT.md §Operability; graphify_prompt §7 |
-| Structured logging per request | All comparables log model selection, latency, and errors; without it routing decisions are undebuggable | LOW | Serilog (blueCode pattern) | PROJECT.md §Observability |
-| Configurable routing rules (`appsettings.json`) | Thresholds and task→model mappings must be tunable without recompile; all production proxies expose config | LOW | None | PROJECT.md §Routing decision pipeline |
-| HttpClient timeout (300s) | mlx_lm.server 122B cold-start up to 240s; without this the client gets a connection reset before the model answers | LOW | HttpClientFactory | blueCode hard-won operational knowledge; PROJECT.md §Constraints |
-| Cancellation token propagation (client → router → upstream) | Hermes drops connections mid-stream on interrupt; orphaned upstream calls waste 122B capacity | MEDIUM | CancellationToken in streaming path | PROJECT.md §Streaming |
-| Error responses in OpenAI error shape | Clients parse `{"error": {"message": "...", "type": "..."}}` — returning raw ASP.NET problem details breaks OpenAI SDK error handling | LOW | None | All comparables do this |
-| Sampling-parameter defaults (temp=0.7, top_p=0.8, top_k=20) when client omits them | mlx_lm.server behaves incorrectly without explicit sampling params; blueCode discovered this | LOW | Request model enrichment | blueCode operational knowledge; PROJECT.md §Context |
-| `model` field rewriting (HF-id trap defense) | mlx_lm.server overwrites the loaded tokenizer if you send the HF id; must send local path; `tryParseModelId` in blueCode | LOW | None | blueCode `QwenHttpClient.fs`; PROJECT.md §Context |
+| Feature | Why Expected | Complexity | Notes |
+|---------|--------------|------------|-------|
+| Hard Rules pre-routing (stage 0) | Without keyword gating, 35B will misclassify high-stakes compiler/LLVM requests as SAFE — doc §7 ("35B may become overconfident"). First line of defense. | LOW | Keyword list locked: LLVM, MLIR, compiler, segfault, optimization, concurrency. Case-insensitive. Implemented as string contains, not regex. Immediately routes to 122B; bypasses selfroute call entirely. Applies to ALL requests including streaming. No config key — hard-coded keyword list per v2.0 locked decision. |
+| 35B self-classify call | The primary routing decision for requests not caught by Hard Rules. 35B asks "SAFE for me?". Returns SAFE/UNSAFE (1-2 tokens). Replaces ML classifier in routing path. | MEDIUM | POST to 35B at :8000 with routing prompt. `max_tokens=4–8, temperature=0, stream=false`. Prompt: SAFE-for-35B framing per `.planning/docs/35b-selfrouting-prompt.md`. Response parse: look for SAFE token → Qwen35B; anything else (UNSAFE, or parse failure) → Qwen122B. parse failure must default to UNSAFE (safe bias, mirrors Phase 7 ROUTE_122B-wins pattern). |
+| Prompt-hash cache for self-classify result | Identical prompts (exact same messages array) must not re-invoke 35B twice — that wastes tokens and adds latency. | LOW | SHA-256 hash of serialized messages content → string key. LRU cache, bounded size (e.g., 10,000 entries). Cache invalidation: TTL-based or no TTL (prompt content is deterministic; same prompt = same SAFE/UNSAFE judgment). Cache hit skips 35B call entirely. Log cache_hit in DecisionLog v2.0 extension field. |
+| Sticky session escalation | If the previous response in a session came from 122B, stay on 122B. Reasoning/debugging coherence requires model continuity; switching mid-session breaks context. | MEDIUM | In-memory `ConcurrentDictionary<session_id, ModelId>`. Keyed by session_id (see Hermes integration below). Sticky logic: if stored value = Qwen122B → return 122B decision immediately, bypassing selfroute. Write to store when any request resolves to 122B (regardless of stage that decided it: hard rules, selfroute, task table, or quality fallback upgrade). TTL per session entry to prevent unbounded growth (e.g., 30 min idle expiry). |
+| Session_id extraction from request | No sticky session without session identity. Hermes will propagate session_id; existing v1.x clients won't. | LOW | Primary: `X-Session-Id` HTTP header. Secondary: `session_id` body field (for clients that can't set headers). Fallback: no session_id → treat as stateless (no sticky; selfroute applies normally). Session_id is OPTIONAL for backward-compat — v1.x Hermes calls without session_id must still work (selfroute applies, no sticky). |
+| ML routing path dormant (not deleted) | Operator wants `Routing.Mode = "ml"` config switch preserved for future re-activation. Deleting ML code now makes v2.0 irreversible. | LOW | Follow Phase 12 heuristic retirement pattern exactly: ML code stays in `src/SmartRouter.Core/ML.fs` and `src/SmartRouter.Cli/Adapters/MlNetClassifier.fs`; just not wired into the request path when `Routing.Mode = "selfrouting"` (v2.0 default). `configureServices` ML branch still compiles; DI registration guarded by mode check. |
+| DecisionLog extension for v2.0 routing reasons | Operators must be able to distinguish hard-rules hits, selfroute-safe, selfroute-unsafe, sticky-session, and cache-hit decisions in JSONL. Without this, the new routing path is unobservable. | LOW | Extend `RoutingReason` DU with new cases: `HardRules`, `SelfRouteClassify`, `StickySession`. Extend `RoutingDecision` or `DecisionLog` record with new optional fields: `selfroute_cache_hit: bool`, `session_id: string option`. Bump `schema_version` in DecisionLog. README §9.1 must be updated. |
 
-**What comparables tell us about table stakes:**
-Every comparable (LiteLLM, vLLM, llama.cpp, Ollama, OpenRouter) exposes exactly this surface. The only one specific to our local mlx_lm setup is the HF-id trap defense and the 300s timeout — standard cloud proxies don't need either.
+### Differentiators (Competitive Advantage)
 
----
+Features specific to selfrouting that provide advantages the v1.x ML approach did not.
 
-### Differentiators (Specific to Hermes + Graphify Pairing)
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| SAFE-for-35B framing (not "simple/complex") | More stable classification. "SAFE for a fast 35B coding model" is a binary safety check; "is this simple?" invites subjective reasoning and over-confidence. Per `.planning/docs/35b-selfrouting-prompt.md` §1–2: reduces false-simple rate. | LOW | Already locked in prompt doc. 35B responds SAFE when shallow reasoning, summaries, formatting, boilerplate, YAML/JSON. Responds UNSAFE when debugging, architecture redesign, continuation-heavy (retry/fix/continue), type inference, multi-step planning. Prompt is operator-tunable via `Routing.SelfRoute.PromptPath` config key (mirrors `Routing.Judge.PromptPath` pattern from Phase 16). |
+| Continuation-aware routing | Short follow-up prompts ("continue", "retry", "fix this") carry hidden reasoning state from prior turns. ML classifier had no continuation signal. Selfrouting prompt explicitly lists these as UNSAFE examples. | LOW | Handled entirely by prompt design (doc §7). No extra code needed beyond the prompt: "retry/fix/continue workflows" in UNSAFE examples block. Sticky session logic reinforces: if prior turn was 122B (debugging chain), continuation is already sticky-122B regardless of selfroute verdict. |
+| Shared KV cache benefit | 35B is already loaded and warmed for its primary workload. Using it for 1-2 token routing classification reuses the existing KV cache and model weights, adding ~10ms latency vs ML classifier's ~50ms with no memory overhead. | LOW | Architectural benefit, no code needed. Documented in selfrouting doc §4: "No additional server, no additional GPU memory, no additional KV cache pressure." |
+| Operator-tunable routing prompt | ML classifier required retraining to change routing behavior. Selfrouting prompt can be edited in a text file, then router reloads (hot-swap or restart). Lower barrier to routing quality adjustments. | LOW | Follow Phase 16 judge-prompt pattern: `prompts/selfroute-prompt.md` loaded at startup, path configurable via `Routing.SelfRoute.PromptPath`. If operator edits the prompt file, router restart picks up the change. No hot-reload needed for v2.0. |
+| Selfroute confidence field (optional enrichment) | If 35B returns JSON `{"route":"35b","confidence":0.95,"reason":"..."}` instead of bare SAFE/UNSAFE token, the reason and confidence can be logged in TraceLog for debugging. | MEDIUM | Optional enrichment only. Primary mode MUST be 1-2 token SAFE/UNSAFE (faster, more deterministic). JSON mode is operator-opt-in via `Routing.SelfRoute.JsonMode=true`. When disabled (default), bare token parsing. When enabled, parse JSON, log `selfroute_reason` and `selfroute_confidence` to TraceLog. See selfrouting-prompt.md §3 for JSON output format. |
+| Hermes Agent integration via session_id | Hermes is the primary interactive consumer. Propagating session_id from Hermes into smart-router enables debugging-chain continuity: a 122B session that starts a debugging chain stays on 122B for the entire conversation, not per-request. | MEDIUM | Requires: (1) Hermes to send `X-Session-Id` header (coordination with Hermes plugin config or operator adding custom header). (2) Smart-router to extract session_id and write to session store. (3) Smoke test against `~/hermes-agent` to confirm end-to-end. |
 
-These features are the reason this router exists rather than pointing both clients at a stock LiteLLM instance. No comparable product does all of them for a local dual-model mlx_lm setup.
+### Anti-Features (Commonly Requested, Often Problematic)
 
-| Feature | Value Proposition | Complexity | Dependencies | blueCode/graphify_prompt Commit |
-|---------|-------------------|------------|--------------|--------------------------------|
-| **Explicit `task` field routing** — authoritative, deterministic | Graphify declares workload class at call time; no semantic similarity approximation needed; short prompts that need 122B reasoning (e.g. "build dependency graph") are never mis-routed | LOW | Task→model routing table in config | PROJECT.md §Routing; graphify_prompt §3A; PROJECT.md §Key Decisions |
-| **Two-level priority queue for 122B** (high: graph_indexing/compiler_debug/architecture_analysis; low: dependency_analysis/reasoning) | Graphify graph indexing blocks downstream queries; it must preempt lighter 122B work; no comparable gateway implements gateway-level priority queuing for local model protection | MEDIUM | SemaphoreSlim(1) concurrency gate | PROJECT.md §Concurrency; graphify_prompt §Advanced Req 1 |
-| **SemaphoreSlim(1) on 122B** — gateway-enforced serial execution | mlx_lm.server concurrent forward-pass contention serializes at the metal layer with worse latency than clean gateway serialization; prevents `[METAL] Insufficient Memory` crashes | LOW | None (but enables priority queue) | PROJECT.md §Concurrency; PROJECT.md §Context |
-| **`graph_indexing` no-fallback rule** — must fail, not degrade | Graph indexing produces durable artifacts; a 35B-built index silently poisons every downstream retrieval for the index lifetime; loud failure is the correct operational signal | LOW | Backend health detection | PROJECT.md §Reliability; graphify_prompt §Advanced Req 2 |
-| **Heuristic fallback for Hermes (no `task` field)** — keyword set + prompt length + code-block detection + message count | Hermes never sends `task`; without heuristics every Hermes call goes to 35B including F#/MLIR/compiler prompts; heuristic routes these to 122B correctly | MEDIUM | Complexity scorer, configurable thresholds | PROJECT.md §Routing; smart-router.md §Complexity Routing |
-| **Aggressive 35B default for ambiguous heuristic cases** | Hermes is latency-sensitive interactive; when the heuristic is uncertain, 35B latency wins over 122B thoroughness; comparables do not model this bias explicitly | LOW | Complexity scorer threshold | PROJECT.md §Core Value; PROJECT.md §Key Decisions |
-| **`GET /stats` endpoint** — queue depth, wait time, requests/sec, active model, failure count | Graphify spec requires queue monitoring; needed to detect 122B queue starvation in production; `/health` alone is insufficient | LOW | In-process counters (DI singletons) | graphify_prompt §Advanced Req 3; PROJECT.md §Observability |
-| **Retry policy on transient upstream failures** with bounded backoff | mlx_lm.server returns 503 during cold-start; without retry the client sees an error and must implement retry itself; centralizing in the router removes the burden from both Hermes and Graphify | MEDIUM | Polly or manual retry in F# | PROJECT.md §Reliability; graphify_prompt §6 |
-| **Backend health probing** (35B / 122B reachability tracked separately) | Required for fallback logic; Graphify spec §6; health probe state feeds both `/health` and fallback decisions; without it the router cannot distinguish "122B unavailable" from "122B slow" | LOW | Background probe task | PROJECT.md §Reliability |
-| **Explicit `model` override** (`35b`/`122b` aliases) with logged routing reason | Operator debugging path; bypasses routing pipeline entirely; all routing decisions logged for threshold tuning via `/stats` | LOW | None | PROJECT.md §Key Decisions |
+Features that seem to improve selfrouting but introduce more problems than they solve. These are explicitly out of scope per the reference design.
 
-**What comparables tell us about differentiators:**
-
-- LiteLLM's auto-router approximates task routing with semantic similarity embeddings (beta; requires an embedding model running, Redis, polling at 3ms, has open bugs). Our explicit `task` field is zero-overhead, deterministic, and cannot mis-route.
-- LiteLLM's priority queue is Redis-dependent (cannot work loopback-only without running Redis) and beta/unstable. Our in-process SemaphoreSlim + priority queue is simpler, faster, and has no external dependencies.
-- No comparable implements a per-model serial execution gate for local model protection. This is unique to the local mlx_lm constraint.
-- No comparable implements a per-task no-fallback rule. This is specific to the graph_indexing quality-correctness requirement.
-
----
-
-### Anti-Features (Deliberately Excluded, With Reasoning)
-
-These are features competing products build that we should explicitly not build. In each case, the feature either has no use case in this deployment context or would introduce complexity that exceeds the value.
-
-| Anti-Feature | Who builds it | Why they build it | Why we are NOT building it | What we do instead |
-|---|---|---|---|---|
-| **Auth / API keys / virtual keys** | LiteLLM, Portkey, one-api, OpenRouter | Multi-tenant public endpoints need access control | Loopback-only (`localhost:4000`); no external exposure; two known clients; zero abuse surface | Bind to loopback only; document in README |
-| **Multi-tenant cost tracking / billing** | LiteLLM, Portkey, one-api | SaaS products monetize per-token across tenants | Single operator, single host, no billing relationship | `/stats` covers operational visibility for one operator |
-| **Prometheus `/metrics` endpoint** | LiteLLM, vLLM | Prometheus scrapers in cloud deployments | No scraper exists in this deployment; adding the exposition format before a scraper arrives is premature | `/stats` JSON endpoint covers v1 needs; add Prometheus exposition only if a scraper actually arrives |
-| **Rate limiting** | LiteLLM, Portkey, one-api | Prevent runaway cost / abuse from many clients | Single host, two known clients; no abuse vector; rate limiting on 122B would fight with the priority queue | SemaphoreSlim(1) + priority queue is the correct concurrency control for this model |
-| **Prompt caching** | LiteLLM, OpenRouter (provider-level) | Reduce cost on cloud LLMs with KV cache | mlx_lm.server manages KV cache internally; the router has no visibility into or control over it | Pass requests through unchanged; mlx_lm handles caching |
-| **Embeddings endpoint (`/v1/embeddings`)** | LiteLLM, vLLM | Many RAG pipelines need embeddings | Neither Hermes nor Graphify routes embeddings through this gateway; Graphify's graph indexing uses the chat completions endpoint | Omit; add only if a concrete consumer requires it |
-| **Function-calling rewriting / tool-call normalization** | LiteLLM | Normalize tool-call formats across providers | Hermes handles its own tool-call parsing; the router's job is transparent proxy, not format rewriting; rewriting breaks Hermes's tool-call accumulation logic (run_agent.py:6952-6958) | Pass tool-call chunks through unchanged |
-| **ML / learned routing** | LiteLLM auto-router (beta) | Approximate task inference without explicit field | Requires an embedding model running, adds latency on the hot path, is probabilistic; our explicit `task` field is already available for Graphify | Explicit `task` field + keyword heuristic covers both clients |
-| **Circuit breaker as a distinct mechanism** | Many frameworks | Handle recurring failure modes with "open" state | Retry policy + health probing covers immediate failures; a circuit breaker adds state complexity before any recurring failure mode has been observed | Add only if a recurring failure mode appears that needs explicit "open" state |
-| **Docker / container deployment** | Portkey, LiteLLM, graphify_prompt §Required Output** | Cloud and CI deployments | Mac-only, launchd plist deployment; mirrors blueCode operational pattern; no reason to run elsewhere in v1 | launchd plist (matches `com.ohama.qwen122b.plist`) |
-| **Session state / conversation memory** | Some gateway products | Stateful multi-turn session management | Router is stateless per request; conversation memory lives in the client (Hermes agent loop, Graphify query engine) | DI-scoped singletons for in-flight counters only |
-| **Channels / TPL Dataflow** | graphify_prompt suggests it | Fan-out pipelines in complex orchestration | v1 routing is single-hop: one request → one upstream; no fan-out; Dataflow abstraction tax exceeds v1 benefit | SemaphoreSlim + simple priority queue |
-| **Provider abstraction implementations (Claude, OpenAI cloud, DeepSeek, Gemini)** | LiteLLM, OpenRouter | Multi-provider aggregation | Only Qwen 35B and 122B are in scope; adding live cloud integrations before they have a consumer creates untested dead code | Interfaces in place (extensibility seams), no live implementations |
-
-**Note on graphify_prompt anti-features:** The graphify_prompt brief asked for Dockerfile, docker-compose, xUnit/FsUnit, and Channels/TPL Dataflow. PROJECT.md explicitly rejects all four with rationale. The brief was a generative prompt that over-scoped; PROJECT.md is the authoritative scope.
-
----
-
-## The `task` Field Extension: Industry Convention
-
-**Question:** Graphify will send a non-OpenAI `task` field. What is the convention in this space?
-
-### What comparables do
-
-| Product | How they pass non-standard fields | Mechanism |
-|---------|-----------------------------------|-----------|
-| **OpenRouter** | `extra_body.provider` — provider routing preferences nested under `provider` key | OpenAI SDK `extra_body` kwarg; top-level within the POST body |
-| **vLLM** | `extra_body.priority`, `extra_body.top_k`, `extra_body.request_id` | OpenAI SDK `extra_body` kwarg; treated as top-level JSON fields by vLLM's server |
-| **Ollama** | `extra_body.options.num_ctx` (context window), `extra_body.think` (thinking mode) | OpenAI SDK `extra_body` kwarg; nested under `options` or as top-level extra |
-| **LiteLLM** | Any non-OpenAI param passed as a kwarg goes into the request body; `extra_body` for metadata/logging | OpenAI SDK `extra_body`; treated as provider-specific params |
-| **Portkey** | Config object sent via headers (`x-portkey-config`) for routing; `extra_body` for provider-specific params | HTTP header for routing metadata |
-
-### The industry convention
-
-The OpenAI Python SDK's `extra_body` parameter merges additional JSON fields into the top-level request body. This is the de facto convention for non-standard extensions in the OpenAI-compatible ecosystem:
-
-```python
-# Graphify sends:
-client.chat.completions.create(
-    model="qwen-router",
-    messages=[...],
-    extra_body={"task": "graph_indexing"}
-)
-# Wire shape (POST body):
-# {"model": "qwen-router", "messages": [...], "task": "graph_indexing"}
-```
-
-The `task` field lands as a **top-level field in the JSON body** — identical to how vLLM exposes `priority` and Ollama exposes `think`. This is the correct approach because:
-
-1. It survives proxy middleware that strips `extra_body` — the field is already merged into the body by the SDK before sending.
-2. ASP.NET Core's `System.Text.Json` deserializer with `JsonExtensionData` captures unknown top-level fields transparently.
-3. Both LiteLLM and OpenRouter document this as the canonical pattern for provider-specific extensions.
-4. HTTP headers are a viable alternative (used by Portkey for routing config) but require header injection on every call — harder to do from the OpenAI SDK's `chat.completions.create()` interface.
-
-**Decision already committed in PROJECT.md:** `task` field is a non-OpenAI extension; top-level in the JSON body; authoritative when present. This aligns with industry convention.
-
-**Hermes never sends `task`:** Confirmed from `run_agent.py` and `plugins/model-providers/custom/__init__.py`. The custom provider profile only adds `extra_body.options.num_ctx` (Ollama context window) and `extra_body.think` (reasoning disable). No `task` field, no routing metadata. Heuristic path is the correct design for Hermes.
+| Feature | Why Requested | Why Problematic | Alternative |
+|---------|---------------|-----------------|-------------|
+| 35B reasoning before routing (CoT in routing prompt) | More deliberation should mean better routing accuracy | If the router starts reasoning, it has already failed (selfrouting doc §10). Reasoning adds latency, token cost, and unpredictability; the router must be tiny, deterministic, fast. A long chain-of-thought response is indistinguishable from a regular answer and cannot be parsed as SAFE/UNSAFE. | SAFE-for-35B binary framing with short UNSAFE example list. The examples do the reasoning so the model doesn't have to. `max_tokens=4–8` enforces brevity. |
+| Speculative routing (35B drafts while router evaluates) | Could reduce end-to-end latency by overlapping draft generation with routing decision | Enormous complexity: requires cancelling partially-generated 35B response if router decides 122B, managing two concurrent server-side generations, and dealing with half-generated SSE streams. Especially problematic with streaming (Phase 14 quality fallback intentionally skipped streaming for same reason). | Stick with sequential Hard Rules → selfroute (10ms) → dispatch. The 10ms routing overhead is acceptable vs speculative complexity. Mark as Phase 21 optional, only if latency profiling proves a problem. |
+| Separate 7B router server | Dedicated router models are more deterministic (selfrouting doc §5) | On a Mac M4 128GB running 35B + 122B simultaneously, a third server adds memory/scheduling pressure. The whole point of the v2.0 pivot is avoiding a separate inference server. KV cache is shared with the 35B production server. | 35B self-classify with `max_tokens=4–8, temperature=0`. Locked decision (STATE.md). Future upgrade path preserved per selfrouting doc §19. |
+| Selfroute result as training signal (retraining loop integration) | Selfroute decisions could feed back into ML retraining pipeline | ML pipeline is dormant. Wiring selfroute decisions into HardCaseDatasetWriter, TeacherLabeler, and RetrainingService re-activates dormant ML infrastructure and creates an active dependency on something the pivot is trying to sideline. | DecisionLog captures routing reasons including SelfRouteClassify; operator can analyze JSONL offline. No live feedback loop in v2.0. |
+| Per-message classification (every message, not just the latest) | Routing on the full conversation might catch edge cases where early messages indicate complexity | Multiple 35B calls per request multiplies token cost and latency. One classification call on the concatenated context (or just the last user message) is the correct scope. | Single self-classify call per request on the last user message content (or a truncated window). Sticky session handles the continuity case: once 122B for this session, always 122B. |
+| Persistent session store (Redis, SQLite) | Session continuity should survive router restarts | Over-engineering for a single-host loopback service. The session store only needs to outlive a single interactive session (~30 min). Router restarts during active sessions are rare operational events, not a design target. State is recoverable: next request gets selfrouted fresh. | In-memory `ConcurrentDictionary` with TTL-based expiry. Survives within a process lifetime. On restart, sessions start fresh (acceptable: Hermes agent is interactive, not a long-lived batch pipeline). |
+| Session_id required (hard reject without it) | Forces all clients to propagate session_id, ensuring consistent sticky behavior | Breaks backward-compat with existing v1.x Hermes clients that don't yet send session_id. Also breaks Graphify (task-field client, no session concept needed). | Session_id is optional. Absent → no sticky, selfroute applies normally. Present → sticky check applies. Hermes migration to sending session_id is a separate Hermes-side concern, not a router hard requirement. |
+| Hard Rules as a configurable keyword list in appsettings.json | Operators might want to add/remove hard-rule keywords without code changes | Configurability sounds good but adds ambiguity: what happens if operator accidentally clears the list? Keyword list is a safety mechanism, not a routing preference. Changing it should require deliberate code change and test update. | Hard-code the keyword list in `HardRules.fs`. Document the list in README §5 (routing pipeline). Operator who needs to change it edits the source and redeploys (same pattern as Phase 12 heuristic retirement). |
+| Selfroute call for streaming requests | Might seem inconsistent to classify non-streaming but not streaming | Phase 14 quality fallback intentionally skips streaming (chunks already shipped; cannot retract). However, selfrouting is PRE-routing, not post-routing — it runs before any dispatch. So selfroute CAN apply to streaming: it classifies, decides 35B or 122B, then the streaming response is sent from the chosen model. Hard Rules ALSO apply to streaming (pre-dispatch, same as non-streaming). | Hard Rules and selfroute both apply to streaming requests. Quality fallback (post-routing) is still intentionally skipped for streaming per Phase 14 decision. This is the correct layering. |
 
 ---
 
 ## Feature Dependencies
 
 ```
-[SemaphoreSlim(1) on 122B]
-    └──enables──> [Priority queue for 122B]
-                      └──enables──> [task=graph_indexing high-priority]
-                      └──enables──> [task=compiler_debug high-priority]
+[Hard Rules — stage 0]
+    └──must precede──> [35B self-classify — stage 1]
+                           └──must precede──> [Sticky session check — stage 2]
+                                                  └──must precede──> [Task table — stage 3 (existing)]
+                                                                         └──must precede──> [Model override — stage 4 (existing)]
 
-[Backend health probing]
-    └──enables──> [Fallback: 122B unavailable → 35B]
-                      └──constrains──> [graph_indexing no-fallback rule]
-                      └──feeds──> [/health endpoint]
+[Prompt-hash cache]
+    └──enhances──> [35B self-classify]
+                       (cache hit skips 35B call)
 
-[Explicit task field routing]
-    └──requires──> [Task→model routing table in config]
-    └──overrides──> [Heuristic fallback]
-    └──is absent for──> [Hermes path → heuristic fallback active]
+[Session_id extraction (middleware)]
+    └──required by──> [Sticky session check]
+                          └──writes to──> [In-memory session store]
 
-[Heuristic fallback]
-    └──requires──> [Complexity scorer (keyword set, prompt length, code blocks, message count)]
-    └──requires──> [Configurable thresholds in appsettings.json]
+[DecisionLog extension (new RoutingReason DU cases)]
+    └──required by──> [Hard Rules observability]
+    └──required by──> [SelfRouteClassify observability]
+    └──required by──> [StickySession observability]
 
-[SSE streaming pass-through]
-    └──requires──> [Cancellation token propagation]
-    └──requires──> [HttpClient streaming pipeline (no buffering)]
+[Hermes Agent session_id propagation]
+    └──enables──> [Sticky session check] (for Hermes sessions)
+    └──requires──> [Session_id extraction]
 
-[/stats endpoint]
-    └──requires──> [In-process counters (DI singletons): queue depth, wait time, requests/sec, failures]
-    └──enhanced-by──> [SemaphoreSlim queue depth visibility]
+[Quality fallback — Phase 14-16, retained]
+    └──runs AFTER──> [Selfrouting pipeline completes]
+    └──may upgrade──> [35B decision to 122B]
+    └──should write to──> [Session store when upgrade happens]
+        (if quality fallback upgrades to 122B, next request in session should be sticky-122B)
+
+[ML routing — Phase 6-11, retained but dormant]
+    └──bypassed by──> Routing.Mode = "selfrouting" (v2.0 default)
+    └──reactivatable via──> Routing.Mode = "ml" config switch
 ```
 
-### Dependency notes
+### Dependency Notes
 
-- **Priority queue depends on SemaphoreSlim(1):** The queue only has meaning when there is a gate. Without the semaphore, queuing is irrelevant.
-- **`graph_indexing` no-fallback depends on backend health probing:** The router must know 122B is unavailable (not just slow) before triggering the no-fallback error path.
-- **Heuristic fallback does not conflict with task routing:** They occupy different branches of the decision pipeline. Task routing short-circuits; heuristic runs only when no task field is present.
-- **`/stats` does not depend on any routing feature:** It can be built as a thin counter layer over the DI singletons, independently of routing complexity.
+- **Hard Rules must precede selfroute:** Selfroute cannot be trusted to reliably detect LLVM/compiler/segfault keywords — 35B may classify these as "probably manageable" (doc §7, overconfidence). Hard Rules gate these before selfroute is invoked. Order is non-negotiable.
+
+- **Sticky session must precede selfroute call (or short-circuit it):** If session is already escalated to 122B, there is no need to invoke 35B for classification. The sticky check can short-circuit to 122B without burning tokens on a routing call. Check sticky BEFORE calling 35B.
+
+- **Quality fallback (Phase 14) should write to session store:** If a 35B response fails quality check and is retried on 122B (Phase 14 FallbackTo122B), the session should be marked as 122B for continuity. This is a cross-cutting dependency between the retained quality fallback and the new session store.
+
+- **Session_id extraction must be a middleware concern:** Similar to `CorrelationMiddleware` (Phase 5), session_id extraction should run early in the pipeline. A separate `SessionMiddleware` (or extension to CorrelationMiddleware) reads `X-Session-Id` header and stores the value in `HttpContext.Items["SessionId"]`. ChatCompletions endpoint reads from Items, not from the header directly, maintaining the same pattern.
+
+- **Pipeline ordering (v2.0 complete):**
+  `model override → task table → Hard Rules → selfroute (with cache) → sticky check → dispatch`
+  Wait — this is NOT the right order. The task table is an explicit client declaration and must win over selfrouting. Hard Rules can catch things the task table doesn't cover. Correct order:
+  `model override (bypass all) → task table (bypass selfroute/hard-rules if present) → Hard Rules → selfroute → sticky → 35B-default`
+  The `task` field and `model` override remain authoritative — they bypass the new selfrouting pipeline entirely, consistent with locked decisions in PROJECT.md.
+
+---
+
+## Scoping Decisions
+
+These answer the specific questions in the research brief:
+
+### Should Hard Rules apply to streaming?
+
+**YES.** Hard Rules are pre-dispatch (before any response is sent). They run in the routing decision phase, not the response phase. Phase 14's "intentionally skipped streaming" applies only to quality fallback (post-routing, post-response). Hard Rules and selfroute are pre-routing and apply identically to streaming and non-streaming requests.
+
+### Sticky session: how does it interact with explicit `task` field?
+
+**Task field wins — no sticky.** If a request carries an explicit `task` field (Graphify), it routes through the task table directly, bypassing both selfroute and sticky. The sticky store is ONLY written for requests that went through selfroute (i.e., Hermes-style requests without a `task` field). Graphify sessions are stateless by design — each request declares its own task type.
+
+### 35B self-classify caching: how does cache invalidate?
+
+**No TTL invalidation for classification results.** The SAFE/UNSAFE verdict for a given prompt is deterministic (temperature=0). The same prompt will always get the same verdict. Cache invalidation is needed only when the routing prompt template changes (operator edit). In that case, the cache is cleared on startup (cache is in-memory, so restart = cleared). For v2.0, no hot-reload of cache on prompt file change; restart is required. This is acceptable given the selfrouting doc's conservative stance.
+
+### Hermes session_id: required or optional?
+
+**Optional — absent = stateless.** v1.x Hermes clients that don't send `X-Session-Id` must work unchanged. Absent session_id → selfroute applies, no sticky check, request proceeds normally. When Hermes is configured to propagate session_id (Hermes-side config change, outside smart-router's scope for v2.0), sticky session activates automatically. No router-side breaking change.
+
+### Cascade order with quality fallback (Phase 14-16)?
+
+```
+Request arrives
+    │
+    ▼
+[1] Model override? → YES → dispatch (bypass all)
+    │ NO
+    ▼
+[2] Task field? → YES → task table → dispatch (bypass selfroute, sticky)
+    │ NO
+    ▼
+[3] Hard Rules (keyword match) → HIT → route 122B, skip stages 4-5
+    │ MISS
+    ▼
+[4] Sticky session? (session_id present + session store has 122B entry) → YES → route 122B
+    │ NO
+    ▼
+[5] 35B self-classify (with cache) → SAFE → route 35B | UNSAFE → route 122B
+    │
+    ▼
+[6] Dispatch to chosen model
+    │
+    ▼
+[7] Quality fallback (non-streaming only, Phase 14-16)
+    │   Response from 35B fails quality check → retry on 122B
+    │   If upgrade happens → write session_id → 122B in session store
+    │
+    ▼
+[8] Return response
+```
+
+Stages 1-5 are pre-routing (pure Core logic). Stage 7 is post-routing (Cli adapter, Phase 14-16). The cascade is explicit and ordered.
 
 ---
 
 ## MVP Definition
 
-### Launch With (v1) — all of these are already committed in PROJECT.md
+### Launch With (v2.0 milestone)
 
-- [ ] `POST /v1/chat/completions` — parse, route, proxy, SSE pass-through — the product does not exist without this
-- [ ] `GET /health`, `GET /v1/models`, `GET /stats` — required by Graphify spec; cheap at this stage; expensive to retrofit
-- [ ] Routing pipeline: `model` override → `task` table → heuristic → 35B-default — core value of the router
-- [ ] SemaphoreSlim(1) on 122B + two-level priority queue — required before Graphify sends concurrent graph_indexing calls
-- [ ] `graph_indexing` no-fallback rule — must ship with graph_indexing routing; a silent quality regression is worse than no v1
-- [ ] Backend health probing + retry policy — required to power the fallback rule and Graphify's reliability requirements
-- [ ] Structured logging (Serilog → stderr), sampling-param defaults, HF-id trap defense — blueCode operational knowledge; must ship day one
-- [ ] Cancellation token propagation — Hermes drops connections on interrupt; without this 122B capacity leaks
+Minimum viable features for selfrouting paradigm to be functional and observable:
 
-### Add After Validation (v1.x)
+- [x] Hard Rules layer (stage 0) — keyword pre-routing, applies to all requests including streaming
+- [x] 35B self-classify (1-token SAFE/UNSAFE, `max_tokens=4–8, temperature=0`) — non-streaming call to :8000
+- [x] Prompt-hash cache (in-memory, bounded LRU) — skip duplicate selfroute calls
+- [x] Sticky session escalation (in-memory `ConcurrentDictionary`, TTL-based expiry)
+- [x] Session_id extraction middleware (`X-Session-Id` header + optional body field)
+- [x] DecisionLog extension (new RoutingReason DU cases: `HardRules`, `SelfRouteClassify`, `StickySession`; schema_version bump)
+- [x] ML routing path dormant (`Routing.Mode = "selfrouting"` default, `"ml"` preserved)
+- [x] Quality fallback writes to session store on 122B upgrade (cross-cutting integration)
 
-- [ ] **Prometheus `/metrics` exposition** — trigger: a scraper actually arrives in the operator's setup
-- [ ] **Circuit breaker** — trigger: a recurring upstream failure mode is observed that needs explicit "open" state
-- [ ] **ML / learned routing** — trigger: `/stats` + structured logs accumulate enough routing decision data to train against
+### Add After Validation (v2.x)
 
-### Future Consideration (v2+)
+- [ ] Hermes Agent smoke test — requires Hermes-side session_id header addition (Hermes plugin config); manual UAT against `~/hermes-agent`
+- [ ] `selfroute_reason` / `selfroute_confidence` in TraceLog — JSON mode opt-in (operator asks "why did selfroute decide SAFE?")
+- [ ] Operator-tunable prompt path via `Routing.SelfRoute.PromptPath` config key
 
-- [ ] **Additional provider implementations** (Claude, OpenAI cloud, DeepSeek) — trigger: a third consumer with different backend needs
-- [ ] **Rate limiting** — trigger: a runaway-loop scenario or second operator host appears
-- [ ] **Multi-level priority queue** (more than 2 levels) — trigger: starvation observed in production with the two-level design
+### Future Consideration (v3+)
+
+- [ ] Speculative routing (Phase 21 optional) — only if latency profiling proves selfroute adds unacceptable overhead
+- [ ] Dedicated 7B router model — selfrouting doc §19 upgrade path; only if 35B classification quality degrades under observed traffic
+- [ ] Persistent session store — only if operator reports problematic session loss on router restarts
 
 ---
 
@@ -213,66 +203,53 @@ The `task` field lands as a **top-level field in the JSON body** — identical t
 
 | Feature | User Value | Implementation Cost | Priority |
 |---------|------------|---------------------|----------|
-| `POST /v1/chat/completions` + SSE streaming | HIGH | MEDIUM | P1 |
-| `task` field routing table | HIGH | LOW | P1 |
-| SemaphoreSlim(1) + two-level priority queue | HIGH | LOW | P1 |
-| `graph_indexing` no-fallback rule | HIGH | LOW | P1 |
-| Heuristic fallback (Hermes path) | HIGH | MEDIUM | P1 |
-| Backend health probing + retry | HIGH | MEDIUM | P1 |
-| `GET /health`, `GET /v1/models`, `GET /stats` | MEDIUM | LOW | P1 |
-| HF-id trap defense + sampling defaults | HIGH | LOW | P1 |
-| Cancellation token propagation | MEDIUM | MEDIUM | P1 |
-| Structured logging + routing reason | MEDIUM | LOW | P1 |
-| Configurable routing rules (appsettings.json) | MEDIUM | LOW | P1 |
-| `model` override (debug path) | LOW | LOW | P2 |
-| Prometheus `/metrics` | LOW | LOW | P3 |
-| Circuit breaker | LOW | MEDIUM | P3 |
-| ML / learned routing | LOW | HIGH | P3 |
+| Hard Rules layer | HIGH — prevents catastrophic misrouting | LOW — keyword match, no ML | P1 |
+| 35B self-classify | HIGH — replaces ML as primary routing decision | MEDIUM — HTTP call to :8000, response parsing, fallback-to-UNSAFE on parse error | P1 |
+| Prompt-hash cache | MEDIUM — latency + token cost reduction | LOW — LRU cache, SHA-256 key | P1 |
+| Sticky session store | HIGH — debugging continuity, core v2.0 promise | MEDIUM — ConcurrentDictionary + TTL, session_id threading | P1 |
+| Session_id extraction | HIGH — enables sticky (no sticky without it) | LOW — header/body extraction, HttpContext.Items pattern | P1 |
+| DecisionLog extension | HIGH — observability of new routing path is mandatory | LOW — new DU cases, optional fields, schema_version bump | P1 |
+| ML path dormant | MEDIUM — future flexibility | LOW — mode-guarded DI, mirrors Phase 12 pattern | P1 |
+| Quality fallback → session store | MEDIUM — sticky correctness after FallbackTo122B | LOW — one-line write to session store in ChatCompletions | P1 |
+| Hermes smoke test | HIGH — validates end-to-end integration | MEDIUM — depends on Hermes-side changes | P2 |
+| Selfroute JSON mode (TraceLog) | LOW — debugging aid for operator | MEDIUM — JSON parse path, additional trace fields | P2 |
+| Operator-tunable prompt path | LOW — nice-to-have flexibility | LOW — config key, matches existing judge-prompt pattern | P2 |
+| Speculative routing | LOW — marginal latency gain | HIGH — async cancellation, streaming cancellation complexity | P3 |
 
 ---
 
-## Competitor Feature Analysis
+## v1.x Infrastructure Dependencies
 
-| Feature | LiteLLM | OpenRouter | vLLM server | llama.cpp server | Ollama shim | Our approach |
-|---------|---------|------------|-------------|-----------------|-------------|--------------|
-| OpenAI-compatible `/v1/chat/completions` | Yes | Yes | Yes | Yes | Yes | Yes (table stakes) |
-| SSE streaming | Yes | Yes | Yes | Yes | Yes | Yes — pass-through, no buffering |
-| `/v1/models` | Yes | Yes | Yes | Yes | Yes | Yes — proxy upstream lists, deduped |
-| Task-based routing (explicit field) | No (semantic similarity only) | No (model selection only) | No | No | No | **Yes — deterministic, zero-overhead** |
-| Priority queue (gateway-level) | Beta / Redis-dependent / unstable | No | Internal only (not gateway-visible) | No | No | **Yes — in-process, 2-level FIFO** |
-| Per-model serial execution gate | No | No | No | `--parallel 1` | Internal queue | **Yes — SemaphoreSlim(1) for 122B** |
-| Per-task no-fallback rule | No | No | No | No | No | **Yes — graph_indexing must fail** |
-| Heuristic routing fallback | Semantic similarity (beta) | No | No | No | No | Yes — keyword + length + code blocks |
-| Auth / virtual keys | Yes | Yes | No | No | No | No (anti-feature for loopback) |
-| Multi-tenant billing | Yes | Yes | No | No | No | No (anti-feature) |
-| Prometheus `/metrics` | Yes | No | Yes | No | No | No in v1 (defer until scraper exists) |
-| Rate limiting | Yes | Yes (cloud) | No | No | No | No (anti-feature for known clients) |
-| Prompt caching | Yes (Redis) | Yes (provider) | Yes (KV cache) | Yes (KV cache) | Yes (model manager) | No (mlx_lm manages internally) |
-| `extra_body` non-standard fields | Yes | Yes (provider routing) | Yes (top_k, priority) | Limited | Yes (options, think) | Yes — `task` field as top-level body field |
-| launchd / local Mac deployment | No | N/A | No | No | No | **Yes — matches blueCode operational pattern** |
+The following v1.x components are **directly used** by v2.0 features with no modification needed, only wiring:
+
+| v1.x Component | Used By (v2.0 feature) | Notes |
+|----------------|----------------------|-------|
+| `CorrelationMiddleware` (Phase 5) | Session_id extraction runs alongside or after correlation middleware | Session_id extraction is an additive middleware concern; `correlation_id` continues to flow through all logs unchanged |
+| `QueueDispatcher` (Phase 3) | Sticky session check result feeds into dispatch decision, same as current routing decisions | `RoutingDecision.Target` remains the dispatch signal; sticky just pre-determines the target |
+| `DecisionLogWriter` (Phase 5) | New DecisionLog fields for routing reason extension | Schema_version bump required; `RoutingReason` DU extension triggers exhaustive match updates across all callsites |
+| `QwenUpstreamClient` (Phase 1) | 35B self-classify HTTP call reuses the existing :8000 client | Self-classify is a non-streaming `CompleteAsync` call to 35B; shares the same `IUpstreamClient` implementation. Key difference: the self-classify call must NOT go through `QueueDispatcher` (35B has no concurrency gate — only 122B does). Must call `QwenUpstreamClient` directly for the routing call. |
+| `HealthService` (Phase 10) | Hard Rules + selfroute should still respect 122B reachability | If selfroute decides 122B but 122B is unreachable, existing `FallbackTo35B` logic in QueueDispatcher/ChatCompletions handles it — no change needed |
+| `TraceLogger` (Phase 14) | Selfroute JSON mode (P2 feature) adds new TraceLog fields | Opt-in; no change to existing trace fields |
+| `IModelVersionProvider` (Phase 8) | ML dormant path retains `CurrentVersion`; v2.0 routing decisions set `ModelVersion = "selfroute-v2.0"` or similar | Needs research on whether to repurpose ModelVersion field for selfrouting cohort or leave it blank |
+
+**Critical wiring note — selfroute HTTP call must bypass QueueDispatcher:** The selfroute call is a short classification call (max_tokens=4–8) to 35B. QueueDispatcher wraps 35B for production requests but 35B has NO semaphore gate (only 122B does). The selfroute call can use `QwenUpstreamClient.CompleteAsync` directly (the unwrapped client). This avoids any risk of the routing call contending with production 35B traffic at the application layer. The infrastructure for direct-client access is already in the DI graph; just inject `QwenUpstreamClient` (concrete) alongside `IUpstreamClient` (the QueueDispatcher-wrapped version).
 
 ---
 
 ## Sources
 
-- LiteLLM routing docs: https://docs.litellm.ai/docs/routing
-- LiteLLM scheduler (beta priority queue): https://docs.litellm.ai/docs/scheduler
-- LiteLLM auto-routing: https://docs.litellm.ai/docs/proxy/auto_routing
-- LiteLLM provider-specific params: https://docs.litellm.ai/docs/completion/provider_specific_params
-- OpenRouter API reference: https://openrouter.ai/docs/api/reference/overview
-- OpenRouter provider routing (extra_body.provider): https://openrouter.ai/docs/guides/routing/provider-selection
-- vLLM OpenAI-compatible server: https://docs.vllm.ai/en/stable/serving/openai_compatible_server/
-- llama.cpp server README: https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md
-- Ollama OpenAI compatibility: https://docs.ollama.com/api/openai-compatibility
-- Portkey AI gateway features: https://portkey.ai/features/ai-gateway
-- HuggingFace request queueing for LLM performance: https://huggingface.co/blog/tngtech/llm-performance-request-queueing
-- Red Hat LLM semantic router: https://developers.redhat.com/articles/2025/05/20/llm-semantic-router-intelligent-request-routing
-- Hermes custom provider plugin: ~/hermes-agent/plugins/model-providers/custom/__init__.py
-- Hermes streaming call site: ~/hermes-agent/run_agent.py:6922-6941
-- PROJECT.md: /Users/ohama/projs/smart-router/.planning/PROJECT.md
-- smart-router.md: /Users/ohama/projs/smart-router/smart-router.md
-- graphify_smart_router_prompt.md: /Users/ohama/projs/smart-router/graphify_smart_router_prompt.md
+- `.planning/docs/35b-selfrouting.md` — primary design doc, selfrouting architecture (§3 recommended strategy, §6-7 hard rules rationale, §10 router-must-not-think principle, §16 sticky escalation, §17 speculative routing)
+- `.planning/docs/35b-selfrouting-prompt.md` — routing prompt design, SAFE-for-35B framing, continuation-aware routing, JSON output format
+- `src/SmartRouter.Core/Domain.fs` — existing `RoutingReason` DU, `RouterRequest`, `RoutingDecision` — DU extension analysis
+- `src/SmartRouter.Core/Routing.fs` — existing pipeline stages (tryModelOverride → tryTaskTable → algorithm) — v2.0 stages insert before/after
+- `src/SmartRouter.Cli/Adapters/CorrelationMiddleware.fs` — session_id extraction middleware pattern
+- `src/SmartRouter.Cli/Adapters/QueueDispatcher.fs` — IUpstreamClient wrapping pattern; confirms 35B has no semaphore gate
+- `src/SmartRouter.Cli/Adapters/JudgeClient.fs` — Phase 16 judge pattern for bounded LRU cache, prompt path config — selfroute cache follows same pattern
+- `src/SmartRouter.Cli/appsettings.json` — `Routing.Judge.PromptPath`, `Routing.Judge.MaxCacheEntries` as reference for selfroute config shape
+- `.planning/PROJECT.md` — locked decisions for v2.0: 35B self-route, Hard Rules ONLY keyword scope, Hermes as upper layer, session_id propagation
+- `.planning/STATE.md` — v2.0 design decisions locked 2026-05-11; projected phase sequence
+- `.planning/MILESTONES.md` — v1.3 shipped features confirmed as baseline
 
 ---
-*Feature research for: OpenAI-compatible LLM router (local, task-typed, Hermes + Graphify)*
-*Researched: 2026-05-07*
+*Feature research for: smart-router v2.0 Self-Routing + Session-Aware milestone*
+*Researched: 2026-05-11*

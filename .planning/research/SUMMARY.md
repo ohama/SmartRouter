@@ -1,314 +1,225 @@
 # Project Research Summary
 
-**Project:** Smart Router
-**Domain:** F# .NET 10 OpenAI-compatible LLM gateway (local, dual-model, task-typed routing)
-**Researched:** 2026-05-07
+**Project:** smart-router v2.0 — Self-Routing + Session-Aware
+**Domain:** LLM routing proxy — subsequent milestone on top of shipped v1.3.0
+**Researched:** 2026-05-11
 **Confidence:** HIGH
-
----
 
 ## Executive Summary
 
-Smart Router is a purpose-built F# .NET 10 reverse proxy that fronts two local Qwen models — 35B (fast, `localhost:8000`) and 122B (slow/powerful, `localhost:8001`) — behind a single OpenAI-compatible endpoint at `localhost:4000`. The router's core job is a three-stage decision pipeline: honor an explicit `model` override, then honor an explicit `task` field (used by Graphify), then fall back to a keyword/length heuristic with an aggressive 35B bias (used by Hermes). No comparable product — LiteLLM, Ollama, vLLM, OpenRouter — implements deterministic task-typed routing plus a gateway-level serial execution gate plus a priority queue for local model protection. These three together are what justify building rather than buying.
+smart-router v2.0 replaces the ML-classifier routing path (Phases 6–11) with a three-layer cascade: keyword Hard Rules → 35B self-classify → sticky session escalation. The 35B model already serving inference is reused for 1-token routing classification (`max_tokens=4`, `temperature=0`), eliminating the need for a separate router server or new NuGet packages. The ML code is retained but made dormant behind a `Routing.Mode = "selfrouting" | "ml"` config flag — an operator can roll back to ML routing with a config edit and restart, no rebuild required. The v1.3.0 quality fallback and 122B-as-judge (Phases 14–16) are unaffected and remain in the post-routing path.
 
-The architecture mirrors blueCode, the companion F# project on the same host: hexagonal layout with a pure Core (Domain.fs + Routing.fs + Ports.fs) and Cli adapters (QwenUpstreamClient, QueueDispatcher, HealthAdapter, endpoints). Several adapters can be lifted verbatim from blueCode — `QwenHttpClient.fs`, `Json.fs`, `Logging.fs` — bringing hard-won operational knowledge (HF-id trap defense, 300s timeout, sampling-param defaults) forward at zero re-research cost. Core must be rewritten from scratch because blueCode's Core is an agent loop, not a router.
+The recommended build order is derived entirely from actual Domain.fs type dependencies: Hard Rules first (no new DI, fully testable in isolation), then Session Store (which must exist before SelfRouter can read the SessionId field that CorrelationMiddleware will populate), then SelfRouter (wires the classify call into the RoutingAlgorithmRegistration mode switch), then Hermes integration (header convention + smoke test). The single most important architecture decision is that `RouterRequest` must gain a `SessionId: string` field (added the same way `CorrelationId` was added in Phase 9), and that field must be populated before the SelfRouter closure can check the sticky escalation store.
 
-The dominant risks are clustered in two areas. First, the SSE pass-through path has five interlocking pitfalls (no `ResponseHeadersRead`, no flush-per-chunk, wrong disposal scope, missing headers, chunk reframing) that must all ship correctly in a single phase — splitting them across phases leaves the streaming path in a broken intermediate state. Second, the 122B concurrency gate (SemaphoreSlim, priority dispatcher, cancellation linkage, per-request timeout CTS) has three interdependent correctness requirements that must also ship together: a semaphore leak on cancellation, FIFO ordering ignoring priority, and upstream hang holding the slot forever are all the same logical failure mode.
-
----
+The primary risk is cascade ordering. All four researchers converged on a canonical six-stage order (model override → task table → Hard Rules → sticky → self-classify → default), but they differed on the exact position of the sticky check relative to self-classify. The pitfalls researcher's analysis is authoritative: sticky must run at stage 4 (before self-classify at stage 5) so that an already-escalated session never burns a classify token. A secondary conflict exists on whether self-classify applies to streaming requests: the features researcher said yes (pre-dispatch, not post-dispatch), and the pitfalls researcher flagged the latency cost of a classify call before the first SSE chunk. The resolved position: Hard Rules always apply to streaming (0ms keyword scan), but self-classify is skipped for streaming requests — the sticky escalation check still applies to streaming, providing continuity without the round-trip cost.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The stack is almost entirely fixed by PROJECT.md constraints and blueCode precedent. F# .NET 10 + ASP.NET Core Minimal API is locked. The serialization chain (`System.Text.Json` + `FSharp.SystemTextJson 1.4.36`) and logging chain (Serilog 4.3.1 + Sinks.Console 6.1.1) are pinned to blueCode-verified versions. Test framework is Expecto 10.2.1. Raw `WebApplication.MapPost` is correct for a four-endpoint gateway — Falco, Saturn, and Giraffe add abstraction cost without benefit. `Microsoft.Extensions.Http.Resilience` replaces deprecated `Microsoft.Extensions.Http.Polly` for the retry pipeline. SSE forwarding uses `HttpClient.SendAsync` with `HttpCompletionOption.ResponseHeadersRead` plus raw byte-buffer pass-through — no YARP (overkill), no SSE library (parses when the router should pass through verbatim). Deployment is a self-contained binary (`dotnet publish -c Release -r osx-arm64 --self-contained`) referenced from a launchd plist, not `dotnet run`.
+No new NuGet packages are required for v2.0. All new functionality is implemented with the existing dependency set: `ConcurrentDictionary<K,V>` (BCL) for the session store, `IHttpClientFactory` (already registered) for the self-classify HTTP call, `Microsoft.Extensions.Http.Resilience` 10.5.0 (already in Cli.fsproj) for the retry policy on the "selfrouter" named client, and `SHA-256` (BCL, already used in ChatCompletions.fs) for prompt-hash caching. ML packages (ML.NET 5.0.0, ONNX Runtime 1.25.1) remain compiled but dormant.
 
-See STACK.md for the full package list, version confidence table, and verification commands.
+The session store uses `ConcurrentDictionary<string, SessionState>` with a BackgroundService-driven TTL eviction loop (default 30 minutes, configurable via `Routing:Session:TtlMinutes`). This is the established pattern from JudgeClient.fs (Phase 16) — manual LRU + `Interlocked` counters — extended with TTL-based eviction rather than count-based eviction, because session age is the right eviction axis.
 
-**Core technologies:**
-- F# / .NET 10 + ASP.NET Core Minimal API — runtime and HTTP hosting — fixed by constraint; raw `MapPost`/`MapGet` for 4 endpoints
-- `System.Text.Json` + `FSharp.SystemTextJson 1.4.36` — serialization — blueCode-verified; handles F# DUs/options/lists
-- `Microsoft.Extensions.Http` (IHttpClientFactory) + `Microsoft.Extensions.Http.Resilience` — named HTTP clients per upstream + retry pipeline
-- `FSharp.Control.TaskSeq` (~0.4.3) — `IAsyncEnumerable` iteration for SSE chunk-level logging/inspection
-- Serilog 4.3.1 + Sinks.Console 6.1.1 + Serilog.AspNetCore — structured logging to stderr — blueCode-verified versions
-- `FsToolkit.ErrorHandling` (~4.x) — `result {}` / `taskResult {}` CE for routing pipeline composition
-- `System.Collections.Generic.PriorityQueue<T,int>` + `TaskCompletionSource` waiter pattern — two-level 122B queue — BCL, no extra package
-- Expecto 10.2.1 + `Microsoft.AspNetCore.Mvc.Testing` — test framework — blueCode-verified version
+**Core technologies (v2.0 additions):**
+- `ConcurrentDictionary<string, SessionState>` (BCL) — session store backing; proven in JudgeClient, no extra DI needed
+- Named `"selfrouter"` HttpClient (IHttpClientFactory, existing) — isolates classify call from production inference path; 5s timeout, 1-retry (not the inference client's 300s / 3-retry profile)
+- `HardRulesConfig` record + pure `applyHardRules` function (BCL, Core) — keyword scan; no IO, no DI; lives in SmartRouter.Core to enable unit testing without ASP.NET scaffolding
+- `Routing.Mode` config key (appsettings.json) — `"selfrouting"` (v2.0 default) or `"ml"` (rollback); zero-rebuild mode switch
+- `RouterRequest.SessionId: string` field (Domain.fs, Core) — mirrors Phase 9 `CorrelationId` addition; populated by CorrelationMiddleware from `X-Session-Id` header; empty string = stateless request, sticky skipped
 
-**Version note (MEDIUM confidence):** `Serilog.AspNetCore`, `Microsoft.Extensions.Http.Resilience`, `FsToolkit.ErrorHandling`, `FSharp.Control.TaskSeq`, and `Microsoft.AspNetCore.Mvc.Testing` should be verified at scaffold time: `dotnet package search <name> --take 1`. Exact minor versions may have advanced since training cutoff.
+**What NOT to use:**
+- `QueueDispatcher` / `IUpstreamClient` for the classify call — consumes the 122B `SemaphoreSlim(1)` gate (same pitfall documented for TeacherLabeler, Phase 7)
+- `IHostedService` / `PeriodicTimer` for write-time eviction on the classify cache (write-time eviction from JudgeClient is correct for the classify cache; TTL BackgroundService is correct for the session store)
+- `async {}` anywhere — ARCH-02 enforces `task {}` exclusively
+- `IMemoryCache` for session store — adds a background GC thread; inconsistent with the JudgeClient manual pattern already in the codebase
 
 ### Expected Features
 
-No comparable product implements the three differentiating features together: deterministic `task`-field routing, a gateway-level per-model serial execution gate, and a priority queue. These are unique to the local dual-model mlx_lm constraint and must not be deferred.
+**Must have (v2.0 launch, all P1):**
+- Hard Rules keyword pre-routing (LLVM, MLIR, compiler, segfault, optimization, concurrency) — stage 0, case-insensitive `String.Contains`, applies to ALL requests including streaming; routes immediately to 122B
+- 35B self-classify call — `max_tokens=4`, `temperature=0`, `stream=false` to the "selfrouter" named client; SAFE → 35B, UNSAFE or parse-failure → 122B (conservative bias mirrors Phase 7/16 patterns); **skipped for streaming requests** (latency cost before first chunk; Hard Rules + sticky still apply to streaming)
+- Prompt-hash classify cache — SHA-256 of concatenated message content → bounded LRU `ConcurrentDictionary`, 5,000 entries; cache hit skips the 35B classify call; invalidated on restart only
+- Sticky session escalation — `ConcurrentDictionary<session_id, SessionState>` with TTL eviction (30 min default); once a session serves 122B, all subsequent requests in that session go 122B regardless of self-classify verdict; updated after quality fallback completes (post-routing), not after initial routing decision
+- `X-Session-Id` header extraction in CorrelationMiddleware — empty/absent = stateless, sticky skipped; populates `RouterRequest.SessionId`; NOT a body field (keeps session state router-internal)
+- `RoutingReason` DU extensions — `HardRule`, `SelfRoute`, `StickyEscalation` new cases; `TreatWarningsAsErrors` enforces exhaustive match at compile time
+- `Routing.Mode = "selfrouting"` default, `"ml"` preserved — `RoutingAlgorithmRegistration` factory branches on mode; all ML DI registrations remain unconditional
+- Quality fallback (Phase 14) writes session store on 122B upgrade — sticky must reflect the actually-served model, not the initially-routed model
 
-See FEATURES.md for the full competitor matrix and feature dependency graph.
+**Should have (v2.x, P2):**
+- Hermes Agent end-to-end smoke test — depends on Hermes-side change to propagate `X-Session-Id`; manual UAT against `~/hermes-agent`
+- Self-router prompt hash logged at startup — `SelfRouter: loaded prompt hash={Hash}`; included in `/stats`; audit trail for prompt drift
+- `self_router_classify_latency_ms` in TraceRecord — monitor for classify call being blocked behind in-flight 35B generations
 
-**Must have (table stakes) — router fails without these:**
-- `POST /v1/chat/completions` — parse + proxy + SSE pass-through; Hermes hangs without streaming
-- Request field preservation — Hermes sends `stream_options: {include_usage: true}`; stripping breaks it silently
-- `GET /health`, `GET /v1/models`, `GET /stats` — required by Graphify spec; cheap now, expensive to retrofit
-- HttpClient 300s timeout — 122B cold-start reaches 240s; default 100s fails every cold start
-- Cancellation token propagation — Hermes drops connections mid-stream; orphaned 122B calls hold the semaphore
-- Sampling-param defaults (temp=0.7, top_p=0.8, top_k=20) — mlx_lm.server behaves incorrectly without explicit values
-- HF-id trap defense (`tryParseModelId`) — sending the HF repo id overwrites the loaded tokenizer; responses become FIM garbage
-- OpenAI error shape (`{"error": {"message": "...", "type": "..."}}`) — OpenAI SDK clients parse this; bare ASP.NET problem details break them
+**Defer (v3+):**
+- Speculative routing — enormous SSE cancellation complexity; only if latency profiling proves a problem
+- Persistent session store (Redis/SQLite) — over-engineering for single-host local setup
+- Dedicated 7B router model — only if 35B classification quality degrades under observed traffic
 
-**Should have (differentiators) — reason the router exists:**
-- Explicit `task` field routing — deterministic, zero-overhead; no semantic similarity approximation needed
-- Two-level priority queue for 122B — graph_indexing must preempt lighter work; no comparable implements this at gateway level
-- `SemaphoreSlim(1)` on 122B — prevents `[METAL] Insufficient Memory`; cheaper than letting mlx_lm serialize at the metal
-- `graph_indexing` no-fallback rule — must ship with `graph_indexing` routing; silent quality regression is worse than an error
-- Heuristic fallback for Hermes — keyword + prompt length + code-block + message count; aggressive 35B bias for ambiguous cases
-- Backend health probing + retry — powers fallback decisions; required for Graphify reliability requirements
-- `GET /stats` — queue depth, wait time, requests/sec, failure count; Graphify spec requires it
-
-**Defer (v2+):**
-- Prometheus `/metrics` — add only when a scraper actually arrives
-- Circuit breaker — add only when a recurring failure mode needing "open" state is observed
-- ML/learned routing — revisit after `/stats` + structured logs accumulate decision data
-- Rate limiting — single host, two known clients, no abuse vector
-
-**Critical scoping note:** `graph_indexing` routing and the `graph_indexing` no-fallback rule are a single correctness unit. They must ship in the same phase. A `graph_indexing` route that silently falls back to 35B produces durable but lower-quality index artifacts that poison downstream retrieval for the lifetime of the index.
+**Explicitly excluded anti-features:**
+- CoT reasoning in the routing prompt — `max_tokens=4` enforces brevity; a thinking router has already failed
+- Per-message classification — multiplies token cost; sticky covers continuation case
+- Hard-reject on missing session ID — breaks v1.x backward compat; session ID is optional
 
 ### Architecture Approach
 
-The architecture is a strict hexagonal mirror of blueCode: pure `SmartRouter.Core` (no ASP.NET, no HttpClient, no Serilog references) and `SmartRouter.Cli` containing all I/O adapters and ASP.NET endpoints. The routing pipeline is a three-stage pure function (`routeRequest`) with exhaustive DU matching — no `| _ ->` catch-alls anywhere. `QueueDispatcher` wraps `IUpstreamClient` as a decorator (not merged into `QwenUpstreamClient`) so concurrency policy and HTTP mechanics are independently testable. Health fallback policy lives in the adapter layer (QueueDispatcher), not Core, because health probing is I/O.
+v2.0 adds four new components that slot cleanly into the existing hexagonal structure. `HardRules.fs` is a pure Core function (no IO, no DI), called as Stage 0 in `Routing.routeRequest`. `SessionStore.fs` is a Cli adapter implementing `ISessionStore` with triple-reg DI (concrete singleton + interface alias + BackgroundService leg for TTL eviction). `SelfRouter.fs` is a Cli adapter implementing `ISelfRouter`, mirroring `JudgeClient.fs` exactly — named HttpClient, LRU cache, fail-open to UNSAFE on timeout/parse failure. Session ID flows through `CorrelationMiddleware` → `HttpContext.Items["SessionId"]` → `RouterRequest.SessionId` (new field, not a body field).
 
-See ARCHITECTURE.md for concrete F# type signatures, the full request lifecycle sequence diagram, cancellation propagation chain, and the blueCode reuse vs. rewrite decision table.
+**Major components (v2.0 new or extended):**
+1. `HardRules.fs` (Core) — pure keyword scan; `applyHardRules : RouterRequest -> RoutingDecision option`; Stage 0 in `Routing.routeRequest`
+2. `SessionStore.fs` (Cli Adapter) — `ConcurrentDictionary<string, SessionState>`; triple-reg (singleton + ISessionStore + BackgroundService TTL); `AddOrUpdate` with 122B-wins merge for concurrent-write safety
+3. `SelfRouter.fs` (Cli Adapter) — `ISelfRouter.ClassifyAsync`; named "selfrouter" HttpClient; SHA-256 prompt-hash LRU cache (5,000 entries); 5s timeout, 1-retry; mirrors JudgeClient architecture exactly
+4. `CorrelationMiddleware.fs` (extended) — reads `X-Session-Id` header → `ctx.Items[SessionIdKey]`; empty/absent = stateless
+5. `RouterRequest` (Domain.fs, extended) — gains `SessionId: string` field; populated in `mapWireToRequest` from `ctx.Items`; parallel to `CorrelationId`
+6. `RoutingAlgorithmRegistration` (CompositionRoot, extended) — `Routing.Mode` branch: `"selfrouting"` arm creates `makeSelfRoutingAlgorithm` closure; `"ml"` arm unchanged
 
-**Major components:**
-1. `SmartRouter.Core/Domain.fs` — all DUs and record types (`ModelId`, `Priority`, `TaskType`, `RoutingDecision`, `RouterRequest`, `RouterError`); pure, no I/O
-2. `SmartRouter.Core/Routing.fs` — `routeRequest` three-stage pipeline (tryModelOverride → tryTaskTable → applyHeuristic); pure functions; exhaustive matches over `TaskType` DU
-3. `SmartRouter.Core/Ports.fs` — `IUpstreamClient`, `IClock`, `IHealthProbe` interfaces; Core boundary
-4. `SmartRouter.Cli/Adapters/QwenUpstreamClient.fs` — HTTP forwarding to Qwen ports; HF-id probe; `ResponseHeadersRead` streaming; copy from blueCode
-5. `SmartRouter.Cli/Adapters/QueueDispatcher.fs` — `SemaphoreSlim(1)` on 122B; two-level priority dispatcher; cancellation-safe `finally Release()`; fallback policy
-6. `SmartRouter.Cli/Adapters/HealthAdapter.fs` — polls upstream `/v1/models`; exposes reachability for `/health` and QueueDispatcher fallback
-7. `SmartRouter.Cli/Endpoints/ChatCompletions.fs` — parses request; calls `routeRequest`; dispatches to `IUpstreamClient`; SSE forward loop with per-chunk flush
-8. `SmartRouter.Cli/Endpoints/{Health,Models,Stats}.fs` — lightweight endpoints backed by in-process counters
-9. `SmartRouter.Cli/CompositionRoot.fs` + `Program.fs` — DI wiring; WebApplication builder; middleware
+**Named HttpClient additions (v2.0):**
+
+| Client | Target | Timeout | Retry | Purpose |
+|--------|--------|---------|-------|---------|
+| selfrouter | 35B port 8000 | 5s | 1x 200ms | Routing self-classify |
+
+(all v1.x named clients unchanged: upstream35b, upstream122b, upstream35b-stream, upstream122b-stream, health-probe, teacher, judge)
 
 ### Critical Pitfalls
 
-27 pitfalls documented across five thematic clusters. Full detail in PITFALLS.md. Highest-severity:
+1. **Cascade ordering is load-bearing** — Canonical order: model override (1) → task table (2) → Hard Rules (3) → sticky (4) → self-classify (5) → default 35B (6). Sticky at position 4 (before self-classify at 5) avoids burning a classify token on an already-escalated session. Hard Rules at position 3 (before sticky at 4) ensures a keyword-match forces 122B regardless of session state. This order is non-negotiable.
 
-1. **HF-id fallback trap** (PITFALL-1) — sending the HF repo id in the POST `model` field overwrites the Instruct tokenizer with Base Coder; all responses become FIM garbage. Prevention: copy `tryParseModelId` verbatim from blueCode; probe `/v1/models` on startup; prefer the id that starts with `/`. Must be solved before any upstream call.
+2. **Self-classify must NOT route through QueueDispatcher** — Use the named "selfrouter" HttpClient posting directly to 35B. Routing through `QueueDispatcher` consumes the `SemaphoreSlim(1)` 122B gate and starves real inference traffic. Same enforcement pattern as TeacherLabeler (Phase 7) and JudgeClient (Phase 16).
 
-2. **SSE pass-through cluster — all five must ship together** (PITFALLS 2, 3, 4, 6, 7) — Missing `ResponseHeadersRead` buffers entire body. Missing per-chunk `FlushAsync` causes burst delivery. Early `HttpResponseMessage` disposal truncates with `ObjectDisposedException`. Missing SSE headers breaks client parse mode. Attempting to reframe events splits `data: ...\n\n` boundaries. All five are correctness failures on every streaming request. Must all be addressed in a single phase.
+3. **Absent `X-Session-Id` must NOT create a session store entry** — Empty/missing header = stateless request: skip sticky read, skip sticky write. If empty string were used as a session key, all v1.x clients would share one sticky bucket, causing the first 122B routing to permanently escalate every sessionless request to 122B.
 
-3. **SemaphoreSlim concurrency cluster — all three must ship together** (PITFALLS 8, 9, 11) — Missing `finally Release()` after cancellation leaves semaphore at count 0 forever. Calling `SemaphoreSlim.WaitAsync` directly bypasses the priority queue (FIFO ordering). Missing per-request timeout CTS leaves the semaphore held during upstream hangs. All three produce the same failure mode: 122B capacity permanently stuck. Must all be addressed in the same concurrency phase.
+4. **Session store must be updated after quality fallback completes** — Call `SessionStore.Update(sessionId, finalDecision.Target)` after the Phase 14 quality fallback / judge cascade resolves, using `finalDecision.Target`. Updating before fallback records the wrong model and breaks sticky correctness for continued debugging sessions.
 
-4. **`async {}` in Core** (PITFALL-13) — does not compose cleanly with `task {}`; cancellation propagation breaks across the boundary. Ban at project scaffold time with `scripts/check-no-async.sh` mirroring blueCode.
+5. **Dormant ML code drift** — New `RoutingReason` DU cases are F#-compiler-enforced via exhaustive match (`TreatWarningsAsErrors`). The real risk is runtime: new `RoutingConfig` fields in v2.x that the ML adapter handles incorrectly without an integration test. Add `MlDormantTests.fs` that exercises `Routing.Mode = "ml"` in CI.
 
-5. **Expecto test discovery** (PITFALL-26) — `[<Tests>]` auto-discovery is unreliable (burned four executors in blueCode). Every new test module must be added to both the `.fsproj` `<Compile>` list and the explicit `rootTests` list. Establish at project scaffold before writing any tests.
-
----
+6. **Self-classify skipped for streaming (resolved conflict)** — Hard Rules (0ms) and sticky escalation apply to streaming. Self-classify round-trip is skipped for `stream=true` to avoid classify latency before the first SSE chunk. This must be an explicit `if req.Stream then ... else ...` branch in the Phase 19 implementation.
 
 ## Implications for Roadmap
 
-### Phase ordering principles
+Based on research, suggested phase structure:
 
-**Dependency chain:**
-- Core types must exist before any adapter can compile
-- `QwenUpstreamClient` must exist before `QueueDispatcher` can wrap it
-- All adapters must be wired before `CompositionRoot` compiles
-- SSE pitfall cluster requires an atomic phase — do not split across "get it running" and "make it correct"
-- Concurrency pitfall cluster requires an atomic phase
-- `graph_indexing` no-fallback rule must ship in the same phase as `graph_indexing` routing
+### Phase 17: Hard Rules (Stage 0 Keyword Pre-Routing)
 
-**Atomic units that must not be split across phases:**
-- SSE pass-through: `ResponseHeadersRead` + per-chunk `FlushAsync` + `use!` scope covering full pipe + SSE headers + `[DONE]` injection
-- 122B concurrency gate: `SemaphoreSlim(1)` + priority dispatcher (not raw `WaitAsync`) + linked `CancellationTokenSource` + timeout CTS + `finally Release()`
-- `graph_indexing` routing + no-fallback rule
+**Rationale:** Fully independent — no new DI, no new HttpClient, no new field in `RouterRequest`. Only changes: `HardRules.fs` (new Core pure function), `Domain.fs` (three new `RoutingReason` DU cases that Phases 18–19 will also need), `Routing.fs` (Stage 0 call), tests. All existing tests pass unchanged because `applyHardRules` returns `None` for non-matching requests. Ships in isolation and locks the cascade ordering spec in code before later phases depend on it.
 
----
+**Delivers:** Stage 0 keyword pre-routing; new `RoutingReason` DU cases; DecisionLog schema_version bump (first new DU case); cascade ordering spec as code.
 
-### Phase 1: Foundation — Project Scaffold + Core Domain + HTTP Client Bootstrap
+**Addresses:** Hard Rules table-stakes feature; establishes cascade ordering that all subsequent phases reference.
 
-**Rationale:** Everything downstream depends on Core types being defined. This phase also locks in the hardest-to-change decisions: project structure, Kestrel binding (`127.0.0.1:4000`, not `localhost`), CI grep (`check-no-async.sh`), Expecto `rootTests` pattern, named HttpClients with 300s timeout, HF-id trap defense, and sampling-param defaults. These are expensive to retrofit later.
+**Avoids:** Cascade ordering bugs (Pitfall 8) — written once in `Routing.routeRequest`, inherited by all later phases.
 
-**Delivers:**
-- `SmartRouter.Core`: Domain.fs (all DUs + record types), Routing.fs (three-stage pipeline), Ports.fs (interfaces)
-- `SmartRouter.Cli/Adapters/Json.fs` + `Logging.fs` (copied from blueCode verbatim)
-- `SmartRouter.Cli/Adapters/QwenUpstreamClient.fs` — non-streaming POST path only; HF-id probe; named HttpClients at 300s; sampling defaults; error mapping
-- `SmartRouter.Tests/RouterTests.fs` — explicit `rootTests` entrypoint; `RoutingTests.fs` covering pure routing pipeline
-- CI scripts: `check-no-async.sh`
-- `appsettings.json`: Kestrel bound to `127.0.0.1:4000`; upstream URLs; routing thresholds
-
-**Features addressed (FEATURES.md):** Task routing table, heuristic fallback, model override, HF-id defense, sampling defaults, configurable routing rules
-
-**Pitfalls addressed (PITFALLS.md):** PITFALL-1 (HF-id trap), PITFALL-12 (100s timeout default), PITFALL-13 (`async {}` ban), PITFALL-15 (named vs typed HttpClient), PITFALL-24 (`127.0.0.1` binding), PITFALL-25 (smoke-test `enable_thinking`), PITFALL-26 (Expecto rootTests), PITFALL-27 (testSequenced)
-
-**Research flag:** None — all patterns have blueCode references; F# type signatures in ARCHITECTURE.md are implementation-ready.
+**Research flag:** Standard patterns. No `/gsd:research-phase` needed.
 
 ---
 
-### Phase 2: SSE Streaming Pass-Through (Atomic Unit)
+### Phase 18: Session Store + SessionId Wiring
 
-**Rationale:** Hermes defaults to `stream=True` on every call. Until SSE pass-through works end-to-end, the router cannot be used with Hermes at all. This phase implements the complete, correct streaming path as a single atomic unit. Do not ship until the "looks done but isn't" checklist passes: TTFB < 2s, chunks arrive incrementally in curl, final event is `data: [DONE]\n\n`, no `ObjectDisposedException` under mid-stream cancellation.
+**Rationale:** Must precede SelfRouter (Phase 19). `RouterRequest.SessionId` must exist as a typed field before the `makeSelfRoutingAlgorithm` closure can read it. The Stack/Features researchers proposed SelfRouter first; the Architecture researcher's analysis of the actual `RouterRequest` record is authoritative — the field dependency is a hard compile-order requirement, not a preference. Session Store infrastructure can ship and be tested independently (sticky does nothing until Phase 19 writes 122B entries, but the threading and null-session guard can be verified now).
 
-**Delivers:**
-- `QwenUpstreamClient.StreamAsync` — `ResponseHeadersRead`; `use!` scope covering full pipe; raw byte buffer loop (no SSE parsing/reframing)
-- `ChatCompletions.fs` endpoint — SSE headers before first byte; per-chunk `WriteAsync` + `FlushAsync`; `[DONE]` injection if upstream omits it; `ctx.RequestAborted` as `ct`
-- `SmartRouter.Tests/StreamingTests.fs` — TTFB timing test; chunk-by-chunk delivery test; 100-chunk integrity test; mid-stream cancellation test; `[DONE]` sentinel test; header assertion test
+**Delivers:** `SessionStore.fs` (ISessionStore + triple-reg DI with BackgroundService TTL); `RouterRequest.SessionId: string` field; CorrelationMiddleware extension (X-Session-Id header → Items → mapWireToRequest); ChatCompletions Point B update (sessionStore.Update after quality fallback); null-session guard; `/stats` session_store_entry_count.
 
-**Features addressed (FEATURES.md):** SSE streaming pass-through, cancellation token propagation, request field preservation (UnknownFields forwarded)
+**Addresses:** Sticky session escalation infrastructure; Hermes backward-compat null-session guard; session unbounded growth (TTL BackgroundService, 30 min default).
 
-**Pitfalls addressed (PITFALLS.md):** PITFALL-2 (`ResponseHeadersRead`), PITFALL-3 (flush per chunk), PITFALL-4 (`HttpResponseMessage` disposal race), PITFALL-6 (SSE headers), PITFALL-7 (chunk reframing), PITFALL-14 (`let!` vs `use!`), PITFALL-19 (`[DONE]` sentinel)
+**Avoids:** Race condition Pitfall 4 (AddOrUpdate with 122B-wins merge); null-session Pitfall 7; sticky-never-resets Pitfall 9 (TTL); session update timing Anti-Pattern 4.
 
-**Research flag:** None — patterns fully specified in STACK.md and PITFALLS.md with code snippets.
+**Research flag:** Standard patterns — proven by JudgeClient LRU + triple-reg DI. No `/gsd:research-phase` needed.
 
 ---
 
-### Phase 3: 122B Concurrency Gate (Atomic Unit)
+### Phase 19: SelfRouter (35B Self-Classify, Stage 3)
 
-**Rationale:** Graphify sends concurrent requests. Without the semaphore + priority queue, concurrent 122B calls trigger `[METAL] Insufficient Memory` crashes. This phase implements the complete concurrency gate atomically: SemaphoreSlim(1), priority dispatcher (not `WaitAsync` directly), linked CancellationTokenSource with per-request timeout, and `finally Release()`.
+**Rationale:** Depends on Phase 18 (`RouterRequest.SessionId` field). Adds the "selfrouter" named HttpClient, `SelfRouter.fs` adapter, `ISelfRouter` port, `RoutingAlgorithmRegistration` mode switch, and `prompts/selfrouter-prompt.md`. Sticky escalation becomes active in this phase — the algorithm closure reads `SessionStore.TryGet` at stage 4 (sticky) before invoking `ISelfRouter.ClassifyAsync` at stage 5.
 
-**Delivers:**
-- `QueueDispatcher.fs` — wraps `IUpstreamClient`; dispatcher loop with `PriorityQueue<QueueEntry, int>` + per-entry `TaskCompletionSource`; `SemaphoreSlim(1)` acquired by dispatcher after dequeue; `CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted, timeoutCts.Token)`; `finally Release()` in all code paths; aging/promotion for low-priority starvation prevention (30s default threshold)
-- `/stats` endpoint — queue depth, active count, `SemaphoreSlim.CurrentCount`, avg wait time
-- `SmartRouter.Tests/QueueTests.fs` — semaphore release-on-cancellation test; priority ordering test (high before low under concurrent load); starvation test with aging; upstream-hang + timeout test
+**Delivers:** Full v2.0 selfrouting path end-to-end; `Routing.Mode` config switch (default "selfrouting", "ml" preserved); selfrouter-prompt.md in git; prompt hash logged at startup; `self_router_classify_latency_ms` in TraceRecord; streaming branch explicitly skips self-classify; `MlDormantTests.fs` integration test for ML path CI coverage.
 
-**Features addressed (FEATURES.md):** SemaphoreSlim(1) on 122B, two-level priority queue, cancellation propagation, 35B served with higher concurrency
+**Addresses:** Primary routing decision (P1); prompt-hash cache (P1); ML dormancy config pattern; DecisionLog `routing_algorithm = "selfrouting"` JSONL field.
 
-**Pitfalls addressed (PITFALLS.md):** PITFALL-5 (cancellation not propagated), PITFALL-8 (SemaphoreSlim leak on cancellation), PITFALL-9 (FIFO bypasses priority), PITFALL-10 (low-priority starvation), PITFALL-11 (upstream hang / semaphore held forever), PITFALL-22 (`[METAL] Insufficient Memory`)
+**Avoids:** QueueDispatcher bypass (Anti-Pattern 1 — named client, not IUpstreamClient); format drift (Pitfall 3 — substring Contains, UNSAFE wins on ambiguity); overconfidence on continuation prompts (Pitfall 1 — continuation keywords in UNSAFE examples block); ML dormant drift (Pitfall 11 — dormant integration test).
 
-**Research flag:** None — the dispatcher pattern is fully specified in PITFALLS.md (PITFALL-9) with code.
+**Research flag:** Moderate complexity (HTTP parsing, LRU cache, mode switch wiring) but JudgeClient is the direct template. No `/gsd:research-phase` needed; implementation plan must explicitly call out streaming self-classify skip.
 
 ---
 
-### Phase 4: Health Probing + Fallback + `graph_indexing` No-Fallback Rule (Correctness Unit)
+### Phase 20: Hermes Integration + Smoke Test
 
-**Rationale:** Health probing is the prerequisite for the fallback decision, and `graph_indexing` routing + no-fallback rule are a single correctness unit (see Features section above). Shipping `graph_indexing` routing without the no-fallback rule creates a window where 122B unavailability silently routes to 35B and produces a poisoned index.
+**Rationale:** All infrastructure from Phases 17–19 must be complete. Phase 20 validates end-to-end: confirms session_id header propagation path, runs smoke test against `~/hermes-agent`, and updates README §5/§7/§9.1.
 
-**Delivers:**
-- `HealthAdapter.fs` — polls `GET /v1/models` per upstream; tracks reachability; distinguishes "temporarily restarting" from "permanently down"
-- `QueueDispatcher` updated — checks `IHealthProbe` before enqueuing for 122B; 122B unavailable + `task=graph_indexing` → return `GraphIndexingMustFail` error; 122B unavailable + other task → reroute to 35B with `IsFallback=true`
-- `/health` endpoint — reports per-upstream reachability
-- Retry policy wired into `QwenUpstreamClient` via `AddResilienceHandler` (2 retries, exponential backoff, transient errors only)
-- Load-aware health probe: poll until upstream responds before router enters service (covers PITFALL-20 cold-start window)
-- Tests: `graph_indexing`-must-fail test; 122B-unavailable-falls-back-to-35B test; retry-on-transient test; health probe timeout test
+**Important limitation:** The current Hermes Agent (`~/hermes-agent`) does NOT send `X-Session-Id` — confirmed by Stack researcher reading `plugins/model-providers/custom/__init__.py` directly. Phase 20 ships IP+User-Agent fingerprint session key as interim fallback for local loopback deployment, with the `resolveSessionKey` helper preferring the explicit header when present (future-proofing for a Hermes PR). A Hermes Agent PR is tracked as post-v2.0 work — it is NOT a v2.0 blocker.
 
-**Features addressed (FEATURES.md):** `graph_indexing` no-fallback rule, backend health probing, retry policy, `/health` endpoint
+**Delivers:** `resolveSessionKey` helper (X-Session-Id preferred, IP+UA fingerprint fallback); smoke test against `~/hermes-agent`; README §5 (routing pipeline + in-memory session semantics), §7 (new config keys: `Routing:Mode`, `Routing:SelfRouter:*`, `Routing:Session:*`), §9.1 (DecisionLog schema); Hermes PR tracked as future work.
 
-**Pitfalls addressed (PITFALLS.md):** PITFALL-20 (cold-start request during load window), PITFALL-21 (port rebind race after kickstart)
+**Addresses:** Hermes integration (P2); operator documentation for restart-clears-sessions behavior; backward-compat with v1.x Hermes clients.
 
-**Research flag:** None — resilience handler pattern in STACK.md; health probe pattern from blueCode `probeModelInfoAsync`.
+**Avoids:** Anti-pattern of forwarding session_id to upstream in classify request body; null-session Pitfall 7.
 
----
-
-### Phase 5: OpenAI Wire Format Compliance + Non-Streaming Path
-
-**Rationale:** Router-generated responses (errors, fallback messages) must emit full OpenAI-compatible envelopes. Bare `{"error": "..."}` JSON breaks the OpenAI SDK. This phase also locks in the `model` echo-back policy (canonical alias, not HF path) and `usage` stub injection.
-
-**Delivers:**
-- Non-streaming `CompleteAsync` path fully wired in `ChatCompletions.fs`
-- Router-generated error responses in `{"error": {"message": "...", "type": "...", "code": ...}}` shape
-- `model` field rewritten to canonical alias (`qwen35b` / `qwen122b`) in all responses
-- `usage` stub injected when upstream omits it
-- OpenAI contract tests: assert all required fields present in both streaming and non-streaming responses; assert `response.model` equals canonical alias
-
-**Features addressed (FEATURES.md):** OpenAI error shape, model field rewriting, `usage` field handling
-
-**Pitfalls addressed (PITFALLS.md):** PITFALL-16 (missing OpenAI response fields), PITFALL-17 (`model` echo-back policy), PITFALL-18 (missing `usage` field)
-
-**Research flag:** None — OpenAI field contract is authoritative; full field list in PITFALLS.md (PITFALL-16).
-
----
-
-### Phase 6: Integration Tests + launchd Deployment
-
-**Rationale:** Integration tests with fake upstream Kestrel servers validate the full request lifecycle. The launchd plist must use the self-contained published binary — `dotnet run` is invalid in a launchd context because PATH is not inherited.
-
-**Delivers:**
-- `IntegrationTests.fs` — fake upstream servers via Kestrel-on-random-port; full routing path; streaming with controlled latency; upstream failure scenarios; concurrent request ordering
-- `SmartRouter.Cli.fsproj` publish configuration (`-r osx-arm64 --self-contained`)
-- `com.ohama.smart-router.plist` — absolute path to published binary; `ASPNETCORE_URLS=http://127.0.0.1:4000`; `StandardErrorPath` to structured log file
-- Operational runbook section in README: restart procedure (`launchctl unload + load -w`, not `kickstart -k`); cold-start window; threshold tuning via `/stats`
-
-**Features addressed (FEATURES.md):** launchd plist, README documentation, load tests, failure tests
-
-**Pitfalls addressed (PITFALLS.md):** PITFALL-23 (launchd PATH / `dotnet` not found), PITFALL-21 (port rebind race — documented in runbook)
-
-**Research flag:** None — launchd plist skeleton in STACK.md; fake upstream pattern in STACK.md.
+**Research flag:** Hermes wire format confirmed (no X-Session-Id currently). The IP+UA fingerprint strategy should be validated against actual Hermes session lifecycle before committing. Consider whether to defer sticky-for-Hermes until the Hermes PR lands and ship Phase 20 as documentation + smoke test only.
 
 ---
 
 ### Phase Ordering Rationale
 
-- Core domain types must exist before any adapter references them (Phase 1 before all others)
-- `QwenUpstreamClient` non-streaming path must exist before `QueueDispatcher` can wrap it (Phase 1 before Phase 3)
-- SSE streaming (Phase 2) and concurrency (Phase 3) have no cross-dependency after Phase 1 — the roadmapper may run them in sequence or merge into a single phase depending on scope
-- Health probing (Phase 4) depends on `QwenUpstreamClient` (Phase 1) and integrates with `QueueDispatcher` (Phase 3) — must follow Phase 3
-- Wire format compliance (Phase 5) depends on the full HTTP pipeline being in place — follows Phase 2
-- Integration tests + deployment (Phase 6) validates the complete system — must be last
-
-**The SSE pitfall cluster cannot be split.** If Phase 2 ships `ResponseHeadersRead` but defers `FlushAsync` to a later phase, streaming is broken in production between phases. The "looks done but isn't" checklist in PITFALLS.md is the exit criterion for Phase 2.
-
-**The concurrency pitfall cluster cannot be split.** If Phase 3 ships `SemaphoreSlim` but defers the priority dispatcher or the linked timeout CTS, the semaphore can be leaked on cancellation and 122B capacity is permanently stuck. All three must be in the same phase.
+- **17 → 18 → 19 → 20** is driven by the `RouterRequest.SessionId` field dependency. SelfRouter's algorithm closure reads `req.SessionId` — this field must exist in the record before Phase 19 can compile cleanly. Phase 18 adds the field.
+- Hard Rules (17) ships first because it is fully independent, provides immediate safety value, and locks the cascade ordering spec in code.
+- The Stack and Features researchers proposed SelfRouter before SessionStore. The Architecture researcher's direct analysis of Domain.fs compile dependencies is authoritative. **Phase 18 (SessionStore) precedes Phase 19 (SelfRouter).**
+- Phase 20 (Hermes) is last because it validates the full stack end-to-end and depends on all three previous phases being complete.
 
 ### Research Flags
 
-All phases have well-documented patterns — no phase requires `/gsd:research-phase` before planning:
+Phases with standard patterns (no `/gsd:research-phase` needed):
+- **Phase 17 (Hard Rules):** Pure Core function, no external APIs, no new technology.
+- **Phase 18 (Session Store):** Proven by JudgeClient LRU cache + existing triple-reg DI registrations.
+- **Phase 19 (SelfRouter):** JudgeClient is the direct implementation template; same HTTP call / LRU cache / fail-open pattern.
 
-- **Phase 1:** All patterns from blueCode (copy verbatim); Core types specified in ARCHITECTURE.md with concrete F# signatures ready to implement
-- **Phase 2:** SSE forwarding fully specified in STACK.md and PITFALLS.md with code snippets
-- **Phase 3:** Priority dispatcher pattern fully specified in PITFALLS.md (PITFALL-9) with code
-- **Phase 4:** Resilience handler in STACK.md; health check pattern from blueCode `probeModelInfoAsync`
-- **Phase 5:** OpenAI field contract in PITFALLS.md (PITFALL-16 to 18); canonical behavior table in FEATURES.md
-- **Phase 6:** launchd plist skeleton in STACK.md; fake upstream pattern in STACK.md
-
----
+Phases needing planning-time validation:
+- **Phase 20 (Hermes Integration):** IP+UA fingerprint session key strategy should be reviewed against actual Hermes session lifecycle. Consider whether to ship Phase 20 as infrastructure + documentation only (deferring sticky-for-Hermes until the Hermes PR lands).
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH (core) / MEDIUM (5 versions) | Core framework, architecture style, and 4 package versions verified in blueCode. `Serilog.AspNetCore`, `Microsoft.Extensions.Http.Resilience`, `FsToolkit.ErrorHandling`, `FSharp.Control.TaskSeq`, and `Microsoft.AspNetCore.Mvc.Testing` are MEDIUM — verify with `dotnet package search` at scaffold time. |
-| Features | HIGH | Competitor analysis grounded in publicly documented behavior. Hermes behavior confirmed from source files. Graphify requirements from graphify_smart_router_prompt.md. Feature dependency graph has no speculative edges. |
-| Architecture | HIGH | Derived directly from blueCode codebase analysis. F# type signatures and `routeRequest` pipeline in ARCHITECTURE.md are implementation-ready, not sketches. Build order respects F# compilation order constraints. |
-| Pitfalls | HIGH | All 27 pitfalls grounded in blueCode operational history on the same hardware/servers or in documented .NET/ASP.NET Core/Expecto behavior. HF-id trap, `[METAL]` crashes, and Expecto auto-discovery failure are all confirmed by blueCode history. |
+| Stack | HIGH | Derived from direct codebase reads (JudgeClient.fs, TeacherLabeler.fs, CompositionRoot.fs, STATE.md). No new packages required. |
+| Features | HIGH | Derived from primary design docs (35b-selfrouting.md, 35b-selfrouting-prompt.md) + locked decisions in PROJECT.md/STATE.md. Streaming/self-classify conflict resolved. |
+| Architecture | HIGH | Derived from actual source files (ChatCompletions.fs, Domain.fs, Routing.fs, Ports.fs, Cli.fsproj compile order). Implementation patterns are direct clones of Phase 16 JudgeClient. |
+| Pitfalls | HIGH | All critical pitfalls grounded in v1.x codebase incidents (Phase 7 pitfall 5, Phase 16 JudgeClient TOCTOU, Phase 14 streaming skip) + design doc §7,10,16. |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **NuGet package versions (5 packages):** Verify at scaffold time with `dotnet package search`. See STACK.md Version Confidence Summary table for exact commands.
+- **Hermes session key strategy:** The IP+UA fingerprint is an interim workaround. Phase 20 planning should decide: ship fingerprint-based session identity, or defer sticky-for-Hermes until the Hermes PR lands and ship Phase 20 as documentation + smoke test only.
 
-- **Graphify `task` field exact string values:** The literals (`"graph_indexing"`, `"compiler_debug"`, etc.) come from `graphify_smart_router_prompt.md`. When Graphify is implemented, confirm these strings match what the client sends — a mismatch silently falls through to the heuristic path.
+- **Streaming + self-classify resolved:** Self-classify is SKIPPED for `stream=true` requests. Hard Rules and sticky escalation still apply. This must be an explicit branch in the Phase 19 implementation plan (`if req.Stream then skip self-classify`).
 
-- **mlx_lm.server `/v1/models` response shape:** HF-id trap defense assumes `data[n].id` exists and path-like ids start with `/`. Verified against blueCode operational history but not via live probe at research time. Run the PITFALL-1 smoke test during Phase 1 integration.
+- **ML dormant test scope:** `MlDormantTests.fs` should be added in Phase 19 (alongside the mode switch wiring) to prevent dormant ML code drift across v2.x phases. The Phase 19 plan should include this test.
 
-- **Priority queue aging threshold (30s default):** Not validated against real Graphify workload patterns. Tune via `/stats` after Phase 3 ships.
+- **DecisionLog schema_version bump:** First new `RoutingReason` case ships in Phase 17. Confirm the current schema_version value in Domain.fs / DecisionLogger.fs and increment it in Phase 17. README §9.1 must be updated in Phase 17, not deferred to Phase 20.
 
----
+- **Hard Rules configurability:** Stack researcher recommends `appsettings.json` array; Architecture researcher recommends hardcoding. Resolved: hardcode in `HardRules.fs` for v2.0 (safety mechanism should not be accidentally misconfigured by operators). Document the source-edit requirement in README §5.
 
 ## Sources
 
-### Primary (HIGH confidence — verified in blueCode codebase)
-- `/Users/ohama/projs/blueCode/src/BlueCode.Cli/Adapters/QwenHttpClient.fs` — HF-id trap defense, 300s timeout, sampling defaults, `probeModelInfoAsync` pattern
-- `/Users/ohama/projs/blueCode/src/BlueCode.Cli/Adapters/Json.fs`, `Logging.fs` — copy-verbatim adapter sources
-- `/Users/ohama/projs/blueCode/src/BlueCode.Cli/BlueCode.Cli.fsproj` — verified: `FSharp.SystemTextJson 1.4.36`, `Serilog 4.3.1`, `Serilog.Sinks.Console 6.1.1`
-- `/Users/ohama/projs/blueCode/tests/BlueCode.Tests/BlueCode.Tests.fsproj` — verified: `Expecto 10.2.1`
-- `/Users/ohama/projs/blueCode/CLAUDE.md` — invariants: `task {}`, `testSequenced`, explicit `rootTests`, stderr routing, `git add <file>`
-- `/Users/ohama/projs/smart-router/.planning/PROJECT.md` — authoritative project constraints, key decisions, out-of-scope items
-- `~/hermes-agent/run_agent.py` (lines 6922–6941) — confirmed `stream=True` default, no `task` field
-- `~/hermes-agent/plugins/model-providers/custom/__init__.py` — confirmed: no `task` field, only `extra_body.options.num_ctx` and `extra_body.think`
+### Primary (HIGH confidence — direct codebase reads)
+- `src/SmartRouter.Cli/Adapters/JudgeClient.fs` — LRU cache pattern, named HttpClient, fail-open verdicts, parse-failure handling (SelfRouter implementation template)
+- `src/SmartRouter.Cli/Adapters/TeacherLabeler.fs` — QueueDispatcher bypass enforcement (named client, not IUpstreamClient)
+- `src/SmartRouter.Cli/Endpoints/ChatCompletions.fs` — existing cascade structure; Point B placement for session store update; streaming branch
+- `src/SmartRouter.Cli/CompositionRoot.fs` — DI registration patterns, triple-reg, RoutingAlgorithmRegistration factory
+- `src/SmartRouter.Core/Domain.fs` — RouterRequest record, RoutingReason DU, exhaustive match enforcement via TreatWarningsAsErrors
+- `src/SmartRouter.Core/Routing.fs` — routeRequest pipeline stages (current v1.x baseline)
+- `src/SmartRouter.Core/Ports.fs` — IUpstreamClient, IHealthProbe port patterns
+- `.planning/STATE.md` — locked decisions: selfrouting pivot, Hard Rules scope, 35B self-route, Routing.Mode flag
+- `.planning/docs/35b-selfrouting.md` — design rationale, §6-7 hard rules, §10 router-must-not-think, §16 sticky escalation, §17 speculative routing
+- `.planning/docs/35b-selfrouting-prompt.md` — SAFE-for-35B framing, continuation-aware UNSAFE examples, max_tokens recommendation
 
-### Secondary (MEDIUM confidence — competitor documentation and .NET docs)
-- LiteLLM routing/scheduler docs — competitor feature matrix (task routing, priority queue, auto-router)
-- vLLM OpenAI-compatible server docs — `extra_body` convention, concurrency model
-- Ollama, llama.cpp, OpenRouter, Portkey docs — feature matrix
-- .NET `HttpClient` documentation — `ResponseHeadersRead`, `IHttpClientFactory`, named clients
-- ASP.NET Core response streaming docs — `FlushAsync`, response body write semantics
-- `SemaphoreSlim` documentation — `WaitAsync` FIFO ordering, `try/finally Release` pattern
-- OpenAI Chat Completions API spec — required response fields, SSE `[DONE]` sentinel
-- F# `task {}` CE documentation — `let!` vs `use!`, cancellation propagation vs `async {}`
-- `Microsoft.Extensions.Http.Resilience` docs — `AddResilienceHandler`, `StandardResilienceOptions`
+### Primary (HIGH confidence — external source reads)
+- `https://raw.githubusercontent.com/NousResearch/hermes-agent/main/plugins/model-providers/custom/__init__.py` — confirmed: no X-Session-Id header, no session_id body field; extra_body carries only `options.num_ctx` + `think=False`
+- `https://raw.githubusercontent.com/NousResearch/hermes-agent/main/run_agent.py` — confirmed: self.session_id is local-only trajectory logging; stream=True default; no session propagation to provider endpoints
 
-### Tertiary (context, not load-bearing)
-- `graphify_smart_router_prompt.md` — Graphify feature requirements (task field values, priority assignments, /stats requirements)
+### Secondary (MEDIUM confidence — phase post-mortems)
+- `.planning/milestones/v1.3-phases/16-122b-as-judge-for-borderline-cases/16-RESEARCH.md` — named HttpClient pitfalls, LRU cache TOCTOU, judge timeout sizing
+- `.planning/milestones/v1.3-phases/16-122b-as-judge-for-borderline-cases/16-SUMMARY.md` — AddHttpClient 2-arg form silently drops BaseAddress in F#; Expecto rootTests explicit list
+- `.planning/milestones/v1.3-phases/14-quality-fallback-and-trace/14-CONTEXT.md` — streaming branch intentionally skipped for quality fallback (confirms pre-routing vs post-routing distinction)
 
 ---
-
-*Research completed: 2026-05-07*
+*Research completed: 2026-05-11*
 *Ready for roadmap: yes*

@@ -1,785 +1,647 @@
-# Architecture Research
+# Architecture Research: v2.0 Selfrouting Integration
 
-**Domain:** F# hexagonal LLM router / gateway
-**Researched:** 2026-05-07
-**Confidence:** HIGH (based on direct analysis of blueCode codebase + PROJECT.md invariants)
+**Domain:** LLM routing proxy — selfrouting layer integration onto hexagonal v1.x
+**Researched:** 2026-05-11
+**Confidence:** HIGH (derived entirely from primary source: the actual v1.x codebase)
 
 ---
 
 ## Standard Architecture
 
-### System Overview
+### System Overview (v2.0 target)
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                        SmartRouter.Cli                                    │
-│                                                                           │
-│  ┌─────────────────┐  ┌───────────────────────────────────────────────┐  │
-│  │    Endpoints/   │  │                Adapters/                      │  │
-│  │                 │  │                                               │  │
-│  │ ChatCompletions │  │  QwenUpstreamClient  (IUpstreamClient impl)  │  │
-│  │ Health          │  │  QueueDispatcher     (priority + semaphore)  │  │
-│  │ Models          │  │  Logging             (Serilog → stderr)      │  │
-│  │ Stats           │  │  Json                (STJ options/helpers)   │  │
-│  └────────┬────────┘  │  Health              (upstream probe)        │  │
-│           │           └───────────────────────────────────────────────┘  │
-│           │                           │                                   │
-│           └──────────────┬────────────┘                                   │
-│                          │  calls ports                                   │
-├──────────────────────────┼───────────────────────────────────────────────┤
-│                   PORTS (interfaces)                                      │
-│            IUpstreamClient   IClock   IHealthProbe                        │
-├──────────────────────────┼───────────────────────────────────────────────┤
-│                        SmartRouter.Core                                   │
-│                                                                           │
-│   Domain.fs          RoutingDecision, Request, ModelId, Priority,         │
-│                       TaskType, RouterError, RoutingReason                │
-│                                                                           │
-│   Routing.fs         routeRequest (pure pipeline):                        │
-│                         tryModelOverride → tryTaskTable → applyHeuristic  │
-│                         → defaultDecision                                 │
-│                                                                           │
-│   Ports.fs           IUpstreamClient, IClock, IHealthProbe (interfaces)  │
-└──────────────────────────────────────────────────────────────────────────┘
-
-External:
-  Hermes / Graphify  →  POST localhost:4000/v1/chat/completions
-  SmartRouter.Cli    →  HTTP POST localhost:800{0,1}/v1/chat/completions (Qwen 35B / 122B)
+┌──────────────────────────────────────────────────────────────────┐
+│         Clients: Telegram / Slack / VSCode                        │
+└─────────────────────────┬────────────────────────────────────────┘
+                           │ HTTP (session_id via X-Session-Id header)
+┌─────────────────────────▼────────────────────────────────────────┐
+│              Hermes Agent  ~/hermes-agent                         │
+└─────────────────────────┬────────────────────────────────────────┘
+                           │ POST /v1/chat/completions
+                           │ X-Session-Id: <uuid>
+┌─────────────────────────▼────────────────────────────────────────┐
+│                       smart-router                                │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │              CorrelationMiddleware (existing)                │ │
+│  │         reads X-Session-Id → HttpContext.Items              │ │
+│  └───────────────────────────┬─────────────────────────────────┘ │
+│                              │                                    │
+│  ┌───────────────────────────▼─────────────────────────────────┐ │
+│  │  ChatCompletions handler — routing cascade                   │ │
+│  │                                                              │ │
+│  │  Stage 0: HardRules.fs — keyword scan → 122B (bypass all)   │ │
+│  │  Stage 1: explicit model override (unchanged)               │ │
+│  │  Stage 2: explicit task field (unchanged)                   │ │
+│  │  Stage 3: SelfRouter.fs — 35B "SAFE?" (1-token, cached)     │ │
+│  │  Stage 4: Sticky — session.current_model==122B → 122B       │ │
+│  │             (reads SessionStore.fs)                          │ │
+│  │  ↓ final decision                                           │ │
+│  │  QueueDispatcher (existing) → Qwen upstream                 │ │
+│  │  ↓ response                                                  │ │
+│  │  SessionStore.Update (actual model used)                    │ │
+│  │  QualityFallback / JudgeCascade (existing, unchanged)       │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  ┌───────────────────────┐  ┌──────────────────────────────────┐  │
+│  │  SessionStore          │  │  ML stack (dormant)              │  │
+│  │  (NEW: in-process      │  │  BgeM3Embedder, MlNetClassifier, │  │
+│  │  ConcurrentDictionary) │  │  RetrainingService, CanaryService│  │
+│  │  Singleton + BgSvc     │  │  All wired; not in request path  │  │
+│  └───────────────────────┘  └──────────────────────────────────┘  │
+└──────────┬─────────────────────────────────────────────────────────┘
+           │
+    ┌──────┴──────┐
+    │ Qwen 35B    │   port 8000
+    │ Qwen 122B   │   port 8001
+    └─────────────┘
 ```
 
 ### Component Responsibilities
 
-| Component | Responsibility | Side of Port |
-|-----------|----------------|-------------|
-| `SmartRouter.Core/Domain.fs` | All DUs, record types, no IO | Core (pure) |
-| `SmartRouter.Core/Routing.fs` | Three-stage routing pipeline, pure functions | Core (pure) |
-| `SmartRouter.Core/Ports.fs` | Interface definitions Core depends on | Core boundary |
-| `SmartRouter.Cli/Adapters/QwenUpstreamClient.fs` | HTTP forwarding to Qwen 35B / 122B, HF-id fix, model probe | Adapter (implements IUpstreamClient) |
-| `SmartRouter.Cli/Adapters/QueueDispatcher.fs` | SemaphoreSlim(1) on 122B, priority queue, cancellation | Adapter (wraps IUpstreamClient) |
-| `SmartRouter.Cli/Adapters/HealthAdapter.fs` | Polls upstream /health, exposes reachability | Adapter (implements IHealthProbe) |
-| `SmartRouter.Cli/Adapters/Logging.fs` | Serilog → stderr wiring | Adapter |
-| `SmartRouter.Cli/Adapters/Json.fs` | STJ options, request/response helpers | Adapter |
-| `SmartRouter.Cli/Endpoints/ChatCompletions.fs` | Parses request, calls routing, dispatches to upstream, SSE forward | Adapter (ASP.NET handler) |
-| `SmartRouter.Cli/Endpoints/Health.fs` | /health liveness + upstream reachability | Adapter |
-| `SmartRouter.Cli/Endpoints/Models.fs` | /v1/models proxy + dedup | Adapter |
-| `SmartRouter.Cli/Endpoints/Stats.fs` | /stats counters/gauges | Adapter |
-| `SmartRouter.Cli/CompositionRoot.fs` | Wires all adapters, DI singleton registration | Adapter |
-| `SmartRouter.Cli/Program.fs` | ASP.NET WebApplication builder, middleware, host | Adapter |
-| `SmartRouter.Tests/` | Expecto unit + integration tests | Test harness |
+| Component | Responsibility | Communicates With |
+|-----------|---------------|-------------------|
+| HardRules.fs (NEW, Core) | Keyword scan; immediate 122B decision | Routing.fs pipeline |
+| SelfRouter.fs (NEW, Cli Adapter) | 1-token "SAFE?" call to 35B; LRU cache by prompt_hash | "selfrouter" named HttpClient |
+| SessionStore.fs (NEW, Cli Adapter) | In-process session state; sticky escalation lookup; cleanup BackgroundService | ChatCompletions handler |
+| CorrelationMiddleware.fs (existing) | Reads X-Session-Id from incoming header; stores in HttpContext.Items | ChatCompletions handler |
+| Routing.fs (existing, extended) | Pure pipeline: Stage 0 HardRules → Stage 1 override → Stage 2 task table → Stage 3 self-classify result | ChatCompletions handler |
+| ChatCompletions.fs (existing, extended) | Runs routing cascade; calls SelfRouter and SessionStore; updates session after response | Routing.fs, SelfRouter, SessionStore, QueueDispatcher |
+| QueueDispatcher (existing) | Concurrency gate for 122B; IUpstreamClient implementation | Qwen HTTP clients |
+| ML stack (existing, dormant) | Retained in DI; not in request path | configureRequestPipeline (already registered) |
 
 ---
 
-## Recommended Project Structure
+## Recommended Project Structure (new files only)
 
 ```
-src/
-├── SmartRouter.Core/
-│   ├── SmartRouter.Core.fsproj
-│   ├── Domain.fs           # All DUs and record types
-│   ├── Routing.fs          # Pure routing pipeline
-│   └── Ports.fs            # IUpstreamClient, IClock, IHealthProbe
-│
-├── SmartRouter.Cli/
-│   ├── SmartRouter.Cli.fsproj
-│   ├── Program.fs          # WebApplication builder, route registration
-│   ├── CompositionRoot.fs  # DI wiring, singleton lifetimes
-│   └── Adapters/
-│       ├── QwenUpstreamClient.fs   # HTTP client, HF-id probe, error mapping
-│       ├── QueueDispatcher.fs      # SemaphoreSlim(1) + priority queue
-│       ├── HealthAdapter.fs        # Upstream health probing
-│       ├── Logging.fs              # Serilog configuration
-│       └── Json.fs                 # STJ options + wire helpers
-│   └── Endpoints/
-│       ├── ChatCompletions.fs      # POST /v1/chat/completions handler
-│       ├── Health.fs               # GET /health
-│       ├── Models.fs               # GET /v1/models
-│       └── Stats.fs                # GET /stats
-│
-tests/
-└── SmartRouter.Tests/
-    ├── SmartRouter.Tests.fsproj
-    ├── RoutingTests.fs             # Pure Core routing decision tests
-    ├── HeuristicTests.fs           # Complexity scoring, keyword detection
-    ├── QueueTests.fs               # Priority, semaphore enforcement
-    ├── IntegrationTests.fs         # Fake upstream Kestrel servers
-    ├── StreamingTests.fs           # Chunk ordering, cancellation
-    └── RouterTests.fs              # [<EntryPoint>] + explicit rootTests list
+src/SmartRouter.Core/
+├── Domain.fs               # add: SelfRouteVerdict DU, SessionState record, SelfRoute RoutingReason case
+├── Ports.fs                # add: ISelfRouter port, ISessionStore port
+├── HardRules.fs            # NEW: pure keyword scan; no IO; no DI
+└── Routing.fs              # extend: Stage 0 HardRules call before Stage 1
+
+src/SmartRouter.Cli/Adapters/
+├── SelfRouter.fs           # NEW: ISelfRouter impl; named "selfrouter" HttpClient; LRU cache
+└── SessionStore.fs         # NEW: ISessionStore impl; ConcurrentDictionary + cleanup BackgroundService
 ```
 
-### Structure Rationale
+### fsproj Compile Order (positions matter in F#)
 
-- **SmartRouter.Core/**: Zero dependency on ASP.NET, HttpClient, Serilog. Enforced by project reference — Core `.fsproj` has no NuGet packages beyond FsToolkit.ErrorHandling.
-- **Adapters/ vs Endpoints/**: Adapters implement ports or provide infrastructure (HTTP client, queue). Endpoints are ASP.NET Minimal API handlers that orchestrate adapters. Both are adapter-side but separated by concern: Endpoints are HTTP-entry-facing, Adapters are infrastructure-facing.
-- **QueueDispatcher.fs as separate adapter**: The semaphore and priority queue are not inside `QwenUpstreamClient` — they are a distinct adapter wrapping any `IUpstreamClient`. This preserves testability: you can inject a fake `IUpstreamClient` and test queue ordering without needing a real HTTP server.
-- **RouterTests.fs with explicit rootTests**: Mirrors blueCode pattern to avoid Expecto auto-discovery unreliability (burned 4 executors in blueCode across v1.0 + v1.1).
-
----
-
-## Core Domain Types
-
-These are the concrete F# type signatures Core needs. Everything below lives in `SmartRouter.Core/Domain.fs`.
-
-```fsharp
-module SmartRouter.Core.Domain
-
-open System
-
-/// The two local Qwen models the router can target.
-/// DU forces exhaustive match — adding a third model is a compile error in
-/// all downstream functions until they handle the new case.
-type ModelId =
-    | Qwen35B   // localhost:8000, fast, lower quality
-    | Qwen122B  // localhost:8001, slow, higher quality; concurrency cap = 1
-
-/// Request priority for the 122B queue.
-/// High: graph_indexing, compiler_debug, architecture_analysis
-/// Low: dependency_analysis, reasoning, and heuristic-routed requests
-type Priority =
-    | High
-    | Low
-
-/// Why the routing decision was made. Carried in RoutingDecision for logging
-/// and stats; purely informational — adapters log it, Core produces it.
-type RoutingReason =
-    | ExplicitModelOverride of requestedAlias: string
-    | ExplicitTask          of taskType: TaskType
-    | Heuristic             of score: int
-    | Default
-
-/// Graphify task identifiers. DU membership is the authoritative task list.
-/// Adding a task requires updating the routing table in Routing.fs — exhaustive match.
-type TaskType =
-    | GraphIndexing
-    | CompilerDebug
-    | ArchitectureAnalysis
-    | DependencyAnalysis
-    | Reasoning
-    | Retrieval
-    | Summary
-
-/// Complete routing decision returned by Core.
-/// Priority is included because it is a *property of the decision*, not an
-/// adapter concern. The QueueDispatcher reads Priority to place the request
-/// in the correct queue tier. Core decides Priority; adapter enforces it.
-type RoutingDecision =
-    { Target   : ModelId
-      Priority : Priority
-      Reason   : RoutingReason
-      /// true = 122B unavailable and we fell back to 35B.
-      /// false = normal routing.
-      /// Never true for graph_indexing (that path must error).
-      IsFallback : bool }
-
-/// Incoming request from a consumer (Hermes / Graphify).
-/// All fields are optional except Messages.
-/// UnknownFields carries any unrecognized JSON keys so the adapter can
-/// forward them upstream verbatim (PROJECT.md: "Preserve unknown fields").
-type RouterRequest =
-    { Messages     : Message list
-      ModelOverride : string option   // "35b" | "122b" | any alias
-      Task          : string option   // raw task string; Routing.fs parses to TaskType
-      Stream        : bool
-      Temperature   : float option
-      TopP          : float option
-      MaxTokens     : int option
-      UnknownFields : Map<string, System.Text.Json.JsonElement> }
-
-/// Errors the Core routing layer can produce.
-/// Does NOT include HTTP errors — those are adapter-side (UpstreamError).
-type RouterError =
-    | InvalidRequest    of detail: string
-    | UnsupportedTask   of raw: string
-    | ModelUnavailable  of ModelId * detail: string
-    | GraphIndexingMustFail           // graph_indexing with 122B unavailable: loud fail required
-
-/// LLM wire message (same shape as blueCode; needed by IUpstreamClient port).
-type MessageRole = System | User | Assistant
-
-type Message = { Role: MessageRole; Content: string }
+Existing order (abbreviated):
+```
+QualityCheck.fs       (position 4)
+BorderlineClassifier.fs  (position 5)
+JudgeClient.fs        (position 6)
+...
+RoutingAlgorithm.fs   (position ~13)
+...
+ChatCompletions.fs    (position 14)
+CompositionRoot.fs    (position 16)
+Program.fs            (position 17)
 ```
 
----
+New file insertions:
 
-## Core Routing Types and Pipeline
-
-These live in `SmartRouter.Core/Routing.fs`. Every function is pure — no IO, no logging.
-
-```fsharp
-module SmartRouter.Core.Routing
-
-open SmartRouter.Core.Domain
-
-// ── Stage 1: explicit model override ─────────────────────────────────────────
-
-/// Parses a model alias string to ModelId.
-/// Returns Some ModelId on match, None on unknown alias.
-/// Pure; no mutation.
-let tryParseModelAlias (s: string) : ModelId option =
-    match s.ToLowerInvariant() with
-    | "35b" | "qwen35b" | "qwen-35b" -> Some Qwen35B
-    | "122b" | "qwen122b" | "qwen-122b" -> Some Qwen122B
-    | _ -> None
-
-/// Stage 1: if the request carries a recognizable model alias, return a
-/// decision immediately. Short-circuits stages 2 and 3.
-let tryModelOverride (req: RouterRequest) : RoutingDecision option =
-    req.ModelOverride
-    |> Option.bind tryParseModelAlias
-    |> Option.map (fun model ->
-        { Target     = model
-          Priority   = if model = Qwen122B then Low else Low
-          Reason     = ExplicitModelOverride(req.ModelOverride |> Option.defaultValue "")
-          IsFallback = false })
-
-// ── Stage 2: explicit task table ─────────────────────────────────────────────
-
-/// Parse raw task string to TaskType. Returns None on unknown task.
-/// Adapter should surface UnsupportedTask error for unknown strings.
-let tryParseTaskType (raw: string) : TaskType option =
-    match raw.ToLowerInvariant() with
-    | "graph_indexing"        -> Some GraphIndexing
-    | "compiler_debug"        -> Some CompilerDebug
-    | "architecture_analysis" -> Some ArchitectureAnalysis
-    | "dependency_analysis"   -> Some DependencyAnalysis
-    | "reasoning"             -> Some Reasoning
-    | "retrieval"             -> Some Retrieval
-    | "summary"               -> Some Summary
-    | _                       -> None
-
-/// Authoritative task→model+priority table. Exhaustive over TaskType DU.
-/// NEVER add | _ -> here — adding a TaskType case must be a compile error.
-let taskToDecision: TaskType -> RoutingDecision =
-    function
-    | GraphIndexing ->
-        { Target = Qwen122B; Priority = High
-          Reason = ExplicitTask GraphIndexing; IsFallback = false }
-    | CompilerDebug ->
-        { Target = Qwen122B; Priority = High
-          Reason = ExplicitTask CompilerDebug; IsFallback = false }
-    | ArchitectureAnalysis ->
-        { Target = Qwen122B; Priority = High
-          Reason = ExplicitTask ArchitectureAnalysis; IsFallback = false }
-    | DependencyAnalysis ->
-        { Target = Qwen122B; Priority = Low
-          Reason = ExplicitTask DependencyAnalysis; IsFallback = false }
-    | Reasoning ->
-        { Target = Qwen122B; Priority = Low
-          Reason = ExplicitTask Reasoning; IsFallback = false }
-    | Retrieval ->
-        { Target = Qwen35B; Priority = Low
-          Reason = ExplicitTask Retrieval; IsFallback = false }
-    | Summary ->
-        { Target = Qwen35B; Priority = Low
-          Reason = ExplicitTask Summary; IsFallback = false }
-
-/// Stage 2: if the request carries a recognized task string, return the
-/// authoritative table decision. Returns None if task field absent or unknown.
-let tryTaskTable (req: RouterRequest) : Result<RoutingDecision option, RouterError> =
-    match req.Task with
-    | None -> Ok None
-    | Some raw ->
-        match tryParseTaskType raw with
-        | Some tt -> Ok(Some(taskToDecision tt))
-        | None    -> Error(UnsupportedTask raw)
-
-// ── Stage 3: heuristic ───────────────────────────────────────────────────────
-
-/// Complexity keywords that nudge toward 122B.
-/// Mirrors Graphify-relevant terms; extend without signature change.
-let private complexKeywords =
-    [ "recursive"; "dependency"; "lowering"; "mlir"; "llvm"; "compiler"
-      "architecture"; "type inference"; "graph relation"; "closure conversion"
-      "cross-file"; "multi-file"; "reasoning"; "inference"; "optimization"
-      "refactor"; "redesign"; "abstract"; "formal"; "proof" ]
-
-/// Compute a numeric complexity score from the request.
-/// Pure: deterministic from input alone.
-let scoreComplexity (req: RouterRequest) : int =
-    let allText =
-        req.Messages
-        |> List.map (fun m -> m.Content)
-        |> String.concat " "
-        |> fun s -> s.ToLowerInvariant()
-
-    let totalChars = allText.Length
-    let msgCount   = req.Messages |> List.length
-    let hasCode    = allText.Contains("```")
-
-    let keywordScore =
-        complexKeywords
-        |> List.filter allText.Contains
-        |> List.length
-
-    let lengthScore =
-        if   totalChars > 8000 then 4
-        elif totalChars > 4000 then 2
-        elif totalChars > 2000 then 1
-        else 0
-
-    let msgScore   = if msgCount > 6 then 2 elif msgCount > 3 then 1 else 0
-    let codeScore  = if hasCode then 1 else 0
-
-    keywordScore + lengthScore + msgScore + codeScore
-
-/// Stage 3: heuristic routing.
-/// Threshold = 3: below → 35B (aggressive 35B preference for ambiguous cases).
-/// Hermes path always lands here (no task field).
-let applyHeuristic (req: RouterRequest) : RoutingDecision =
-    let score = scoreComplexity req
-    let target = if score >= 3 then Qwen122B else Qwen35B
-    { Target     = target
-      Priority   = Low
-      Reason     = Heuristic score
-      IsFallback = false }
-
-// ── Pipeline entry point ──────────────────────────────────────────────────────
-
-/// Three-stage pure routing pipeline.
-/// Returns Ok RoutingDecision or Error RouterError.
-/// No IO. No logging. No clock.
-let routeRequest (req: RouterRequest) : Result<RoutingDecision, RouterError> =
-    match tryModelOverride req with
-    | Some decision -> Ok decision
-    | None ->
-        match tryTaskTable req with
-        | Error e          -> Error e
-        | Ok (Some decision) -> Ok decision
-        | Ok None          -> Ok (applyHeuristic req)
+**SmartRouter.Core.fsproj** — Core files compile in DU dependency order:
+```
+Domain.fs             (existing — add SelfRouteVerdict DU, SessionState, SelfRoute reason)
+Ports.fs              (existing — add ISelfRouter, ISessionStore)
+HardRules.fs          (NEW — insert after Ports.fs; depends only on Domain.fs)
+ML.fs                 (existing — unchanged; after HardRules.fs)
+MLPorts.fs            (existing)
+CanaryPorts.fs        (existing)
+RetrainingPorts.fs    (existing)
+Routing.fs            (existing — extend to call HardRules; must come after HardRules.fs)
 ```
 
----
-
-## Core Ports
-
-These live in `SmartRouter.Core/Ports.fs`. All interfaces; no implementations.
-
-```fsharp
-module SmartRouter.Core.Ports
-
-open System.Threading
-open System.Threading.Tasks
-open FsToolkit.ErrorHandling
-open SmartRouter.Core.Domain
-
-/// Upstream LLM server contract.
-/// The adapter layer implements this; Core only calls it via RoutingDecision.Target.
-/// Returns streaming body as an async sequence — see SSE Seam section below.
-/// For non-streaming calls, the sequence emits exactly one element (the full body).
-type IUpstreamClient =
-    /// Non-streaming call: returns the full response body string.
-    abstract member CompleteAsync:
-        req: RouterRequest
-        -> target: ModelId
-        -> ct: CancellationToken
-        -> Task<Result<string, RouterError>>
-
-    /// Streaming call: returns a sequence of raw SSE chunks (byte arrays or strings).
-    /// Sequence is lazy — each element is read as it arrives from the upstream server.
-    /// The endpoint handler writes each chunk to HttpContext.Response as it arrives.
-    abstract member StreamAsync:
-        req: RouterRequest
-        -> target: ModelId
-        -> ct: CancellationToken
-        -> IAsyncEnumerable<Result<string, RouterError>>
-
-/// Clock abstraction — needed by Stats adapter to record timestamps.
-/// Core does not currently call IClock, but it is defined here so adapters
-/// can depend on it via DI without touching System.DateTime directly.
-type IClock =
-    abstract member UtcNow: unit -> System.DateTimeOffset
-
-/// Upstream health probe — called by HealthAdapter, not by Core routing.
-/// Defined in Ports.fs so it can be injected into the Health endpoint
-/// without creating a dependency on the adapter assembly.
-type IHealthProbe =
-    abstract member IsReachableAsync:
-        target: ModelId
-        -> ct: CancellationToken
-        -> Task<bool>
+**SmartRouter.Cli.fsproj** — Adapter order:
 ```
+Adapters/Json.fs
+Adapters/Logging.fs
+Adapters/ColdStart.fs
+Adapters/QualityCheck.fs
+Adapters/BorderlineClassifier.fs
+Adapters/JudgeClient.fs
+Adapters/DecisionLogger.fs
+Adapters/DecisionLogWriter.fs
+Adapters/TraceLogger.fs
+Adapters/CorrelationMiddleware.fs
+Adapters/RoutingAlgorithm.fs
+Adapters/SelfRouter.fs      ← NEW: insert here (after RoutingAlgorithm, before MlNetClassifier)
+Adapters/SessionStore.fs    ← NEW: insert here (after SelfRouter.fs)
+Adapters/MlNetClassifier.fs
+...
+Endpoints/ChatCompletions.fs  ← consumes ISelfRouter, ISessionStore; must come after both
+CompositionRoot.fs            ← registers SelfRouter + SessionStore in DI
+Program.fs
+```
+
+**Rationale for SelfRouter before MlNetClassifier:** SelfRouter depends only on Domain.fs
+and the "selfrouter" named HttpClient. No dependency on ML types. Placing it early avoids
+any cross-cutting compile issue when ChatCompletions (position 14) needs to open it.
 
 ---
 
 ## Architectural Patterns
 
-### Pattern 1: QueueDispatcher Wraps IUpstreamClient
+### Pattern 1: Hard Rules — Pure Core Function, No DI
 
-**What:** A separate adapter `QueueDispatcher` holds the `SemaphoreSlim(1)` for 122B and the two-level priority queue. It implements `IUpstreamClient` and wraps the real `QwenUpstreamClient` (also `IUpstreamClient`). The endpoint sees only `IUpstreamClient`; it does not know about the queue.
+**What:** `HardRules.fs` in `SmartRouter.Core` is a single pure function
+`applyHardRules : RouterRequest -> RoutingDecision option`. Returns `Some decision` if any
+keyword matches the prompt content; `None` otherwise. Called as Stage 0 in `Routing.routeRequest`.
 
-**Why here and not inside QwenUpstreamClient:** Separation of concerns. `QwenUpstreamClient` is responsible for HTTP mechanics (HF-id probe, error mapping, streaming). `QueueDispatcher` is responsible for concurrency policy. Swapping the concurrency policy doesn't touch the HTTP layer and vice versa. Also: unit tests for queue ordering don't need a real HTTP server — inject a fake `IUpstreamClient`.
+**Why this placement:** ARCH-01 mandates Core is BCL-only. Hard rules are keyword string
+comparisons — no IO, no DI, no clock. The function belongs in Core where it can be
+unit-tested without spinning up a host.
 
-**DI wiring in CompositionRoot:**
+**What:** Calling convention in `Routing.fs`:
 ```fsharp
-let qwenClient    = QwenUpstreamClient.create config
-let queueDispatch = QueueDispatcher.create qwenClient  // wraps it
-// Endpoints receive queueDispatch (IUpstreamClient)
+let routeRequest config algorithm req =
+    match HardRules.applyHardRules req with
+    | Some decision -> Ok decision          // Stage 0: bypass everything
+    | None ->
+        match tryModelOverride req with     // Stage 1 (unchanged)
+        ...
+        | Ok None -> Ok (algorithm config req)   // Stage 3: self-classify (via algorithm closure)
 ```
 
-**Queue structure:**
+**Keyword list:** Stored as a `ReadOnlyMemory<string>` array or `Set<string>` constant in
+HardRules.fs. Not configurable at runtime (locked decision: keyword list, simple match, NOT regex).
+Operator modifies the list by editing the source; this is intentional. Keywords:
+`LLVM`, `MLIR`, `compiler`, `segfault`, `optimization`, `concurrency` (and case-insensitive
+variants per the project docs).
+
+### Pattern 2: SelfRouter — Mirrors JudgeClient Pattern Exactly
+
+**What:** `SelfRouter.fs` is the ISelfRouter adapter implementing the 35B self-classify call.
+Architecture is a direct clone of Phase 16 JudgeClient:
+- Named HttpClient `"selfrouter"` registered in CompositionRoot with `AddResilienceHandler`
+- LRU cache keyed by `prompt_hash` (SHA-256 of concatenated message content — same `computePromptHash` helper already in ChatCompletions.fs)
+- 1-token response: `max_tokens=4` (slightly more than JudgeClient's `1` to handle "SAFE"/"UNSAFE" as tokens)
+- `temperature=0.0`, `stream=false`
+- Parse: if response contains "SAFE" → `SelfRouteVerdict.Safe`; if "UNSAFE" or unrecognized → `SelfRouteVerdict.Unsafe` (safety bias: ambiguous → 122B)
+- On HTTP failure or timeout: `SelfRouteVerdict.Unsafe` (fail-safe: misrouting to 122B is cheaper than misrouting to 35B on a hard task)
+
+**Named HttpClient decision:** Use a **new** named client `"selfrouter"` rather than reusing `upstream35b`. Rationale:
+- `upstream35b` has a 300-second timeout designed for inference; selfrouting classification must be fast (5-10s timeout or it defeats the purpose)
+- `upstream35b` has 3-retry AddResilienceHandler; selfrouter wants fail-fast (1 retry max, 200ms) on the classification path — a slow selfrouter is worse than no selfrouter
+- `upstream35b` is registered pointing at `Upstreams.Model35B`; selfrouter shares the same `BaseAddress` but with its own timeout and retry profile
+- This exactly mirrors the judge/teacher split: separate named clients for separate latency/retry profiles
+
+**Interface:**
 ```fsharp
-// Inside QueueDispatcher.fs (adapter, not Core)
-type private QueueItem =
-    { Request    : RouterRequest
-      Target     : ModelId
-      Priority   : Priority
-      Ct         : CancellationToken
-      Completion : TaskCompletionSource<Result<string, RouterError>> }
+// In SmartRouter.Core.Ports
+type SelfRouteVerdict = Safe | Unsafe | SelfRouterFailed of reason: string
 
-// Two-level FIFO: high items dequeued before low items
-type private PriorityQueue =
-    { High : Queue<QueueItem>
-      Low  : Queue<QueueItem> }
-
-// The one semaphore for 122B
-let private sem122B = new SemaphoreSlim(1, 1)
+type ISelfRouter =
+    abstract member ClassifyAsync :
+        promptHash: string * promptText: string * ct: CancellationToken
+        -> Task<SelfRouteVerdict>
 ```
 
-**Priority comes from Core:** `RoutingDecision.Priority` is set by `Routing.routeRequest`. The endpoint extracts it from the decision and passes it when enqueuing. Core declares the priority; the adapter enforces it.
+**Registration:** Mirrors JudgeClient conditional registration pattern. If `Routing.SelfRouter.Enabled=true` (opt-in config flag; default true for v2.0):
+- Register concrete `SelfRouter` singleton + `ISelfRouter` alias
+- Register named "selfrouter" HttpClient with 5s timeout, 1 retry at 200ms
 
-### Pattern 2: SSE Pass-Through — The Streaming Seam
+### Pattern 3: SessionStore — Singleton + Cleanup BackgroundService (Triple-Reg)
 
-**The problem:** Core must never see `HttpResponseMessage` or `HttpContext`. But streaming SSE requires piping bytes from the upstream response body directly to the downstream response stream. How does streaming cross the port boundary cleanly?
+**What:** `SessionStore.fs` is the `ISessionStore` adapter. In-process state only: a
+`ConcurrentDictionary<string, SessionState>` where the key is `session_id` from the
+`X-Session-Id` header. No external storage (Redis, SQLite) for v2.0 — local Mac deployment
+with no horizontal scaling requirement.
 
-**Solution:** `IUpstreamClient.StreamAsync` returns `IAsyncEnumerable<Result<string, RouterError>>`. Each element is one SSE chunk (the raw `data: {...}\n\n` line as a string). The endpoint handler consumes the async enumerable and writes each chunk to `HttpContext.Response` immediately, flushing after each write.
-
-**Core's role:** Zero. Core calls `routeRequest`, returns a `RoutingDecision`. Core never touches streaming. The endpoint does this:
-
+**SessionState record** (in `SmartRouter.Core.Domain`):
 ```fsharp
-// ChatCompletions.fs (Endpoint, adapter side)
-let handler (routing: IRoutingService) (upstream: IUpstreamClient)
-            (ctx: HttpContext) : Task =
+type SessionState = {
+    CurrentModel  : ModelId          // last model that served a response
+    LastActivityAt: DateTimeOffset   // for TTL eviction
+}
+```
+
+**Interface** (in `SmartRouter.Core.Ports`):
+```fsharp
+type ISessionStore =
+    abstract member TryGet   : sessionId: string -> SessionState option
+    abstract member Update   : sessionId: string -> model: ModelId -> unit
+    abstract member Cleanup  : maxAge: TimeSpan -> unit   // called by BackgroundService
+```
+
+**DI registration:** Triple-reg pattern mirrors `DecisionLogWriter`/`TraceLogger`/`HardCaseDatasetWriter`:
+```fsharp
+// Concrete singleton (owns the ConcurrentDictionary + Cleanup logic)
+services.AddSingleton<SessionStore>(fun _sp -> SessionStore(ttl, logger))
+// ISessionStore alias — what ChatCompletions resolves
+services.AddSingleton<ISessionStore>(fun sp ->
+    sp.GetRequiredService<SessionStore>() :> ISessionStore)
+// BackgroundService leg — periodic Cleanup
+services.AddHostedService<SessionStore>(fun sp ->
+    sp.GetRequiredService<SessionStore>())
+```
+
+**SessionStore is NOT a Channel-backed writer.** DecisionLogWriter uses Channel + BackgroundService
+because writes need to be fire-and-forget off the hot path. SessionStore.Update is a dictionary
+write — cheap, synchronous, no need for a channel. The BackgroundService leg only handles
+periodic TTL eviction (call `Cleanup` every N minutes), not write buffering.
+
+**TTL:** Configurable via `Routing.Session.TtlMinutes` (default 60). Sessions idle longer than TTL are evicted by the BackgroundService. Cleanup runs every 10 minutes (hardcoded).
+
+### Pattern 4: Session ID — Header Mechanism (Not Body Field)
+
+**Recommendation: `X-Session-Id` header read in `CorrelationMiddleware.fs`.**
+
+**Rationale:**
+- `task` field (body convention) maps to a domain concept (TaskType DU). Session ID is cross-cutting infrastructure, not a domain field — it belongs in the header tier alongside `X-Correlation-Id`.
+- CorrelationMiddleware already reads `HttpContext.Items` and populates cross-cutting state. Extending it to also read `X-Session-Id` is a one-line addition that keeps all header-extraction logic in one file.
+- The `RouterRequestWire` body type uses `[<JsonExtensionData>]` to capture unknown fields. Adding `session_id` as a body field would force a schema change visible to all callers, including clients that don't understand sessions.
+- Hermes integration: Hermes Agent controls request headers; adding a header to its outgoing requests is simpler than adding a body field (no JSON schema change required on either side).
+
+**CorrelationMiddleware extension:**
+```fsharp
+let sessionIdMiddleware (ctx: HttpContext) (next: RequestDelegate) : Task =
     task {
-        // 1. Parse request
-        let! body = ctx.Request.ReadFromJsonAsync<RouterRequestWire>(...)
-        let req = mapWireToRequest body
-
-        // 2. Route (pure, no IO)
-        match SmartRouter.Core.Routing.routeRequest req with
-        | Error (UnsupportedTask raw) ->
-            ctx.Response.StatusCode <- 400
-            do! ctx.Response.WriteAsJsonAsync({| error = $"unknown task: {raw}" |})
-        | Error (GraphIndexingMustFail) ->
-            ctx.Response.StatusCode <- 503
-            do! ctx.Response.WriteAsJsonAsync({| error = "graph_indexing: 122B unavailable, no fallback" |})
-        | Error e ->
-            ctx.Response.StatusCode <- 400
-            do! ctx.Response.WriteAsJsonAsync({| error = string e |})
-        | Ok decision ->
-
-        // 3. Log decision (Serilog — adapter side only)
-        log.Information("Routing {Target} reason={Reason} priority={Priority}",
-                        decision.Target, decision.Reason, decision.Priority)
-
-        // 4. Dispatch
-        if req.Stream then
-            ctx.Response.ContentType <- "text/event-stream"
-            ctx.Response.Headers["Cache-Control"] <- "no-cache"
-            ctx.Response.Headers["X-Accel-Buffering"] <- "no"
-            let ct = ctx.RequestAborted
-
-            let chunks = upstream.StreamAsync(req, decision.Target, ct)
-            let mutable enumerator = chunks.GetAsyncEnumerator(ct)
-            try
-                let mutable go = true
-                while go do
-                    let! hasNext = enumerator.MoveNextAsync()
-                    if not hasNext then
-                        go <- false
-                    else
-                        match enumerator.Current with
-                        | Ok chunk ->
-                            do! ctx.Response.WriteAsync(chunk, ct)
-                            do! ctx.Response.Body.FlushAsync(ct)
-                        | Error e ->
-                            // log and break; partial SSE already sent
-                            log.Error("Upstream stream error: {E}", e)
-                            go <- false
-            finally
-                do! enumerator.DisposeAsync()
-        else
-            match! upstream.CompleteAsync(req, decision.Target, ctx.RequestAborted) with
-            | Ok body ->
-                ctx.Response.ContentType <- "application/json"
-                do! ctx.Response.WriteAsync(body, ctx.RequestAborted)
-            | Error e ->
-                ctx.Response.StatusCode <- 502
-                do! ctx.Response.WriteAsJsonAsync({| error = string e |})
+        let cid = Guid.NewGuid().ToString("N")
+        ctx.Items.[CorrelationIdKey] <- cid
+        // NEW: extract X-Session-Id; store in Items for ChatCompletions to read
+        let sessionId =
+            match ctx.Request.Headers.TryGetValue("X-Session-Id") with
+            | true, sv when sv.Count > 0 && not (String.IsNullOrWhiteSpace(sv.[0])) -> sv.[0]
+            | _ -> ""   // empty = no session (stateless request; sticky skipped)
+        ctx.Items.[SessionIdKey] <- sessionId
+        use _ = LogContext.PushProperty("correlation_id", cid)
+        ...
     }
 ```
 
-**In QwenUpstreamClient.StreamAsync:** Uses `HttpCompletionOption.ResponseHeadersRead` so the response body is not buffered. Reads the response stream line-by-line and yields each non-empty SSE line as an element.
+**Alternative considered:** Add `session_id` to `RouterRequestWire` body (mirrors `task` field).
+**Why not:** Schema change required; header approach is cleaner for cross-cutting concerns; no
+motivation to expose session state to the LLM upstream (session_id is router-internal).
 
+### Pattern 5: ML Code — Gate Behind Config Flag (Not Delete)
+
+**Recommendation: Gate ML routing via `Routing.Mode = "selfrouting" | "ml"` config key. Default: `"selfrouting"` for v2.0.**
+
+**Rationale:**
+- Deleting ML code removes the investment in Phases 6–9 (embedder, classifier, retraining, canary). The ML training dataset and model artifacts (`datasets/training-set.jsonl`, `models/router.zip`) represent operational history.
+- The `RoutingAlgorithmRegistration` pattern already exists for swapping algorithms at startup. In v1.x it was heuristic vs ML; in v2.0 it becomes selfrouting vs ML.
+- A config flag means rollback to ML is one `appsettings.json` edit + restart — no rebuild.
+- The `makeApplyML` closure and all ML DI registrations remain in `configureRequestPipeline`. Only `RoutingAlgorithmRegistration.Algorithm` changes: when `Routing.Mode = "selfrouting"`, the `algorithm` function becomes the selfrouting closure (wrapping `ISelfRouter`) rather than `ML.makeApplyML`.
+
+**CompositionRoot change:** In the `RoutingAlgorithmRegistration` factory lambda:
 ```fsharp
-// QwenUpstreamClient.fs (Adapter)
-member _.StreamAsync(req, target, ct) =
-    // Returns IAsyncEnumerable<Result<string, RouterError>>
-    asyncSeq {
-        let url = targetToUrl target
-        use reqMsg = buildHttpRequest req url
-        use! resp = httpClient.SendAsync(reqMsg, HttpCompletionOption.ResponseHeadersRead, ct)
-        if not resp.IsSuccessStatusCode then
-            yield Error(ModelUnavailable(target, $"HTTP {int resp.StatusCode}"))
-        else
-            use stream = resp.Content.ReadAsStream()
-            use reader = new StreamReader(stream)
-            let mutable isDone = false
-            while not isDone && not ct.IsCancellationRequested do
-                let! line = reader.ReadLineAsync(ct)  // or ReadLineAsync()
-                match line with
-                | null -> isDone <- true
-                | ""   -> ()   // skip blank lines between chunks
-                | s    -> yield Ok s
-    }
-    // Note: asyncSeq from FSharp.Control.TaskSeq or manual IAsyncEnumerable implementation
+services.AddSingleton<RoutingAlgorithmRegistration>(
+    Func<IServiceProvider, RoutingAlgorithmRegistration>(fun sp ->
+        let mode = config.["Routing:Mode"] |> Option.ofObj |> Option.defaultValue "selfrouting"
+        match mode.ToLowerInvariant() with
+        | "ml" ->
+            // existing ML closure (unchanged)
+            { Algorithm = ML.makeApplyML ...; Name = "ml"; ModelVersion = baselineVersion }
+        | _ ->  // "selfrouting" or anything else
+            let selfRouter = sp.GetRequiredService<ISelfRouter>()
+            let sessionStore = sp.GetRequiredService<ISessionStore>()
+            { Algorithm = makeSelfRoutingAlgorithm selfRouter sessionStore
+              Name = "selfrouting"
+              ModelVersion = "selfrouting-v1" }))
 ```
 
-**Key constraint:** `HttpResponseMessage` never crosses the port boundary. The streaming enumerable carries only `string` (the raw SSE line). The port signature `IAsyncEnumerable<Result<string, RouterError>>` is purely F# types — no ASP.NET or HttpClient types.
+**`makeSelfRoutingAlgorithm`** lives in a new `Adapters/SelfRoutingAlgorithm.fs` or is inlined
+into `SelfRouter.fs`. It returns a `RoutingAlgorithm` (i.e., `RoutingConfig -> RouterRequest -> RoutingDecision`).
+The Stage 4 sticky check is inside this closure (reads `sessionStore.TryGet req.SessionId`).
 
-### Pattern 3: Fallback Policy in Endpoint, Not Core
-
-**What:** When 122B is unavailable, Core's routing decision still says `Target = Qwen122B`. The endpoint (or QueueDispatcher) checks `IHealthProbe.IsReachableAsync` and decides whether to fall back to 35B or return an error.
-
-**Why not in Core:** The health probe is I/O (network call). Core is pure. The fallback rule is:
-- `graph_indexing` + 122B unavailable → return 503 (no fallback)
-- All other 122B routes + 122B unavailable → reroute to 35B + mark `IsFallback = true`
-
-**Implementation choice:** This lives in the `ChatCompletions` endpoint handler (or in `QueueDispatcher.CompleteAsync`). The cleanest place is `QueueDispatcher` because it already owns the 122B availability concern and wraps all upstream calls. QueueDispatcher checks health before enqueuing for 122B; if unhealthy and the reason is `GraphIndexingMustFail`, it returns the error immediately.
-
-### Pattern 4: Stats Counters in a Singleton Adapter
-
-**What:** Mutable counters (requests/sec, queue depth, active requests, average latency) live in a DI-registered singleton `StatsCollector` class. Endpoints increment counters; the Stats endpoint reads them.
-
-**Why not in Core:** Mutable state is inherently side-effecting. Atomic counter increments, `Interlocked` operations, and `Stopwatch` are adapter concerns.
-
-**Interface in Core (optional):** If Core ever needed to emit timing data, an `IStatsCollector` port could be defined. For v1, Core produces no timing data — all timing is measured in the adapter layer (endpoint handler wraps the upstream call with `Stopwatch`).
+**Note:** When `Routing.Mode = "selfrouting"`, the ML wiring (BgeM3Embedder, PredictionEnginePool,
+RetrainingService, CanaryService) is still registered and still runs. The ML model still retrains
+on schedule from the teacher-labeled dataset. Only the `RoutingAlgorithmRegistration.Algorithm`
+function differs — the ML machinery runs "behind the scenes" accumulating data for eventual
+reactivation or offline analysis.
 
 ---
 
 ## Data Flow
 
-### Request Lifecycle (Text Sequence Diagram)
+### Selfrouting Request Flow (v2.0)
 
 ```
-Hermes / Graphify
-    │
-    │  POST /v1/chat/completions  (OpenAI-compat JSON, stream=true)
-    ▼
-ChatCompletions.fs  (Endpoint handler)
-    │
-    │  1. Parse raw JSON body → RouterRequest
-    │     (UnknownFields map preserves non-OpenAI keys for upstream forwarding)
-    │
-    │  2. SmartRouter.Core.Routing.routeRequest(req)
-    │     Pure function, no IO:
-    │       tryModelOverride → None
-    │         tryTaskTable  → None (Hermes has no task field)
-    │           applyHeuristic → RoutingDecision { Target=Qwen35B; Priority=Low; Reason=Heuristic(2) }
-    │     Returns: Ok RoutingDecision
-    │
-    │  3. Log decision via Serilog (adapter side)
-    │
-    │  4. req.Stream = true → set Content-Type: text/event-stream, no-cache headers
-    │
-    │  5. IUpstreamClient.StreamAsync(req, decision.Target, ctx.RequestAborted)
-    │        ← this is QueueDispatcher wrapping QwenUpstreamClient
-    ▼
-QueueDispatcher.StreamAsync
-    │
-    │  decision.Target = Qwen35B → skip semaphore, call directly
-    │  (35B has no concurrency cap; HttpClient connection pool is the natural limit)
-    │
-    │  decision.Target = Qwen122B:
-    │    a. Check IHealthProbe.IsReachableAsync(Qwen122B)
-    │       → if unreachable and reason=GraphIndexing → return Error GraphIndexingMustFail immediately
-    │       → if unreachable and other → reroute to Qwen35B, IsFallback=true
-    │    b. Enqueue QueueItem { Priority = decision.Priority, Ct = ct, ... }
-    │    c. Worker loop: dequeue high items first, then low items
-    │    d. sem122B.WaitAsync(ct)    ← blocks here if another 122B call is in flight
-    │       If ct fires (client disconnected): sem not acquired, item discarded
-    ▼
-QwenUpstreamClient.StreamAsync
-    │
-    │  1. probeModelInfo (lazy, fires once per process per port)
-    │     → GET localhost:800x/v1/models
-    │     → tryParseModelId: prefer path-starting-with-"/" to avoid HF tokenizer fallback
-    │
-    │  2. Build POST body:
-    │     → messages, model=<local-path-id>, stream=true, temperature, top_p, max_tokens
-    │     → UnknownFields forwarded verbatim
-    │
-    │  3. httpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct)
-    │     → response headers arrive, body stream not yet consumed
-    │
-    │  4. Yield IAsyncEnumerable<Result<string, RouterError>>:
-    │     while not done:
-    │       reader.ReadLineAsync(ct) → raw SSE line string
-    │       yield Ok lineString
-    │     on ct cancel: IAsyncEnumerable terminates (OperationCanceledException caught)
-    │     on stream end: null ReadLine → sequence completes
-    ▼
-QueueDispatcher (back in the calling context)
-    │
-    │  After sequence completes (normal or cancelled):
-    │    sem122B.Release()     ← releases semaphore unconditionally (finally block)
-    ▼
-ChatCompletions.fs (Endpoint, consuming the IAsyncEnumerable)
-    │
-    │  foreach chunk in enumerable:
-    │    ctx.Response.WriteAsync(chunk, ct)
-    │    ctx.Response.Body.FlushAsync(ct)
-    │    (if ct fires mid-stream → WriteAsync/FlushAsync throw OperationCanceledException
-    │     → caught by endpoint handler → upstream enumerable abandoned → GC disposes enumerator
-    │     → QueueDispatcher finally block releases semaphore)
-    ▼
-Hermes / Graphify (SSE stream consumed)
+POST /v1/chat/completions
+X-Session-Id: abc-123
+{messages: [...], stream: false}
+    ↓
+CorrelationMiddleware
+  - cid = new Guid
+  - sessionId = "abc-123" from X-Session-Id header
+  - ctx.Items[CorrelationIdKey] = cid
+  - ctx.Items[SessionIdKey] = "abc-123"
+    ↓
+ChatCompletions.handler
+  - parse body → RouterRequest
+  - (RouterRequest does NOT carry sessionId — it's cross-cutting infra)
+    ↓
+Routing.routeRequest (in Core)
+  - Stage 0: HardRules.applyHardRules req
+      if "LLVM" in prompt → Ok { Target=Qwen122B; Reason=HardRule "LLVM"; ... }
+  - Stage 1: tryModelOverride (unchanged)
+  - Stage 2: tryTaskTable (unchanged)
+  - Stage 3: algorithm config req
+      (algorithm = makeSelfRoutingAlgorithm closure)
+      → SelfRouter.ClassifyAsync(promptHash, promptText, ct)
+          - LRU cache hit? → return cached verdict
+          - miss → HTTP POST to selfrouter client (35B port 8000)
+            body: {messages: [...system prompt...], max_tokens:4, temperature:0, stream:false}
+          - parse response: "SAFE" → Safe | _ → Unsafe
+      → if Safe  → { Target=Qwen35B; Reason=SelfRoute Safe; ... }
+        if Unsafe → { Target=Qwen122B; Reason=SelfRoute Unsafe; ... }
+  - Stage 4: sticky override (inside algorithm closure)
+      sessionStore.TryGet(sessionId from ctx.Items) 
+      → if Some { CurrentModel=Qwen122B } → override to { Target=Qwen122B; Reason=StickyEscalation }
+    ↓
+decision = Ok { Target=...; Reason=...; IsFallback=false; ModelVersion="selfrouting-v1" }
+    ↓
+Phase 10 health preflight (unchanged)
+    ↓
+QueueDispatcher → Qwen upstream (existing, unchanged)
+    ↓
+response body (non-streaming path)
+    ↓
+SessionStore.Update(sessionId, actualTarget)   ← NEW: update sticky state
+    ↓
+QualityFallback / JudgeCascade (existing, unchanged)
+    ↓
+DecisionLogger.Log (unchanged)
 ```
 
-### Cancellation Propagation
+### Session ID Flow (where sessionId is read)
 
-`CancellationToken` flows from `HttpContext.RequestAborted` through:
+`ctx.Items[SessionIdKey]` is only read inside the `makeSelfRoutingAlgorithm` closure at Stage 4.
+The closure captures the `ISessionStore` singleton at DI time. It reads `sessionId` from
+`req.SessionId` or — better — from `req.CorrelationId`... but `CorrelationId` is already a
+separate field. The cleanest design: **extend `RouterRequest` with a `SessionId: string` field**.
 
-1. `ChatCompletions.fs` handler: passes `ctx.RequestAborted` as `ct` to all async calls
-2. `QueueDispatcher.StreamAsync`: passes `ct` to `sem122B.WaitAsync(ct)` — if client disconnects while waiting, the wait is cancelled, the item is dropped, semaphore not acquired
-3. `QwenUpstreamClient.StreamAsync`: passes `ct` to `httpClient.SendAsync(...)` and to each `ReadLineAsync(ct)` call — if client disconnects mid-stream, the HTTP call is aborted
-4. `QueueDispatcher` finally block: `sem122B.Release()` fires unconditionally — semaphore always released even on cancellation
+```fsharp
+// In SmartRouter.Core.Domain (RouterRequest record):
+type RouterRequest =
+    { Messages       : Message list
+      ModelOverride  : string option
+      Task           : string option
+      Stream         : bool
+      Temperature    : float option
+      TopP           : float option
+      MaxTokens      : int option
+      CorrelationId  : string
+      SessionId      : string     // ← NEW: "" when X-Session-Id absent; sticky skipped when ""
+      UnknownFields  : Map<string, System.Text.Json.JsonElement> }
+```
 
-This matches the blueCode `postAsync` pattern where `TaskCanceledException` with `ex.CancellationToken = ct` maps to `UserCancelled`. For the router, the analogous path is: ct fires → `OperationCanceledException` propagates through the async enumerable → endpoint catches or the enumerable simply stops → `QueueDispatcher.finally` releases semaphore.
+This mirrors the existing `CorrelationId` pattern (Phase 9 added `CorrelationId` to `RouterRequest`
+the same way). `mapWireToRequest` in `ChatCompletions.fs` populates it from
+`ctx.Items[SessionIdKey]` (which CorrelationMiddleware extracted from the header).
 
 ---
 
-## Scalability Considerations
+## ChatCompletions Handler Integration
 
-This router is single-host, two-model, loopback-only. Traditional scalability axes don't apply. The meaningful concerns are:
+### Where Selfrouting Cascade Fits
 
-| Concern | Approach | Why |
-|---------|----------|-----|
-| 122B concurrency | SemaphoreSlim(1) | mlx_lm.server serializes at the metal layer; application-layer semaphore is cheaper and more explicit |
-| 35B concurrency | HttpClient connection pool (default ~10) | 35B is fast; parallel calls are safe; pool prevents runaway file descriptors |
-| Queue depth | Unbounded in v1 (monitor via /stats) | Add bounded queue + 429 response if /stats shows chronic depth > N |
-| Memory | Stateless per request; queue + counters are small | No session state in router; consumers own conversation history |
-| Cold start latency | 300s HttpClient timeout (mirrors blueCode Phase 20-01) | 122B cold-start observed up to 240s after launchctl kickstart |
+The handler currently has this skeleton (line numbers approximate from the 673-line file):
 
----
+```
+Line 200: handler function begins
+Line 206: correlationId from ctx.Items
+Line 211: parse wire body
+Line 239: routeRequest call (Stage 1-3)
+Line 257: Ok decision branch begins
+Line 285: Phase 10 health preflight
+Line 300: if req.Stream then streaming branch else non-streaming branch
+Line 408: non-streaming branch: quality fallback + judge cascade
+```
 
-## Anti-Patterns
+**Selfrouting inserts at two points:**
 
-### Anti-Pattern 1: Queue and Semaphore Inside QwenUpstreamClient
+**Point A — Before `routeRequest` call (line ~235):**
+Extract sessionId from `ctx.Items` and populate `req.SessionId` in `mapWireToRequest`.
+This is a zero-cost change: `mapWireToRequest` already reads from `ctx.Items` indirectly
+via `correlationId`; extend the same pattern.
 
-**What people do:** Put `SemaphoreSlim` and the priority queue directly inside `QwenUpstreamClient.StreamAsync`.
+**Point B — After response is received, before `DecisionLogger.Log` (line ~592):**
+```fsharp
+// After finalBody is determined (after quality fallback / judge cascade):
+let sessionId = 
+    match ctx.Items.TryGetValue(SessionIdKey) with
+    | true, (:? string as sid) when not (String.IsNullOrEmpty(sid)) -> sid
+    | _ -> ""
+if not (String.IsNullOrEmpty(sessionId)) then
+    sessionStore.Update(sessionId, finalDecision.Target)
+```
 
-**Why it's wrong:** Couples HTTP mechanics with concurrency policy. Cannot test queue ordering without a real HTTP server. Cannot swap the HTTP client without reimplementing the queue. Violates single responsibility.
+This is exactly where it belongs: the session store records the **actually-served model** (post
+quality fallback), not the initially-routed model. If 35B was initially routed but quality
+fallback escalated to 122B, the session stores 122B — so the next sticky check correctly
+continues on 122B.
 
-**Do this instead:** `QueueDispatcher` wraps `IUpstreamClient`. Queue and semaphore are in `QueueDispatcher`. `QwenUpstreamClient` only does HTTP.
+**Point B placement: after judge cascade (line ~585), before DecisionLogger.Log (line ~594).**
 
-### Anti-Pattern 2: Returning HttpResponseMessage Across the Port Boundary
+### Streaming Branch
 
-**What people do:** `IUpstreamClient.StreamAsync` returns `Task<HttpResponseMessage>`.
+The selfrouting classification runs pre-routing — before any chunks are dispatched. This means
+selfrouting applies equally to streaming and non-streaming requests. There is no streaming
+concern for Stage 0–4 routing decisions. This is simpler than the quality-fallback situation
+(which intentionally skips streaming because chunks are already shipped).
 
-**Why it's wrong:** `HttpResponseMessage` is an `HttpClient` type. Returning it through the port boundary means Core (or whoever consumes the port) must reference `System.Net.Http`. The hexagonal invariant is broken — Core must never reference HTTP client types.
+For the session update after streaming: the streaming branch currently logs at line ~385. Insert
+the `sessionStore.Update` call immediately before `decisionLogger.Log` in the streaming branch
+(after the normal loop exit, before `do! enumerator.DisposeAsync()`). Same pattern as the
+non-streaming Point B.
 
-**Do this instead:** `IAsyncEnumerable<Result<string, RouterError>>` — pure F# types. The adapter materializes the response into the enumerable; the port contract is clean.
-
-### Anti-Pattern 3: Logging in Core
-
-**What people do:** Pass `ILogger` into `routeRequest` for observability.
-
-**Why it's wrong:** Logging is a side effect. `routeRequest` is a pure function. Adding a logger makes it untestable without a real logger and breaks the hexagonal invariant.
-
-**Do this instead:** `RoutingDecision` carries `RoutingReason` and `Priority`. The endpoint reads these after the pure call and logs them via Serilog. No logger in Core.
-
-### Anti-Pattern 4: `async {}` in Core
-
-**What people do:** Write `async { let! x = ... }` in `Domain.fs` or `Routing.fs`.
-
-**Why it's wrong:** `async {}` is banned in Core (blueCode CI enforces this via `scripts/check-no-async.sh`; mirror this in smart-router). Core functions are either pure (no CE at all) or use `task {}` at the port boundary.
-
-**Do this instead:** Pure routing functions return plain values. Port interfaces return `Task<_>`. Core code that orchestrates ports uses `task {}`.
-
-### Anti-Pattern 5: Materializing the Full SSE Response Before Forwarding
-
-**What people do:** `ReadAsStringAsync()` on the upstream response, then write the whole body at once.
-
-**Why it's wrong:** Defeats the purpose of streaming. The client (Hermes) sees no output until the entire 122B response finishes. 122B responses can take 45–240 seconds. Interactive experience is destroyed.
-
-**Do this instead:** `HttpCompletionOption.ResponseHeadersRead` + `StreamReader.ReadLineAsync` loop + `Response.WriteAsync` + `Body.FlushAsync` per chunk.
-
-### Anti-Pattern 6: Fallback Policy Hard-Coded in Core
-
-**What people do:** `routeRequest` calls `IHealthProbe.IsReachableAsync` and rewrites the target in-place.
-
-**Why it's wrong:** Health probe is I/O. Core must be pure. `routeRequest` taking an `IHealthProbe` means it cannot be tested without a fake implementation and it is no longer a pure function.
-
-**Do this instead:** Core returns a `RoutingDecision { Target = Qwen122B }`. The adapter layer (QueueDispatcher or endpoint handler) checks health and applies fallback. The fallback is a policy decision in the adapter, informed by the Core decision.
+**Decision: selfrouting classification applies to streaming requests. The classification is
+pre-response and costs no latency to the streaming path itself.**
 
 ---
 
 ## Integration Points
 
-### External Services
+### Named HttpClients — v2.0 Complete Map
 
-| Service | Integration Pattern | Notes |
-|---------|---------------------|-------|
-| Qwen 35B (localhost:8000) | `QwenUpstreamClient` POST via HttpClientFactory | HF-id trap: copy `tryParseModelId` from blueCode verbatim |
-| Qwen 122B (localhost:8001) | `QwenUpstreamClient` POST via HttpClientFactory + `QueueDispatcher` semaphore | 300s timeout; `ResponseHeadersRead` for streaming |
-| Hermes Agent | Passive (consumer of `/v1/chat/completions`) | No task field; routing is pure heuristic |
-| Graphify | Passive (consumer of `/v1/chat/completions`) | Sends `task` field; task table is authoritative |
+| Client Name | BaseAddress | Timeout | Retry | Purpose |
+|-------------|-------------|---------|-------|---------|
+| upstream35b | Model35B | 300s | 3x exponential 1s | Non-streaming inference |
+| upstream122b | Model122B | 300s | 3x exponential 1s | Non-streaming inference |
+| upstream35b-stream | Model35B | 300s | None | Streaming inference |
+| upstream122b-stream | Model122B | 300s | None | Streaming inference |
+| health-probe | (absolute URLs) | 5s | None | Health probe |
+| teacher | :8001 (122B) | 30s | 3x exponential 1s | Dataset labeling |
+| judge | :8001 (122B) | 5s | 2x exponential 200ms | Response quality judge |
+| selfrouter | Model35B | 5s | 1x 200ms | Self-classify routing |
 
-### Internal Boundaries
+**selfrouter** shares `BaseAddress` with `upstream35b` but uses a 5-second timeout and minimal
+retry. The 300-second inference timeout would defeat the latency budget for classification.
+Do NOT reuse `upstream35b` — separate named clients for separate profiles is the established
+pattern in this codebase (teacher and judge both demonstrate this).
 
-| Boundary | Communication | Rule |
-|----------|---------------|------|
-| Endpoint → Core | Direct function call (`routeRequest`) | Synchronous, pure; no async crossing this boundary |
-| Endpoint → Adapter | Via `IUpstreamClient` interface | Always async `Task<_>` or `IAsyncEnumerable<_>` |
-| Core → Adapter | Via port interfaces (`IUpstreamClient`, `IClock`) | Core never calls adapters directly; only via interfaces |
-| CompositionRoot → DI | `services.AddSingleton<IUpstreamClient>(queueDispatcher)` | `QueueDispatcher` registered as the `IUpstreamClient` singleton |
+### DI Registration Summary (new components)
+
+```
+configureRequestPipeline additions (in order):
+
+1. Named "selfrouter" HttpClient
+   → AddHttpClient("selfrouter").ConfigureHttpClient(...)
+   → .AddResilienceHandler("selfrouter-pipeline", ...)
+   (insert near the judge client registration, around line ~570)
+
+2. SelfRouter concrete singleton + ISelfRouter alias
+   → services.AddSingleton<SelfRouter>(...)
+   → services.AddSingleton<ISelfRouter>(fun sp -> sp.GetRequiredService<SelfRouter>() :> ISelfRouter)
+   (conditional: if Routing.Mode = "selfrouting"; always register if selfrouting is default)
+
+3. SessionStore triple-reg
+   → services.AddSingleton<SessionStore>(...)
+   → services.AddSingleton<ISessionStore>(...)
+   → services.AddHostedService<SessionStore>(...)
+   (unconditional — session store is useful even if ML mode is active, for future reactivation)
+
+4. RoutingAlgorithmRegistration factory update
+   → add Routing.Mode branch: "selfrouting" arm creates makeSelfRoutingAlgorithm closure
+   → "ml" arm unchanged
+   (replaces existing single-arm factory, ~line 394)
+```
+
+### SelfRouter Config in appsettings.json
+
+```json
+"Routing": {
+  "Mode": "selfrouting",
+  "SelfRouter": {
+    "Endpoint": "",            // "" → derive from Upstreams.Model35B (mirrors judge pattern)
+    "PromptPath": "prompts/selfrouter-prompt.md",
+    "TimeoutSeconds": 5,
+    "MaxCacheEntries": 5000
+  },
+  "Session": {
+    "TtlMinutes": 60
+  }
+}
+```
 
 ---
 
-## Build Order
+## Anti-Patterns
 
-Build order respects dependency graph: Core types must exist before adapters can reference them; adapters must exist before endpoints; all must exist before tests.
+### Anti-Pattern 1: Routing the SelfRouter Call Through QueueDispatcher
 
-| Phase | Ships | Rationale |
-|-------|-------|-----------|
-| 1 | `SmartRouter.Core` (Domain + Routing + Ports) | Foundation; all downstream depends on this. Pure types and functions; no external dependencies. |
-| 2 | `SmartRouter.Cli/Adapters/Json.fs` + `Logging.fs` | Infrastructure adapters needed by all other adapters. Copied from blueCode with minimal changes. |
-| 3 | `SmartRouter.Cli/Adapters/QwenUpstreamClient.fs` | HTTP adapter. Implements `IUpstreamClient`. Depends on Core types + Json/Logging adapters. Copy HF-id probe logic from blueCode verbatim. |
-| 4 | `SmartRouter.Cli/Adapters/QueueDispatcher.fs` | Concurrency adapter. Wraps `QwenUpstreamClient`. SemaphoreSlim(1) + priority queue. Requires `QwenUpstreamClient` to exist first. |
-| 5 | `SmartRouter.Cli/Adapters/HealthAdapter.fs` | Health probe adapter. Depends on `QwenUpstreamClient` (or its own HTTP client). |
-| 6 | `SmartRouter.Cli/Endpoints/` (all four) | Endpoint handlers. Depend on all adapters being wired. `ChatCompletions.fs` is the most complex — complete last within this phase. |
-| 7 | `SmartRouter.Cli/CompositionRoot.fs` + `Program.fs` | DI wiring and host builder. Depends on all adapters and endpoints. |
-| 8 | `SmartRouter.Tests/` (Core unit tests first) | Core routing tests require only Phase 1. Integration tests require Phases 3–7. Run Core tests to validate pure logic before adapter complexity is introduced. |
+**What people do:** Register ISelfRouter to call `IUpstreamClient.CompleteAsync` (the existing
+queue-gated path).
+
+**Why it's wrong:** QueueDispatcher holds a `SemaphoreSlim(1)` gate on Qwen 122B requests.
+Routing the selfrouter call through QueueDispatcher would consume the gate slot for a
+1-token classification request, blocking real inference traffic. JudgeClient (Phase 16) and
+TeacherLabeler (Phase 7) both demonstrate the established solution: use a separate named
+HttpClient that bypasses QueueDispatcher entirely.
+
+**Do this instead:** Named "selfrouter" HttpClient that posts directly to the 35B endpoint
+with no semaphore involvement.
+
+### Anti-Pattern 2: Storing SessionId in RouterRequest.UnknownFields
+
+**What people do:** Pass session_id through `wire.extra` (the `[<JsonExtensionData>]` dictionary)
+to avoid changing `RouterRequest`.
+
+**Why it's wrong:** `UnknownFields` is for verbatim forward-pass of unknown JSON fields to
+the upstream. Using it for session state couples session tracking to JSON parsing, makes
+the field discoverable by the upstream LLM (it gets forwarded), and bypasses the explicit
+`SessionId: string` field that makes the contract visible to Core.
+
+**Do this instead:** Add `SessionId: string` to `RouterRequest` (mirrors Phase 9 `CorrelationId`
+addition). `mapWireToRequest` populates it from `ctx.Items[SessionIdKey]`.
+
+### Anti-Pattern 3: Placing HardRules in the Adapter Layer
+
+**What people do:** Put HardRules as a ChatCompletions pre-check or a RoutingAlgorithm wrapper
+in `SmartRouter.Cli`.
+
+**Why it's wrong:** Hard rules are pure keyword logic — no IO, no DI. Keeping them in Core
+means they are testable without ASP.NET scaffolding, and they apply uniformly regardless
+of which routing algorithm is active (ML or selfrouting). Placing them in an adapter would
+require the adapter to know about the routing pipeline stages.
+
+**Do this instead:** `SmartRouter.Core/HardRules.fs` with a single pure function
+`applyHardRules : RouterRequest -> RoutingDecision option`. `Routing.routeRequest` calls
+it as the first step.
+
+### Anti-Pattern 4: Updating SessionStore Before Quality Fallback Completes
+
+**What people do:** Call `sessionStore.Update` immediately after the initial routing decision
+(before quality fallback or judge cascade).
+
+**Why it's wrong:** If 35B was initially routed but quality fallback escalated to 122B, the
+session store would record 35B. The next sticky check would not escalate — defeating the
+purpose of sticky escalation for continuation workflows.
+
+**Do this instead:** Update session store after the final decision is known — after quality
+fallback and judge cascade — using `finalDecision.Target`, not `initialDecision.Target`.
+
+### Anti-Pattern 5: Deleting ML Code From CompositionRoot
+
+**What people do:** Remove all ML DI registrations from `configureRequestPipeline` when
+selfrouting is enabled.
+
+**Why it's wrong:** The ML retraining pipeline (RetrainingService, TeacherLabeler, FailureDetector)
+accumulates labeled data in `datasets/hard-cases.jsonl` regardless of which routing algorithm
+is active. This data is valuable for future ML reactivation. Removing ML DI registrations also
+removes the automatic model retraining — the ML model would not stay current with the
+teacher-labeled data.
+
+**Do this instead:** Keep all ML DI registrations unconditional. Only the `RoutingAlgorithmRegistration`
+changes based on `Routing.Mode`. The ML machinery continues to run in the background.
 
 ---
 
-## blueCode Reuse vs Replacement
+## Scaling Considerations
 
-| blueCode Component | SmartRouter Treatment | Rationale |
-|--------------------|-----------------------|-----------|
-| `QwenHttpClient.fs` → `tryParseModelId` | **Copy verbatim** into `QwenUpstreamClient.fs` | HF-id trap is load-bearing. Identical mlx_lm.server behavior on both ports. |
-| `QwenHttpClient.fs` → `probeModelInfoAsync` | **Copy, adapt** (remove blueCode logging labels) | Same probe logic; just rename. |
-| `QwenHttpClient.fs` → `postAsync` error mapping | **Copy, adapt** for streaming (`ResponseHeadersRead`) | Error mapping logic is identical; streaming path is new. |
-| `Adapters/Json.fs` | **Copy verbatim** | STJ options are project-agnostic. |
-| `Adapters/Logging.fs` | **Copy verbatim** | Serilog → stderr wiring is identical. |
-| `CompositionRoot.fs` structure | **Model pattern, rewrite content** | DI wiring pattern is the same; domain is different (no AgentLoop, no ToolExecutor). |
-| `Core/Domain.fs` | **Rewrite** | blueCode's domain is an agent loop (Tool, Step, AgentState). SmartRouter's domain is a routing gateway (RouterRequest, RoutingDecision, Priority). No overlap. |
-| `Core/Router.fs` pattern | **Mirror pattern, rewrite content** | Pure functions, exhaustive matches, no `| _ ->`. blueCode's `classifyIntent`/`intentToModel` shape becomes `routeRequest`/`taskToDecision`. |
-| `Core/Ports.fs` | **Rewrite** | blueCode ports: `ILlmClient`, `IToolExecutor`. SmartRouter ports: `IUpstreamClient`, `IClock`, `IHealthProbe`. Same hexagonal discipline, different interfaces. |
-| Test pattern (explicit `rootTests`) | **Copy pattern** | Critical. Expecto auto-discovery is unreliable. Mirror `RouterTests.fs` entrypoint with explicit list. |
-| `task {}` over `async {}` enforcement | **Mirror** | Same CI grep check. `scripts/check-no-async.sh` to be created in smart-router. |
+| Scale | Architecture Adjustments |
+|-------|--------------------------|
+| Single Mac (current) | In-process SessionStore (ConcurrentDictionary); selfrouter shared with 35B serving |
+| Multi-process (future) | SessionStore would need external backing (Redis / SQLite); not a v2.0 concern |
+| High-traffic (not applicable) | mlx_lm.server is the bottleneck; router overhead is minimal |
+
+---
+
+## Phase Build Order Recommendation
+
+Based on integration analysis, phases should ship in this order:
+
+1. **Phase 17 — Hard Rules (Stage 0)** — Fully independent. No new DI, no new HttpClient.
+   Only changes: `HardRules.fs` (new Core file), `Domain.fs` (new RoutingReason cases),
+   `Routing.fs` (call HardRules as Stage 0), tests. Shippable in isolation; passes all
+   existing tests unchanged.
+
+2. **Phase 18 — Session Store + SessionId wiring** — Independent of selfrouter HTTP call.
+   `SessionStore.fs` (new Cli adapter), `SessionId` field in `RouterRequest`, CorrelationMiddleware
+   extension, triple-reg in CompositionRoot, ChatCompletions Point B update. Can ship without
+   selfrouter (sticky escalation does nothing until selfrouter is active — but the infrastructure
+   is in place). Tests: session store unit tests + integration test for sticky header passthrough.
+
+3. **Phase 19 — SelfRouter (35B classify, Stage 3)** — Depends on Phase 18 (SessionId in
+   RouterRequest). Adds "selfrouter" named HttpClient, SelfRouter.fs, ISelfRouter port,
+   RoutingAlgorithmRegistration mode switch, selfrouter-prompt.md. Tests: SelfRouter unit tests
+   with mock HttpClient, end-to-end routing with SAFE/UNSAFE mock responses.
+
+4. **Phase 20 — Hermes Integration + Routing.Mode config** — Depends on all three above.
+   Adds `Routing.Mode` config key, confirms Hermes sends X-Session-Id, updates README.md
+   §5 routing pipeline, §7 configuration reference, §8 endpoints (no changes to endpoint
+   surface — Hermes integration is a header convention, not a new endpoint).
 
 ---
 
 ## Sources
 
-- Direct analysis: `/Users/ohama/projs/blueCode/src/BlueCode.Core/Domain.fs`
-- Direct analysis: `/Users/ohama/projs/blueCode/src/BlueCode.Core/Ports.fs`
-- Direct analysis: `/Users/ohama/projs/blueCode/src/BlueCode.Core/Router.fs`
-- Direct analysis: `/Users/ohama/projs/blueCode/src/BlueCode.Cli/Adapters/QwenHttpClient.fs`
-- Direct analysis: `/Users/ohama/projs/blueCode/src/BlueCode.Cli/CompositionRoot.fs`
-- Direct analysis: `/Users/ohama/projs/blueCode/CLAUDE.md`
-- Direct analysis: `/Users/ohama/projs/smart-router/.planning/PROJECT.md`
+- `src/SmartRouter.Cli/Endpoints/ChatCompletions.fs` — authoritative handler structure
+- `src/SmartRouter.Cli/SmartRouter.Cli.fsproj` — authoritative compile order
+- `src/SmartRouter.Cli/CompositionRoot.fs` — DI registration patterns (judge, teacher, triple-reg)
+- `src/SmartRouter.Core/Domain.fs` — RouterRequest structure, RoutingReason DU
+- `src/SmartRouter.Core/Routing.fs` — routeRequest pipeline
+- `src/SmartRouter.Core/Ports.fs` — IUpstreamClient, IHealthProbe port patterns
+- `src/SmartRouter.Cli/Adapters/JudgeClient.fs` — 1-token LRU cache pattern (SelfRouter mirrors this)
+- `src/SmartRouter.Cli/Adapters/CorrelationMiddleware.fs` — HttpContext.Items cross-cutting pattern
+- `.planning/docs/35b-selfrouting.md` — selfrouting design rationale, §18 architecture diagram
+- `.planning/docs/35b-selfrouting-prompt.md` — SAFE/UNSAFE prompt design, max_tokens recommendation
 
 ---
-*Architecture research for: SmartRouter — F# hexagonal LLM router*
-*Researched: 2026-05-07*
+*Architecture research for: smart-router v2.0 selfrouting integration*
+*Researched: 2026-05-11*
