@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Phase 17 — Hard Rules layer + Routing.Mode switch. v2.0 paradigm pivot:
+the routing primary path becomes keyword Hard Rules → (Phase 18 sticky) →
+(Phase 19 35B self-classify); the v1.x ML classifier remains compiled and
+re-activatable with a one-line `appsettings.json` edit + restart.
+
+### Added
+
+- **Stage 0 Hard Rules pre-routing.** A pure keyword scan (`LLVM`, `MLIR`, `compiler`, `segfault`, `optimization`, `concurrency` — case-insensitive) runs **before** model override, task table, and the routing algorithm. Any keyword match routes immediately to Qwen 122B with `routing_reason="hard_rule"` and `priority=High`. Applies to both streaming and non-streaming branches. The keyword list is hardcoded in `src/SmartRouter.Core/HardRules.fs` — not operator-configurable, by design (safety mechanism). DecisionLog `routing_reason` gains the additive value `"hard_rule"`; schema_version=1 unchanged.
+- **`Routing.Mode` config key (`appsettings.json`).** New string key with values `"selfrouting"` (v2.0 default) or `"ml"` (v1.x rollback). Invalid values fail startup with `InvalidOperationException` before Kestrel binds. Operator can flip modes via config edit + `launchctl kickstart -k gui/$(id -u)/com.ohama.smart-router` — no rebuild required.
+- **`routing_algorithm="selfrouting"` value in DecisionLog.** New value alongside `"ml"` / `"ml-canary"`; emitted when `Routing.Mode="selfrouting"` is active. `model_version="selfrouting-v1"` for the Phase 17 stub; Phase 19 will adopt a prompt-hash-derived version.
+
+### Changed
+
+- **Default routing paradigm flipped from ML to selfrouting.** With `Routing.Mode="selfrouting"` (the new default), Phase 17 ships a STUB algorithm that returns Qwen 35B / `routing_reason="default"` for prompts that miss Hard Rules + model override + task table. Phase 19 replaces the stub with the real 35B SAFE/UNSAFE self-classify call. Operators who want v1.x ML routing behavior in the interim should set `Routing.Mode="ml"` in `appsettings.json`. ML adapters (`BgeM3Embedder`, `MlNetClassifier`, `RetrainingService`, `CanaryService`) remain DI-registered and running in **both** modes — `RetrainingService` continues accumulating hard cases so ML can be re-activated without retraining from scratch.
+- **Routing pipeline grew from 3 stages to 4.** `Routing.routeRequest` now invokes Stage 0 Hard Rules before the existing model override + task table + algorithm stages. The cascade order is `Hard Rules → model override → task table → algorithm` (Phase 18 inserts sticky escalation in subsequent work).
+
+### Notes
+
+- DecisionLog `schema_version` remains **1**. All Phase 17 additions are additive enum values (`hard_rule`, `selfrouting`) on existing string fields — no field removals, no type changes.
+- `configureServices` backwards-compat alias is preserved and inherits the new `Routing.Mode` behavior unchanged.
+- Phase 14 quality fallback (35B → 122B retry on quality-bad responses), Phase 15 quality signal enrichment, and Phase 16 borderline judge (`Routing.Judge.Enabled`) all work unchanged in both `selfrouting` and `ml` modes.
+
 ## [1.3.0] - 2026-05-11
 
 122B-as-judge release. Borderline 35B responses (entropy/length band
