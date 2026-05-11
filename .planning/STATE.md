@@ -8,15 +8,15 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 19 (35B Self-Routing) IN PROGRESS. Plan 19-01 complete.
+**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 19 (35B Self-Routing) IN PROGRESS. Plans 19-01 and 19-02 complete.
 
 ## Current Position
 
 Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-12
-Phase: 19 — 35B Self-Routing (Stage 5 Self-Classify) — In progress (1/4 plans complete)
-Plan: 19-01 complete — DU + adapter + prompt template foundation
-Status: 19-01 COMPLETE (3/3 tasks, 0 deviations). RoutingReason.SelfRoute DU + ISelfRouter adapter + prompts/self-router-prompt.md shipped. Adapter inert — DI registration in 19-02, cascade wiring in 19-03.
-Last activity: 2026-05-12 — Phase 19 Plan 01 executed; 150 + 17 + 0 baseline preserved.
+Phase: 19 — 35B Self-Routing (Stage 5 Self-Classify) — In progress (2/4 plans complete)
+Plan: 19-02 complete — DI wiring + stats fields + config block
+Status: 19-02 COMPLETE (3/3 tasks, 1 auto-fixed deviation). ISelfRouter DI registered (selfrouting mode), ISelfRouterStats NoOp (ml/offline), 4 /stats fields, Routing.SelfRouter config block. 150 + 17 + 0 baseline preserved.
+Last activity: 2026-05-12 — Phase 19 Plan 02 executed; SelfRouter resolvable from DI but no classify call yet (19-03 next).
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -112,6 +112,19 @@ Progress: [███████████████████████
 - SmartRouter.Cli.fsproj: SelfRouter.fs registered after DecisionLogger.fs (compile order)
 - SR-01/SR-02/SR-03/SR-04/SR-07 satisfied; DI registration (SR-01 named client) + cascade wiring (SR-06) deferred to 19-02/19-03 by design
 
+**v2.0 progress (post-19-02):**
+- Tests: 150 passed + 17 ignored + 0 failed (baseline preserved; SelfRouter registered but not yet called)
+- Named "selfrouter" HttpClient registered: BaseAddress=Upstreams.Model35B, Timeout=5s, AddResilienceHandler 1 retry @ 200ms constant (SR-01)
+- SelfRouter triple-registration in "selfrouting" mode arm: concrete + ISelfRouter alias + ISelfRouterStats alias (same instance — shared LRU cache + counters)
+- ISelfRouterStats NoOp in "ml" mode arm: /stats returns selfrouter_* = 0, not 500 (PITFALL #7)
+- ISelfRouterStats NoOp in configureWithoutMl: --retrain offline DI graph integrity preserved
+- Stats.fs: 4 new StatsWire fields (selfrouter_cache_hits/_misses/_call_count/_skipped) + null-safe ISelfRouterStats resolve (SR-05)
+- appsettings.json: Routing.SelfRouter block added (Endpoint="", PromptPath, TimeoutSeconds=5, MaxCacheEntries=10000)
+- Stale CompositionRoot.fs comments refreshed: "Phase 19 will replace... closure" → "Phase 19 self-classify lives in ChatCompletions.fs"
+- Auto-fixed: JudgeOptions type annotation on normalized binding (SelfRouterOptions field-name collision with JudgeOptions)
+- SR-01 (named client), SR-04 (cache stats exposed), SR-05 (4 snake_case /stats fields) satisfied
+- SR-06 (cascade wiring in ChatCompletions.fs) deferred to 19-03 by design
+
 *Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
 
 ## Accumulated Context
@@ -135,6 +148,12 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 - **PromptVersion at construction time**: `SHA256.ComputeHash(File.ReadAllBytes(promptPath))` in the class initializer. Captures the prompt state when the service started; operator runtime edits do not change the version until next restart.
 - **factory.CreateClient("selfrouter") only**: `IUpstreamClient` routes through `QueueDispatcher` holding the 122B `SemaphoreSlim(1)`. Using it for classify calls would make the classifier compete with real inference traffic.
 - **No open DecisionLogger in SelfRouter.fs**: The plan's skeleton comment said `open DecisionLogger // for computePromptHash`, but `computePromptHash` is called by the caller (ChatCompletions.fs in 19-03), not SelfRouter itself. SelfRouter receives `promptHash` as a parameter — same pattern as JudgeClient receives pre-computed hashes. No import needed.
+
+**19-02 execution decisions (2026-05-12):**
+- **Mode-gated DI block outside factory lambda**: `if routingMode = "selfrouting" then (AddHttpClient + AddSingleton x3) else (AddSingleton NoOp)` placed before `RoutingAlgorithmRegistration` factory. services.AddSingleton calls are IServiceCollection-level operations — they must not appear inside a factory lambda that constructs a single value. This is the key structural constraint for all mode-gated DI in this codebase.
+- **JudgeOptions/SelfRouterOptions field-name collision**: Both CLIMutable records share all 4 field names (Endpoint, PromptPath, TimeoutSeconds, MaxCacheEntries). After opening SmartRouter.Cli.Adapters.SelfRouter, F# disambiguates record literals by last-opened namespace → infers normalized as SelfRouterOptions instead of JudgeOptions. Fix: `: JudgeOptions` type annotation on `let normalized`. Required whenever two CLIMutable records share field names and both modules are opened.
+- **selfRouterOpts built at registration time**: Options resolution happens once outside the factory (and outside any per-request path). The SelfRouter constructor receives the already-normalized options struct, not raw IOptions<T>. Matches judge's `effectiveEndpoint` pattern.
+- **1-retry constant vs 2-retry exponential for selfrouter**: Classify is on the non-streaming hot path; fail-open quickly (RouteFailed → RouteSafe caller handling) rather than accumulate retry latency. Judge's exponential backoff suits a quality-gate call on borderline cases; classifier is best-effort.
 
 **18-02 execution decisions (2026-05-11):**
 - **122B-wins merge uses AddOrUpdate updateValueFactory**: Concurrent 35B write must never overwrite 122B escalation. `if old.LastModel = Qwen122B || model = Qwen122B then Qwen122B else model` is the non-negotiable merge formula.
@@ -172,7 +191,7 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 
 ### Pending Todos
 
-- v2.0 Phase 19 Plan 02 (`/gsd:execute-phase 19-02`) — next action (DI registration for ISelfRouter + "selfrouter" named HttpClient + SelfRouterOptions binding + /stats exposure)
+- v2.0 Phase 19 Plan 03 (`/gsd:execute-phase 19-03`) — next action (cascade wiring: ISelfRouter.ClassifyAsync call in ChatCompletions.fs for non-streaming requests)
 - ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3; MODELS-01/02/03 currently erroring with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests)
 - Remove configureServices backwards-compat alias after ModelsTests migration
 
@@ -185,5 +204,5 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: Completed 19-01-PLAN.md — DU + adapter + prompt template. RoutingReason.SelfRoute (9th case), ISelfRouter + ISelfRouterStats, prompts/self-router-prompt.md. 150 + 17 + 0 preserved. Adapter inert — no DI/pipeline wiring yet.
-Resume file: None. Next action: `/gsd:execute-phase 19-02` (DI registration + stats endpoint).
+Stopped at: Completed 19-02-PLAN.md — DI wiring + stats + config. Named "selfrouter" HttpClient, SelfRouter triple-reg (selfrouting mode), ISelfRouterStats NoOp (ml/offline), 4 /stats fields, Routing.SelfRouter config block. 150 + 17 + 0 preserved. SelfRouter registered but classify call not yet wired.
+Resume file: None. Next action: `/gsd:execute-phase 19-03` (cascade wiring in ChatCompletions.fs).
