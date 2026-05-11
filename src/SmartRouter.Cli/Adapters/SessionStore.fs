@@ -115,14 +115,43 @@ type SessionStore(opts: SessionOptions, logger: ILogger<SessionStore>) =
             if not (String.IsNullOrEmpty(sessionId)) then   // Pitfall 7 guard
                 doUpdate sessionId model
 
-    // BackgroundService — ExecuteAsync implementation lands in Plan 18-03 alongside
-    // the TTL eviction PeriodicTimer + tests. For Plan 18-02 the override is a stub
-    // that yields immediately, so the BackgroundService registration in 18-03 will
-    // start successfully even though no eviction work runs yet.
-    // Rationale: keep 18-02 within ~50% context budget; isolate the OCE-through-
-    // task{} eviction loop with its tests in 18-03.
-    override _.ExecuteAsync(_ct: CancellationToken) : Task =
-        Task.CompletedTask
+    /// Phase 18 (SES-08) — TTL eviction loop.
+    /// PeriodicTimer 5-minute interval (hardcoded; SES-08); on each tick, scan the
+    /// store and remove entries with LastAccessedAt older than ttlMinutes.
+    ///
+    /// Mirrors Phase 8 RetrainingService PeriodicTimer pattern: catch
+    /// OperationCanceledException to exit cleanly on shutdown; log non-OCE exceptions
+    /// but log-and-continue (do not exit the loop on transient errors).
+    ///
+    /// The simpler ":? OperationCanceledException -> go <- false" catch is sufficient
+    /// here because there are no follow-up do! awaits after WaitForNextTickAsync —
+    /// the eviction `for kv in store` block is synchronous. ExceptionDispatchInfo.Capture
+    /// pattern (Phase 8) is only required when re-throwing OCE through a chain of awaits.
+    override _.ExecuteAsync(ct: CancellationToken) : Task =
+        task {
+            logger.LogInformation(
+                "SessionStore TTL eviction started; interval=5min ttlMinutes={Ttl}",
+                ttlMinutes)
+            use timer = new PeriodicTimer(TimeSpan.FromMinutes(5.0))
+            let mutable go = true
+            while go && not ct.IsCancellationRequested do
+                try
+                    let! _ = timer.WaitForNextTickAsync(ct)
+                    let cutoff = DateTimeOffset.UtcNow.AddMinutes(float -ttlMinutes)
+                    let mutable removed = 0
+                    for kv in store do
+                        if kv.Value.LastAccessedAt < cutoff then
+                            if store.TryRemove(kv.Key) |> fst then
+                                removed <- removed + 1
+                    if removed > 0 then
+                        logger.LogDebug(
+                            "SessionStore TTL eviction removed {Removed} entries; remaining={Count}",
+                            removed, store.Count)
+                with
+                | :? OperationCanceledException -> go <- false
+                | ex ->
+                    logger.LogError(ex, "SessionStore TTL eviction error; loop continues")
+        }
 
     // Internal accessors for tests + future plans (18-03 eviction loop).
     // Not part of ISessionStore (which only exposes TryGet + Update to callers).

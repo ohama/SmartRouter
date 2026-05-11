@@ -436,6 +436,12 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         sp.GetRequiredService<SessionStore>() :> ISessionStore)
     |> ignore
 
+    // Phase 18 (SES-08) — TTL eviction BackgroundService.
+    // Same concrete instance as the singleton above (DecisionLogWriter pattern).
+    services.AddHostedService<SessionStore>(fun sp ->
+        sp.GetRequiredService<SessionStore>())
+    |> ignore
+
     // Phase 17 (MODE-02): RoutingAlgorithmRegistration factory branches on routingMode.
     // - "ml"          → existing v1.x ML closure (unchanged behavior; v1.3 baseline)
     // - "selfrouting" → Phase 18 sticky-or-default closure (consults ISessionStore.TryGet).
@@ -1126,6 +1132,11 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
 
     services.AddSingleton<ISessionStore>(fun sp ->
         sp.GetRequiredService<SessionStore>() :> ISessionStore)
+    |> ignore
+
+    // Phase 18 — TTL eviction loop also registered offline (harmless; no traffic populates store).
+    services.AddHostedService<SessionStore>(fun sp ->
+        sp.GetRequiredService<SessionStore>())
     |> ignore
 
     // DecisionLog — same triple-reg as configureRequestPipeline.
