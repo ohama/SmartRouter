@@ -8,15 +8,15 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 19 (35B Self-Routing) IN PROGRESS. Plans 19-01 and 19-02 complete.
+**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 19 (35B Self-Routing) IN PROGRESS. Plans 19-01, 19-02, and 19-03 complete.
 
 ## Current Position
 
 Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-12
-Phase: 19 — 35B Self-Routing (Stage 5 Self-Classify) — In progress (2/4 plans complete)
-Plan: 19-02 complete — DI wiring + stats fields + config block
-Status: 19-02 COMPLETE (3/3 tasks, 1 auto-fixed deviation). ISelfRouter DI registered (selfrouting mode), ISelfRouterStats NoOp (ml/offline), 4 /stats fields, Routing.SelfRouter config block. 150 + 17 + 0 baseline preserved.
-Last activity: 2026-05-12 — Phase 19 Plan 02 executed; SelfRouter resolvable from DI but no classify call yet (19-03 next).
+Phase: 19 — 35B Self-Routing (Stage 5 Self-Classify) — In progress (3/4 plans complete)
+Plan: 19-03 complete — cascade wiring + streaming-skip + 3 test files
+Status: 19-03 COMPLETE (4/4 tasks, 2 auto-fixed deviations). ISelfRouter.ClassifyAsync wired into ChatCompletions non-streaming branch; SR-06 streaming-skip comment; 17 new tests (SelfRouterTests 9 + SelfRoutingIntegrationTests 7 + MlDormantTests 1 skip-guarded). 167 + 18 + 0.
+Last activity: 2026-05-12 — Phase 19 Plan 03 executed; SC-1/2/3/4 testable; SC-5 skip-guarded (19-04 next: README/CHANGELOG).
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -125,6 +125,19 @@ Progress: [███████████████████████
 - SR-01 (named client), SR-04 (cache stats exposed), SR-05 (4 snake_case /stats fields) satisfied
 - SR-06 (cascade wiring in ChatCompletions.fs) deferred to 19-03 by design
 
+**v2.0 progress (post-19-03):**
+- Tests: 167 passed + 18 ignored + 0 failed (+17 new: SelfRouterTests 9 + SelfRoutingIntegrationTests 7 + MlDormantTests 1 skip-guarded)
+- ISelfRouter.ClassifyAsync wired into ChatCompletions.fs non-streaming branch: `let! decision = task { if decision.Reason = Default then ... }` after Phase 10 health rebind
+- SR-06 streaming-skip: explicit comment block in streaming branch; structural zero ClassifyAsync calls verified
+- RouteSafe → { Target=Qwen35B, Priority=Low, Reason=SelfRoute, ModelVersion=selfRouter.PromptVersion }
+- RouteUnsafe → { Target=Qwen122B, Priority=High, Reason=SelfRoute, ModelVersion=selfRouter.PromptVersion }
+- RouteSkipped/RouteFailed → fail-open (decision unchanged, Default=35B)
+- ISelfRouter null (Routing.Mode="ml") → GetService returns null; isNull (box selfRouter) guard fail-opens
+- SelfRouterTests.fs: 9 unit tests — parser safety bias (SAFE⊂UNSAFE), cache hit/miss, RouteFailed not cached, RouteSkipped, PromptVersion
+- SelfRoutingIntegrationTests.fs: 7 DI integration tests — SC-1/2/3/4 + fail-open + singleton identity
+- MlDormantTests.fs: 1 test (skip-guarded) — Routing.Mode="ml" DI boots cleanly post-Phase-19
+- SR-06, SR-08, SR-09 satisfied; ROADMAP SC-1/2/3/4/5 all testable from dotnet test
+
 *Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
 
 ## Accumulated Context
@@ -148,6 +161,14 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 - **PromptVersion at construction time**: `SHA256.ComputeHash(File.ReadAllBytes(promptPath))` in the class initializer. Captures the prompt state when the service started; operator runtime edits do not change the version until next restart.
 - **factory.CreateClient("selfrouter") only**: `IUpstreamClient` routes through `QueueDispatcher` holding the 122B `SemaphoreSlim(1)`. Using it for classify calls would make the classifier compete with real inference traffic.
 - **No open DecisionLogger in SelfRouter.fs**: The plan's skeleton comment said `open DecisionLogger // for computePromptHash`, but `computePromptHash` is called by the caller (ChatCompletions.fs in 19-03), not SelfRouter itself. SelfRouter receives `promptHash` as a parameter — same pattern as JudgeClient receives pre-computed hashes. No import needed.
+
+**19-03 execution decisions (2026-05-12):**
+- **Self-classify call site in ChatCompletions.fs (not algorithm closure):** `RoutingAlgorithm` is synchronous (`RoutingConfig -> RouterRequest -> RoutingDecision`); calling async `ClassifyAsync` inside it would require `.GetAwaiter().GetResult()` (deadlock risk). Call site mirrors Phase 14 QualityFallback pattern — after `routeRequest` returns in the non-streaming branch.
+- **`decision.Reason = Default` gate:** Only Default-reason decisions proceed to self-classify. HardRule/StickyEscalation/ExplicitModelOverride/ExplicitTask/ML/FallbackTo* already have decided targets and short-circuit.
+- **GetService<ISelfRouter>() null-safe:** ISelfRouter not registered in ml-mode. `GetService` returns null; `isNull (box selfRouter)` guard fail-opens. Matches IJudgeClient pattern at line ~455.
+- **RouteSafe/RouteUnsafe set ModelVersion = selfRouter.PromptVersion:** Threads SHA-256 hex8 prompt hash into DecisionLog.model_version so operators can correlate routing decisions with prompt template versions (SC-1 requirement).
+- **FS0760 in test code:** `new StubHandler(...)` required (not `StubHandler(...)`) for types inheriting IDisposable under TreatWarningsAsErrors. Caught at build time.
+- **MlDormantTests uses minimal ml-config with Routing:ML section:** Unlike selfrouting-mode tests that omit Routing:ML, the ml-mode test needs the ML section to not throw in ensureEmbeddingFilesPresent. W4 skip guard prevents execution when ONNX absent.
 
 **19-02 execution decisions (2026-05-12):**
 - **Mode-gated DI block outside factory lambda**: `if routingMode = "selfrouting" then (AddHttpClient + AddSingleton x3) else (AddSingleton NoOp)` placed before `RoutingAlgorithmRegistration` factory. services.AddSingleton calls are IServiceCollection-level operations — they must not appear inside a factory lambda that constructs a single value. This is the key structural constraint for all mode-gated DI in this codebase.
@@ -191,7 +212,7 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 
 ### Pending Todos
 
-- v2.0 Phase 19 Plan 03 (`/gsd:execute-phase 19-03`) — next action (cascade wiring: ISelfRouter.ClassifyAsync call in ChatCompletions.fs for non-streaming requests)
+- v2.0 Phase 19 Plan 04 (`/gsd:execute-phase 19-04`) — next action (README + CHANGELOG documentation for Phase 19 changes)
 - ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3; MODELS-01/02/03 currently erroring with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests)
 - Remove configureServices backwards-compat alias after ModelsTests migration
 
