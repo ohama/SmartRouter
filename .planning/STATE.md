@@ -9,10 +9,11 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 
 ## Current Position
 
-Milestone: v1.3 ✅ Complete (archived to `.planning/milestones/v1.3-*`) — 16 phases / 62 plans / 113 tests passing / 5 releases
-Phase: None active (awaiting v2.0 roadmap creation)
-Plan: Not started
-Status: Ready to plan v2.0. Operator pivot 2026-05-11 from ML-routing arc to selfrouting paradigm. Phase 17 (ML QualityClassifier distillation endgame) deferred — paradigm shift.
+Milestone: v2.0 Self-Routing + Session-Aware — STARTED 2026-05-11 (v1.3 ✅ archived)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements. PROJECT.md updated with Current Milestone section + Validated audit (v1.x shipped reqs moved). Awaiting research + REQUIREMENTS.md + ROADMAP.md per /gsd:new-milestone workflow.
+Last activity: 2026-05-11 — Milestone v2.0 started.
 
 **v2.0 design decisions (locked 2026-05-11 with operator; carry forward into `/gsd:new-milestone`):**
 1. **Paradigm**: Selfrouting primary, ML dormant. ML code retained in repo but removed from request path. Future option `Routing.Mode = "ml" | "selfrouting"` config switch preserved.

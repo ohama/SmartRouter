@@ -8,22 +8,18 @@ on a Mac and routes each request to the right one. It serves
 (`localhost:8000`) for fast / lightweight work or Qwen 122B
 (`localhost:8001`) for heavy reasoning. Two distinct consumers depend on it:
 
-- **Hermes Agent** (Nous Research) — latency-sensitive interactive use; sends
-  no `task` field; routing decided purely by heuristic.
+- **Hermes Agent** (Nous Research; sits **above** smart-router as the upper layer per v2.0 architecture) — latency-sensitive interactive use; will propagate session_id via header for sticky escalation continuity in v2.0.
 - **Graphify** (yet to be built) — task-typed Graph-RAG / compiler / multi-file
   reasoning workloads; sends an explicit `task` field (`graph_indexing`,
   `retrieval`, `summary`, `reasoning`, `compiler_debug`,
   `architecture_analysis`, `dependency_analysis`); needs concurrency
   protection on 122B and quality-correct routing.
 
-Both clients use the same OpenAI-compatible wire format. The router
-reconciles their needs through a single decision pipeline:
-explicit-model-override → explicit-task → **ML classifier (primary)**
-→ 35B-aggressive default. The hand-written heuristic ships in Phases
-1-3 and remains in the codebase as a **dormant emergency fallback**
-(soft-paused 2026-05-08; see Key Decisions). All forward development
-(Phases 6-9) targets the ML algorithm: bge-m3 int8 embeddings + ML.NET
-LR classifier + auto-retraining loop.
+Both clients use the same OpenAI-compatible wire format.
+
+**v1.x (shipped):** Pipeline was `explicit-model-override → explicit-task → ML classifier (primary) → 35B-aggressive default`. ML classifier (bge-m3 int8 + ML.NET LR) with closed-loop retraining, canary deployment, quality fallback, 122B-as-judge. v1.3.0 final.
+
+**v2.0 pivot (operator 2026-05-11):** Selfrouting paradigm replaces ML in the routing path. New pipeline: `Hard Rules (keyword pre-routing) → 35B self-classify (SAFE/UNSAFE 1-token) → sticky session continuity → Qwen 35B/122B`. ML code retained in repo but routing-path dormant (mirrors Phase 12 heuristic retirement). Future `Routing.Mode = "ml" | "selfrouting"` config switch preserved as option.
 
 ## Core Value
 
@@ -40,80 +36,120 @@ When tradeoffs arise:
   to make a Hermes call wait 200ms than to thrash 122B and starve a Graphify
   graph index.
 
+## Current Milestone: v2.0 Self-Routing + Session-Aware
+
+**Goal:** Replace ML-driven routing decision path with selfrouting paradigm: keyword hard rules → 35B asks itself "SAFE for me?" → sticky session continuity. Hermes Agent integrates upward via session_id propagation for debugging-continuity. ML code retained in repo but dormant.
+
+**Target features:**
+- Hard Rules pre-routing layer (stage 0; keyword-driven immediate-122B for LLVM/MLIR/compiler/segfault/optimization/concurrency)
+- 35B self-classify routing (1-token SAFE/UNSAFE; cached by prompt_hash; max_tokens=4-8; temp=0)
+- Sticky session escalation (if previous request in session was 122B → stay on 122B; debugging continuity)
+- Hermes Agent integration (X-Session-Id header propagation; smoke test against `~/hermes-agent`)
+- (optional) Speculative routing — 35B drafts while router evaluates complexity
+
 ## Requirements
 
 ### Validated
 
-<!-- Shipped and confirmed valuable. -->
+<!-- Shipped and confirmed valuable in v1.x. -->
 
-(None yet — ship to validate)
+**API surface (v1.0–v1.3)**
+
+- ✓ OpenAI-compatible `POST /v1/chat/completions` on `localhost:4000` — v1.0
+- ✓ Standard OpenAI field parsing + unknown field preservation — v1.0
+- ✓ `GET /health`, `GET /v1/models`, `GET /stats` (21+ flat snake_case fields) — v1.0
+- ✓ `GET /canary`, `POST /canary/{promote,rollback,enable}` — v1.0
+- ✓ Optional non-OpenAI `task` field — v1.0
+
+**Routing pipeline (v1.0–v1.3)**
+
+- ✓ Three-stage decision pipeline (explicit model override → task table → ML classifier) — v1.0
+- ✓ 7-task table (graph_indexing/compiler_debug/architecture_analysis/dependency_analysis/reasoning → 122B; retrieval/summary → 35B) — v1.0
+- ✓ ML routing: bge-m3 int8 + ML.NET LbfgsLogisticRegression — v1.0
+- ✓ `Routing.ML.Threshold` tunable — v1.0
+- ✓ First-run bootstrap auto-generates dummy classifier — v1.0
+- (✓ Heuristic routing retired Phase 12 — v1.0; preserved at `archive/heuristic-baseline` branch)
+
+**Concurrency + Streaming (v1.0)**
+
+- ✓ `SemaphoreSlim(1)` on 122B with two-level priority queue + fairness counter — v1.0
+- ✓ 35B bypasses queue — v1.0
+- ✓ SSE pass-through with mid-stream cancellation + `[DONE]` sentinel injection — v1.0
+- ✓ Cancellation token propagation client → router → upstream — v1.0
+
+**Reliability (v1.0–v1.1)**
+
+- ✓ HealthService BackgroundService (10s probes; ConsecutiveFailureThreshold) — v1.0
+- ✓ 122B-unreachable fallback to 35B (except `graph_indexing` → HTTP 503) — v1.0
+- ✓ Transient retry policy (non-streaming only) — v1.0
+- ✓ Quality fallback (35B → 122B retry on bad response, non-streaming) — v1.1
+- ✓ `extractAssistantText` fix (issue #13) — v1.1.1
+
+**Auto-retraining loop (v1.0)**
+
+- ✓ FailureDetector + TeacherLabeler + DatasetMerger + Retrainer + Validator pipeline — v1.0
+- ✓ PredictionEnginePool hot-swap (`watchForChanges:true`) — v1.0
+- ✓ Daily cost cap on teacher calls — v1.0
+- ✓ Manual offline retraining (`--retrain` CLI flag) — v1.0
+
+**Canary deployment (v1.0)**
+
+- ✓ `models/router-canary.zip` FileSystemWatcher arms canary — v1.0
+- ✓ Sticky 10/90 split by `correlation_id` (ContextualTargetingFilter) — v1.0
+- ✓ Auto-rollback watchdog (rolling-60s fallback rate; configurable threshold) — v1.0
+- ✓ `model_version` distinguishes baseline vs canary in DecisionLog — v1.0
+
+**Quality enrichment (v1.2)**
+
+- ✓ Quality fallback 5-dimension cascade (finish_reason + case-insensitive keywords + Korean length boost + Shannon entropy + cheap-first cascade) — v1.2
+- ✓ `bad_reason` TraceLog field with `tag=value` serialization — v1.2
+- ✓ `/stats` `quality_check_hits_*` counters — v1.2
+
+**Quality verification (v1.3)**
+
+- ✓ 122B-as-judge for borderline cases (OPT-IN; `Routing.Judge.Enabled=false` default) — v1.3
+- ✓ LRU cache by `(prompt_hash, response_hash)` — v1.3
+- ✓ 3 trace fields (`judge_called`/`judge_verdict`/`judge_latency_ms`) — v1.3
+- ✓ 3 `/stats` counters (`judge_cache_hits`/`_misses`/`_call_count`) — v1.3
+
+**Observability (v1.0–v1.3)**
+
+- ✓ Structured DecisionLog JSONL (12-field schema) — v1.0
+- ✓ Operational log rolling Serilog file (50MB cap, 30-day retention) — v1.0
+- ✓ Opt-in TraceLog JSONL with `--trace-responses` (16 fields v1.3) — v1.1
+- ✓ Correlation ID propagation across all log streams — v1.0
+- ✓ `--cold-start` CLI recovery flag — v1.1
+- ✓ `--log-level` CLI flag with 6 levels + aliases — v1.0
+
+**Architecture (v1.0)**
+
+- ✓ Hexagonal: pure Core (BCL-only, ARCH-01) + Cli adapters — v1.0
+- ✓ `task {}` only in Core (no `async {}`); ARCH-02 — v1.0
+- ✓ Stateless service (DI-scoped singletons) — v1.0
+- ✓ Extension seams for future providers — v1.0
+
+**Operability (v1.0)**
+
+- ✓ launchd plist + deploy + install scripts — v1.0
+- ✓ README at repo root (operator-facing; ~669 lines after v1.1 condensation) — v1.0
+- ✓ Loopback-only binding to `127.0.0.1:4000` — v1.0
+
+**Testing (v1.0–v1.3)**
+
+- ✓ 113 tests passing (62 plans worth of test coverage); routing pipeline + SSE streaming + concurrency gate + ML classifier + retraining + canary + health/fallback + deployment + quality fallback + trace + /stats wire — v1.3
 
 ### Active
 
-<!-- Current scope. Building toward these. -->
+<!-- v2.0 milestone scope. Will be detailed by /gsd:new-milestone Phase 8 (requirements). -->
 
-**API surface**
+(Will be populated by REQUIREMENTS.md after Phase 8 requirements gathering)
 
-- [ ] OpenAI-compatible `POST /v1/chat/completions` endpoint on `localhost:4000`
-- [ ] Request parsing: `messages`, `model`, `stream`, `temperature`, `top_p`, `max_tokens`, plus optional non-OpenAI `task` field
-- [ ] Preserve unknown fields when forwarding upstream (don't strip)
-- [ ] `GET /health` — liveness + upstream reachability for both ports
-- [ ] `GET /v1/models` — proxies upstream model lists, deduped
-- [ ] `GET /stats` — queue size, waiting requests, active model, average wait time, requests/sec, failures, streaming duration
-
-**Routing decision pipeline**
-
-- [ ] Honor explicit `model` override when value matches `35b` / `122b` (or alias) — short-circuits routing
-- [ ] Honor explicit `task` field via task-routing table (graph_indexing/compiler_debug/architecture_analysis/dependency_analysis/reasoning → 122B; retrieval/summary → 35B)
-- [ ] Heuristic fallback when no task and no override: prompt length, complex-keyword set, code-block detection, message count, total context size
-- [ ] Aggressive 35B preference for ambiguous heuristic cases (Hermes path)
-- [ ] Configurable routing rules in `appsettings.json` (threshold, keyword list, task→model table, model URLs)
-
-**Concurrency + queueing**
-
-- [ ] `SemaphoreSlim(1)` on 122B — at most one heavy request in flight per gateway process
-- [ ] Priority queue for 122B: high (graph_indexing, compiler_debug, architecture_analysis), low (everything else routed to 122B)
-- [ ] 35B served with higher concurrency (no semaphore-1; bounded by HttpClient pool)
-- [ ] Cancellation token propagated client → router → upstream HttpClient call
-- [ ] Configurable per-request timeout (default 300s to cover 122B cold-start, matching blueCode)
-
-**Reliability**
-
-- [ ] Retry policy on transient upstream failures (idempotent `chat/completions`; bounded retries with backoff)
-- [ ] Backend health probing (track 35B / 122B reachability for `/health` and fallback decisions)
-- [ ] Fallback: when 122B is unavailable, route to 35B *except* for `graph_indexing` (which must return an error — wrong-model output is worse than no output)
-
-**Streaming**
-
-- [ ] Pass-through SSE when client sends `stream=true` — forward upstream chunks unchanged, no buffering
-- [ ] Preserve chunk ordering
-- [ ] Support cancellation mid-stream (downstream disconnect aborts upstream call)
-
-**Observability**
-
-- [ ] Structured logging (Serilog, stderr) per request: selected model, routing reason, latency, token count, backend status, queue wait time
-- [ ] Counters/gauges feeding `/stats`: requests/sec, active requests, 122B queue depth, average latency, failure count, streaming duration
-
-**Architecture**
-
-- [ ] Hexagonal: pure Core (no HTTP / no logging / `task {}` only) + Cli adapters
-- [ ] Stateless service (no static mutable state; queue + semaphore + counters held in DI-scoped singletons)
-- [ ] Extensibility seams for future providers (Claude / OpenAI / DeepSeek / Gemini / Gemma / Llama) — interfaces in place, no implementations
-- [ ] Composable routing rules (chain of decision functions; testable in isolation)
-
-**Operability**
-
-- [ ] launchd plist for daemonized operation (matches `com.ohama.qwen122b.plist` pattern)
-- [ ] README: architecture, routing rules, threshold tuning, debugging, Hermes integration steps, Graphify integration steps
-
-**Testing**
-
-- [ ] Expecto unit tests: complexity scoring, keyword detection, task-routing table, priority comparison, fallback decisions
-- [ ] Integration tests with fake upstream OpenAI servers (deterministic responses, controlled latency, controlled failures)
-- [ ] Streaming tests (chunk ordering, cancellation, mid-stream upstream failure)
-- [ ] Concurrency tests (semaphore enforcement, priority ordering, queue starvation)
-- [ ] Load tests (concurrent request throughput, latency under contention)
-- [ ] Failure tests (timeout, malformed JSON from upstream, unavailable model server, fallback path, graph_indexing-must-fail path)
+High-level v2.0 capabilities (to be decomposed into requirements):
+- [ ] Hard Rules pre-routing (stage 0; before existing pipeline)
+- [ ] 35B self-classify routing with operator-tunable prompt
+- [ ] Sticky session escalation with session store
+- [ ] Hermes Agent integration via `X-Session-Id` header
+- [ ] ML code routing-path dormant (retained for future `Routing.Mode` switch)
 
 ### Out of Scope
 
@@ -259,7 +295,11 @@ regression.
 | Reject Channels / TPL Dataflow for v1 | Priority queue + semaphore covers v1 needs without the abstraction tax. Reach for Dataflow only if v2 fan-out pipelines justify it. | ✓ Good |
 | **ML routing folded into v1** (was originally Out of Scope / v2). NEW Phases 4-9 ship the ML arc; old Phases 4 and 6 deferred to Phases 10-11. Old Phase 5 dissolved (OBS-01/03 → NEW Phase 5; TEST-01/02 retroactively Complete via Phases 1-3 tests). | Operator decision 2026-05-08 to fold the ML revisit forward after Phase 3 completion. The 3-layer integration strategy (code separation: `Heuristic.fs` + `ML.fs`; config selection: `Routing.Algorithm`; CLI override) keeps the heuristic baseline as the permanent fallback. Source: `~/projs/smart-router-distillation/docs/handoff-to-smart-router.md`. | — Pending |
 | **Heuristic SOFT-PAUSED 2026-05-08** (was: "stays forever as first-class baseline") | Operator decision: ML is the primary path going forward (Phases 6-9). Heuristic code stays in the codebase (`src/SmartRouter.Core/Heuristic.fs`, `Routing.Algorithm` dispatch, `--routing-algorithm` CLI flag, `check-routing-isolation.sh`) as a **dormant emergency fallback** — usable when ML model file is missing/corrupt, for debugging ("how would heuristic decide this?"), or for rollback. NOT actively developed; no new heuristic features; no Phase 9 canary heuristic-vs-ML A/B (Phase 9 compares ML model versions to each other instead). Snapshot preserved at git branch `archive/heuristic-baseline` and tag `v0.5-heuristic-baseline` (commit `a4cfce1`). When Phase 6 ships real ML, `appsettings.json` `Routing.Algorithm` flips default to `"ml"`. | — Pending |
-| **Embedding model: bge-m3 int8 quantized from Phase 6** (skipping bge-small MVP and FP32-default both) | Operator's traffic mixes Korean+English; bge-small (-en) cannot tokenize Hangul (deep-dive §1.7.1). Two-step decision: (1) bge-m3 over bge-small for multilingual; (2) int8 dynamic-quantized over FP32 from the start per deep-dive §1.7.7 row 4 (router latency-tight environment). File: 2.3GB → ~580MB. Latency: 50-80ms → 20-30ms p95 on M-series CPU. Accuracy regression from int8 typically <2%, which Phase 8 validation gate catches automatically. CoreML EP is the next-tier fallback if int8 still misses budget under load. | — Pending |
+| **Embedding model: bge-m3 int8 quantized from Phase 6** (skipping bge-small MVP and FP32-default both) | Operator's traffic mixes Korean+English; bge-m3 chosen for multilingual; int8 quantized from start. | ✓ Good (v1.0-1.3; ~50ms p95 in production) |
+| **v2.0 SELFROUTING PIVOT (operator 2026-05-11)**: Replace ML in routing path with `Hard Rules + 35B self-classify + sticky escalation`. ML code retained but routing-path dormant (mirrors Phase 12 heuristic retirement). Future `Routing.Mode = "ml" \| "selfrouting"` config switch preserved. | Per `.planning/docs/35b-selfrouting.md` §3,7: 35B self-route avoids separate inference server + KV cache pressure; SAFE-for-35B classification more stable than "simple"; same model serves routing + responses. Phase 17 ML QualityClassifier deferred. | — Pending |
+| **v2.0 router model = 35B self-route** (NOT 7B Qwen2.5-Coder-7B separate server) | Local Mac M4 128GB constraint; doc §3 — extra server adds memory/scheduling burden; same 35B serving both is cheaper. Future upgrade path to dedicated 7B router preserved (doc §19). | — Pending |
+| **v2.0 heuristic scope = Hard Rules ONLY** (NOT full Heuristic.fs revival) | Phase 12 heuristic was deleted; v2.0 brings back ONLY the keyword pre-routing layer (LLVM/MLIR/compiler/segfault/optimization/concurrency per doc §6,12). Prompt length / complexity score / message count etc. stay buried. | — Pending |
+| **v2.0 architecture context**: Hermes Agent sits ABOVE smart-router (upper layer); smart-router gets session_id propagation downward for sticky escalation. Integration target `~/hermes-agent`. | Doc §18 architecture diagram + selfrouting doc §16 sticky escalation requires session continuity from a layer that knows the session — Hermes is that layer for v2.0. | — Pending |
 
 ---
-*Last updated: 2026-05-08 after operator soft-paused heuristic development. ML (Phases 6-9, bge-m3 int8) is the primary path; heuristic remains in codebase as dormant fallback only. Snapshot at archive/heuristic-baseline + v0.5-heuristic-baseline tag.*
+*Last updated: 2026-05-11 after v1.3 milestone ✅ SHIPPED and v2.0 operator pivot to selfrouting paradigm. v1.x ML routing arc complete; v2.0 selfrouting milestone starting. ML code retained but routing-path dormant; future Routing.Mode config switch preserves re-activation option.*
