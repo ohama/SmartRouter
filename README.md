@@ -8,7 +8,7 @@ An F# .NET 10 gateway routing OpenAI-compatible requests between local Qwen 35B 
 2. [Architecture](#2-architecture)
 3. [Requirements](#3-requirements)
 4. [Quickstart](#4-quickstart)
-5. [Routing Pipeline](#5-routing-pipeline)
+5. [Routing Pipeline](#5-routing-pipeline) — [§5.7 Stage 4 self-classify](#57-stage-4--35b-self-classify-v20-phase-19)
 6. [ML Feedback Loop](#6-ml-feedback-loop)
 7. [Configuration Reference](#7-configuration-reference)
 8. [Endpoints](#8-endpoints)
@@ -51,7 +51,7 @@ A local-only HTTP gateway at `http://127.0.0.1:4000` fronting two `mlx_lm.server
 
 **Hexagonal:** `SmartRouter.Core` (pure, BCL-only — no Microsoft.ML, no HttpClient, no ASP.NET Core, no Serilog). Adapters live in `SmartRouter.Cli`. Project boundary enforced via `.fsproj` references.
 
-**Routing algorithm (Phase 17 v2.0):** Stage 0 Hard Rules runs first (keyword scan; 0 ms). Stage 3 is mode-dependent: `Routing.Mode="selfrouting"` (default) uses the Phase 17 stub (35B fallback; Phase 19 ships real SAFE/UNSAFE self-classify); `Routing.Mode="ml"` runs bge-m3 int8 ONNX → 1024-dim L2-normalized vector → ML.NET `LbfgsLogisticRegression` → confidence ≥ `Routing.ML.Threshold` (default 0.5) routes to 122B, else 35B. Heuristic routing was retired; snapshot at `archive/heuristic-baseline` branch + `v0.5-heuristic-baseline` tag.
+**Routing algorithm (v2.0):** Stage 0 Hard Rules runs first (keyword scan; 0 ms). Stage 4 self-classify (non-streaming only) is the v2.0 default: `Routing.Mode="selfrouting"` invokes a 1-token SAFE/UNSAFE classify call on the 35B model; `Routing.Mode="ml"` falls back to the v1.x path: bge-m3 int8 ONNX → 1024-dim L2-normalized vector → ML.NET `LbfgsLogisticRegression` → confidence ≥ `Routing.ML.Threshold` (default 0.5) routes to 122B, else 35B. Heuristic routing was retired; snapshot at `archive/heuristic-baseline` branch + `v0.5-heuristic-baseline` tag.
 
 **Two feedback loops:**
 - **Loop A (real-time):** 122B unreachable + non-graph_indexing → reroute to 35B (`fallback_used=true`, `routing_reason=fallback_to_35b`). Quality-bad 35B response → retry on 122B (`routing_reason=fallback_to_122b`). DecisionLog row written for every request.
@@ -118,8 +118,7 @@ For deployment as a launchd service: see [§11 Operations](#11-operations).
 
 ## 5. Routing Pipeline
 
-Phase 17 (v2.0) added Stage 0 — keyword-driven Hard Rules — and a `Routing.Mode` switch
-(`"selfrouting"` default; `"ml"` for v1.x rollback). The cascade is now four stages.
+v2.0 added Stage 0 Hard Rules (Phase 17), sticky session escalation (Phase 18), and 35B self-classify (Phase 19), plus a `Routing.Mode` switch (`"selfrouting"` default; `"ml"` for v1.x rollback). The cascade is now six stages.
 
 ### 5.0 Hard Rules pre-routing (Stage 0, Phase 17)
 
@@ -140,10 +139,10 @@ mechanism and we don't want operators accidentally widening or narrowing it via 
 Hard Rules applies to **both streaming and non-streaming requests** — the keyword check is
 cheap enough that the first SSE chunk's latency budget is not threatened.
 
-### 5.1 Four-stage decision
+### 5.1 Six-stage decision
 
 ```
-Stage 0: Hard Rules (Phase 17)
+Stage 0: Hard Rules (Phase 17) — applies to streaming and non-streaming
    any message content contains LLVM/MLIR/compiler/segfault/optimization/concurrency?
      → 122B, routing_reason=hard_rule, priority=High. DONE.
    no match → continue.
@@ -157,12 +156,21 @@ Stage 2: task table
    unknown task → HTTP 400.
    no task → continue.
 
-Stage 3: routing algorithm (mode-dependent) — Phase 18 adds sticky check first
+Stage 3: sticky session escalation (Phase 18) — applies to streaming and non-streaming
    X-Session-Id present AND session store has LastModel=Qwen122B?
      → 122B, routing_reason=sticky_to_122b. DONE.  (§5.6)
-   else:
+   else → continue.
+
+Stage 4: 35B self-classify (Phase 19, v2.0) — NON-STREAMING ONLY; streaming skips to Stage 5
+   Routing.Mode="selfrouting":
+     calls 35B with classify prompt (§5.7) → SAFE? → 35B, routing_reason=self_route.
+                                            → UNSAFE? → 122B, routing_reason=self_route.
+                                            → failure/skip? → fail-open, continue to Stage 5.
+   Routing.Mode="ml": Stage 4 does not run; falls through to Stage 5.
+
+Stage 5: default
    Routing.Mode="ml":          bge-m3 embed → LbfgsLogisticRegression → confidence ≥ Threshold? → 122B; else 35B.
-   Routing.Mode="selfrouting": Phase 17 stub returns 35B/Default; full SAFE/UNSAFE self-classify lands in Phase 19.
+   Routing.Mode="selfrouting": 35B/Default (prompt did not trigger Hard Rules, sticky, or self-classify).
 ```
 
 ### 5.2 Task table
@@ -297,9 +305,54 @@ session store after the full cascade (including quality fallback and judge) reso
 concurrent 35B write can never overwrite a 122B escalation — `AddOrUpdate` keeps 122B on
 collision regardless of write order.
 
-Phase 19 will insert 35B self-classify BEFORE the sticky check inside Stage 3
-(non-streaming only); streaming requests always skip self-classify but Stage 3
-sticky still applies to streaming.
+Stage 4 (Phase 19, v2.0) runs 35B self-classify AFTER sticky (non-streaming only);
+streaming requests always skip self-classify but Stage 3 sticky still applies to streaming.
+See §5.7 for self-classify mechanics.
+
+### 5.7 Stage 4 — 35B Self-Classify (v2.0, Phase 19)
+
+For **non-streaming** requests that reach Stage 4 without being decided by Hard Rules
+(Stage 0), an explicit model or task override (Stages 1/2), or sticky session (Stage 3),
+the router calls the 35B model itself to classify the prompt as SAFE (handle on 35B) or
+UNSAFE (escalate to 122B).
+
+Active only when `Routing.Mode="selfrouting"` (the v2.0 default). Setting
+`Routing.Mode="ml"` skips Stage 4 entirely and falls through to the v1.x ML classifier.
+
+**Mechanics:**
+
+- The router sends a small classify request via the named `"selfrouter"` HttpClient — a
+  dedicated connection pool **separate** from the inference client (5s timeout, 1 retry at
+  200ms, not the 300s inference timeout; 35B concurrency cap does not apply).
+- Request body: `max_tokens=8`, `temperature=0`, `stream=false`. The user's prompt content
+  is substituted into the `{{PROMPT}}` placeholder in `prompts/self-router-prompt.md`.
+- The 1-word response is parsed **safety-biased**: if both "SAFE" and "UNSAFE" appear (or
+  the output is ambiguous), the verdict is **UNSAFE** (escalate to 122B). This protects
+  against the substring collision (`SAFE` ⊂ `UNSAFE` — the word "UNSAFE" contains "SAFE").
+- Verdicts are stamped in the DecisionLog with `routing_reason="self_route"`,
+  `routing_algorithm="selfrouting"`, and `model_version="selfrouting-{hex8}"` (first 8 hex
+  chars of SHA-256 of `prompts/self-router-prompt.md` at startup). See §9.1.
+- Repeated identical prompts hit a per-process LRU cache keyed by SHA-256 of the full
+  conversation content (`prompt_hash`); cache hits skip the HTTP round-trip entirely. Bounded
+  at 10,000 entries by default (`Routing.SelfRouter.MaxCacheEntries`).
+- Failure modes (template missing, HTTP timeout, garbage response, model returns neither word)
+  **fail open** to Stage 5 default (Qwen 35B). No request is dropped. Operators can monitor
+  via `/stats` `selfrouter_skipped` and `selfrouter_call_count` fields (§8).
+
+**Streaming requests skip Stage 4 entirely.** The latency budget for the first SSE chunk
+(~100ms p50) cannot absorb a classify round-trip (5s timeout window + 35B inference latency).
+Hard Rules (Stage 0) and sticky escalation (Stage 3) still apply to streaming via
+`routeRequest`.
+
+**Operator tuning:** Edit `prompts/self-router-prompt.md` to refine SAFE/UNSAFE classification
+criteria. Changes take effect on next router restart — the template is read on first request
+after boot and cached for the process lifetime. The `model_version` field in the DecisionLog
+will change to a new `selfrouting-{hex8}` value after restart, confirming the new template is
+active.
+
+**Operator rollback to v1.x ML routing:** Set `Routing.Mode="ml"` in `appsettings.json` and
+restart. Stage 4 is not invoked; the v1.x ML classifier (bge-m3 + LbfgsLogisticRegression)
+serves at Stage 5. See §7 `Routing.SelfRouter` config block and §7 `Routing.Mode`.
 
 ---
 
@@ -393,6 +446,25 @@ Phase 18. Controls the in-memory session store used by sticky escalation (§5.6)
 |---|---|---|---|
 | `Routing.Session.TtlMinutes` | int | `30` | Session-entry sliding TTL in minutes. Entries idle longer than this value are removed by the `SessionTtlEvictionService` BackgroundService (5-minute sweep interval). `<= 0` resets to default 30. |
 | `Routing.Session.MaxEntries` | int | `10000` | Bound for the in-memory session store. LRU eviction (O(n) min-AccessSeq scan) fires at write time when the cap is exceeded. Restart clears the store. |
+
+### Routing.SelfRouter
+
+Phase 19 (v2.0). Controls Stage 4 self-classify (§5.7). Active only when
+`Routing.Mode="selfrouting"` (the v2.0 default). All keys are ignored when
+`Routing.Mode="ml"`.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `Routing.SelfRouter.Endpoint` | string | `""` (empty → derive from `Upstreams.Model35B`) | Override URL for classify calls. Almost never set — Stage 4 is by design routed to the same 35B instance as inference. |
+| `Routing.SelfRouter.PromptPath` | string | `"prompts/self-router-prompt.md"` | Path to the operator-tunable classify prompt template. Must contain a `{{PROMPT}}` placeholder. Template is read on first request after startup and cached for the process lifetime; restart required for changes to take effect. |
+| `Routing.SelfRouter.TimeoutSeconds` | int | `5` | HTTP timeout for each classify call (per attempt; 1 retry at 200ms constant backoff). Raising this masks slow-server symptoms without benefit; 5s is already a generous latency budget for a 1-token response. |
+| `Routing.SelfRouter.MaxCacheEntries` | int | `10000` | LRU bound on the per-process prompt-hash → verdict cache. Lower values cause more HTTP round-trips; higher values use more memory. Restart clears the cache. |
+
+**Operator note:** The retry policy (1 retry at 200ms constant backoff) is built into the
+`"selfrouter"` named HttpClient at DI registration time and is not operator-configurable.
+Changes to `Routing.SelfRouter.*` require a router restart. The `model_version` value in the
+DecisionLog (`selfrouting-{hex8}`) will change after restart if `PromptPath` content changed,
+signaling the new template is active (§9.1).
 
 ### Routing.Health
 
@@ -532,6 +604,21 @@ curl -s http://127.0.0.1:4000/stats | \
 | `judge_cache_misses` | Number of judge LRU cache misses. Each miss MAY result in 1 HTTP call (unless prompt template missing → JudgeSkipped). |
 | `judge_call_count` | Number of upstream HTTP calls to the named "judge" client. Equals cache_misses minus skips. |
 
+**Phase 19 — self-router counters** (all `int64`, process-lifetime, 0 when `Routing.Mode="ml"`):
+
+| Field | Description |
+|---|---|
+| `selfrouter_cache_hits` | A non-streaming Default-reason request found its prompt hash in the LRU cache (no HTTP call). |
+| `selfrouter_cache_misses` | A non-streaming Default-reason request's prompt hash was not in the cache; an HTTP classify call was initiated. |
+| `selfrouter_call_count` | An HTTP classify call to the `"selfrouter"` named client was sent. Approximately equals `selfrouter_cache_misses` (minus any `selfrouter_skipped`). |
+| `selfrouter_skipped` | Adapter returned `RouteSkipped` — typically because `prompts/self-router-prompt.md` is missing at the path specified by `Routing.SelfRouter.PromptPath`. Does **not** count streaming requests — streaming skip is structural and never reaches the adapter. |
+
+```bash
+# Observe self-classify cache effectiveness
+curl -s http://127.0.0.1:4000/stats | \
+  jq '{selfrouter_cache_hits, selfrouter_cache_misses, selfrouter_call_count, selfrouter_skipped}'
+```
+
 ### GET /canary
 
 ```json
@@ -569,12 +656,12 @@ One row per request. Daily rotation by filename. Auto-pruned after `DecisionLog.
 
 | Field | Meaning |
 |---|---|
-| `schema_version` | Currently 1 |
+| `schema_version` | Currently `1`. All v2.0 additions (Phase 17–19) are additive enum values on existing string fields — no field removals, no type changes. Readers ignoring unknown `routing_reason`/`routing_algorithm` values stay forward-compatible. |
 | `correlation_id` | UUID; sticky for canary bucketing; joinable with operational log + trace log |
 | `target` | `Qwen35B` or `Qwen122B` — model that actually served |
-| `routing_reason` | `explicit_model:{alias}`, `explicit_task:{task}`, `default`, `ml`, `fallback_to_35b` (122B unreachable), `fallback_to_122b` (35B response quality-bad), `hard_rule` (Phase 17: keyword-driven Stage 0 → 122B), `sticky_to_122b` (Phase 18: session previously routed to 122B → continuation also routes to 122B), or compounds (`ml;upstream_error`, `ml;cancelled`, `ml;stream_error`). `schema_version=1` unchanged — `sticky_to_122b` is an additive enum value. |
-| `routing_algorithm` | `ml` (v1.x ML classifier, when `Routing.Mode="ml"`), `selfrouting` (v2.0 default — Phase 17 ships stub; Phase 19 ships real 35B self-classify), or `ml-canary` (canary cohort, ml mode only) |
-| `model_version` | `v1`, `v2`, ... baseline; `v3-canary` for canary cohort |
+| `routing_reason` | `explicit_model:{alias}`, `explicit_task:{task}`, `default`, `ml`, `fallback_to_35b` (122B unreachable), `fallback_to_122b` (35B response quality-bad), `hard_rule` (Phase 17: keyword-driven Stage 0 → 122B), `sticky_to_122b` (Phase 18: session previously routed to 122B → continuation also routes to 122B), `self_route` (Phase 19: Stage 4 35B self-classify produced a verdict — SAFE → routed to 35B; UNSAFE → routed to 122B; distinguish by inspecting `target` in the same row), or compounds (`ml;upstream_error`, `ml;cancelled`, `ml;stream_error`). `schema_version=1` unchanged — all v2.0 values are additive enum values. |
+| `routing_algorithm` | `ml` (v1.x ML classifier, when `Routing.Mode="ml"`), `selfrouting` (v2.0 default — Hard Rules → overrides → sticky → 35B self-classify → default 35B), or `ml-canary` (canary cohort, ml mode only) |
+| `model_version` | For `routing_algorithm="ml"` or `"ml-canary"`: `v1`, `v2`, ... baseline; `v3-canary` for canary cohort. For `routing_algorithm="selfrouting"`: `selfrouting-{hex8}` where `{hex8}` is the first 8 hex chars of SHA-256 of `prompts/self-router-prompt.md` at the time the router started. A changed prompt template produces a different `model_version` after the next restart — operators can detect prompt-template drift between router restarts by watching this field in the DecisionLog. |
 | `fallback_used` | `true` if reroute happened (either direction) |
 | `prompt_hash` | SHA-256 of concat'd message content; first 12 hex = `prompt_uid` joining to TraceLog |
 | `prompt_korean_char_ratio` | 0.0–1.0; bilingual routing diagnostic |
