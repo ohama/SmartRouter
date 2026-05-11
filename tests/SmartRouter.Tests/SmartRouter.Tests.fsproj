@@ -38,6 +38,9 @@
     <!-- Phase 17: Hard Rules layer + Routing.Mode switch -->
     <Compile Include="HardRulesTests.fs" />
     <Compile Include="ModeSwitchTests.fs" />
+    <!-- Phase 18: Session Store + Sticky Escalation -->
+    <Compile Include="SessionStoreTests.fs" />
+    <Compile Include="StickyEscalationTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>

@@ -153,8 +153,10 @@ type SessionStore(opts: SessionOptions, logger: ILogger<SessionStore>) =
                     logger.LogError(ex, "SessionStore TTL eviction error; loop continues")
         }
 
-    // Internal accessors for tests + future plans (18-03 eviction loop).
+    // Public accessors for tests + future plans (18-03 eviction loop).
     // Not part of ISessionStore (which only exposes TryGet + Update to callers).
-    member internal _.Store = store
-    member internal _.TtlMinutes = ttlMinutes
-    member internal _.MaxEntries = maxEntries
+    // Exposed as public so SessionStoreTests (a separate assembly) can assert
+    // dictionary state for TTL-mutation and LRU-count tests.
+    member _.Store = store
+    member _.TtlMinutes = ttlMinutes
+    member _.MaxEntries = maxEntries
