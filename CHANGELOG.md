@@ -29,6 +29,50 @@ re-activatable with a one-line `appsettings.json` edit + restart.
 - `configureServices` backwards-compat alias is preserved and inherits the new `Routing.Mode` behavior unchanged.
 - Phase 14 quality fallback (35B → 122B retry on quality-bad responses), Phase 15 quality signal enrichment, and Phase 16 borderline judge (`Routing.Judge.Enabled`) all work unchanged in both `selfrouting` and `ml` modes.
 
+---
+
+### Added (Phase 18 — Session Store + Sticky Escalation)
+
+- **`X-Session-Id` HTTP request header opt-in for session-aware routing.** Requests sharing
+  a session ID get debugging continuity: once any request in the session routes to Qwen 122B
+  (via initial routing, Hard Rule, OR quality-fallback escalation), subsequent requests in
+  the same session route to 122B with `routing_reason="sticky_to_122b"`. Empty or absent
+  header preserves v1.x stateless behavior — no sticky bucket is created.
+- **`RouterRequest.SessionId : string` Core domain field.** 10th field; `""` sentinel means
+  stateless (Phase 9 `CorrelationId` cascade pattern). Set from `X-Session-Id` header in
+  `CorrelationMiddleware`; null/whitespace coalesces to empty string (Pitfall 7: never let
+  stateless clients share one sticky bucket).
+- **`SmartRouter.Core.Domain.SessionState`** BCL-only record — `LastModel`, `LastAccessedAt`,
+  mutable `LastAccessSeq`. Stored in Cli adapter; Core domain-only so Phase 19 self-routing
+  closure can pattern-match on `LastModel` without dragging Cli deps into Core (ARCH-01).
+- **`SmartRouter.Cli.Adapters.SessionStore`** adapter — `ConcurrentDictionary`-backed store
+  with `AddOrUpdate` 122B-wins concurrent merge (non-negotiable correctness invariant: a
+  racing 35B write can never overwrite a 122B escalation), LRU cap on write, and TTL-aware
+  `TryGet`.
+- **`SessionTtlEvictionService` BackgroundService** (PeriodicTimer 5-minute sweep) removing
+  entries older than `Routing.Session.TtlMinutes`. Triple-reg pattern (concrete singleton +
+  `ISessionStore` alias + `AddHostedService`) mirrors `DecisionLogWriter`.
+- **`Routing.Session.TtlMinutes`** and **`Routing.Session.MaxEntries`** `appsettings.json`
+  keys (defaults 30 minutes, 10000 entries). CLIMutable binding; defensive defaults applied
+  at consumption (`<= 0` → 30/10000).
+- **`RoutingReason.StickyEscalation`** 8th DU case → DecisionLog `routing_reason=
+  "sticky_to_122b"` (`schema_version=1` unchanged — additive enum value).
+- **`CorrelationMiddleware` extension** reading `X-Session-Id` into
+  `HttpContext.Items[SessionIdKey]`; null/whitespace coalesces to empty string sentinel.
+- **Point B write** in `ChatCompletions` — `finalDecision.Target` written to session store
+  after the full cascade (quality fallback + judge) resolves, so a 35B→122B escalation
+  is correctly recorded and the next request in the session stickies to 122B (SES-07).
+- **`SessionStoreTests.fs`** (unit) and **`StickyEscalationTests.fs`** (DI-integration)
+  cover all 5 Phase 18 ROADMAP Success Criteria.
+
+### Notes (Phase 18)
+
+- DecisionLog `schema_version` stays at `1`. `sticky_to_122b` is an additive enum value
+  on the existing `routing_reason` string field — no schema migration required.
+- Session store is in-memory only. Restart clears all sessions. See §5.6.
+- `X-Session-Id` header propagation from Hermes Agent is future work (HMRS-FUTURE-01;
+  Phase 20 ships smart-router-side machinery + an opt-in fingerprint fallback).
+
 ## [1.3.0] - 2026-05-11
 
 122B-as-judge release. Borderline 35B responses (entropy/length band

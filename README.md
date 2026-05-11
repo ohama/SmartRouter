@@ -157,7 +157,10 @@ Stage 2: task table
    unknown task → HTTP 400.
    no task → continue.
 
-Stage 3: routing algorithm (mode-dependent)
+Stage 3: routing algorithm (mode-dependent) — Phase 18 adds sticky check first
+   X-Session-Id present AND session store has LastModel=Qwen122B?
+     → 122B, routing_reason=sticky_to_122b. DONE.  (§5.6)
+   else:
    Routing.Mode="ml":          bge-m3 embed → LbfgsLogisticRegression → confidence ≥ Threshold? → 122B; else 35B.
    Routing.Mode="selfrouting": Phase 17 stub returns 35B/Default; full SAFE/UNSAFE self-classify lands in Phase 19.
 ```
@@ -266,6 +269,38 @@ borderline cases.
 Streaming responses (`stream=true`) intentionally bypass the judge — chunks are already
 shipped to the client; retract is impossible (same constraint as Phase 14 quality fallback).
 
+### 5.6 Stage 3 — Sticky session escalation (Phase 18)
+
+When a request includes an `X-Session-Id` HTTP header AND a previous request in the same
+session was served by Qwen 122B (via initial routing, Hard Rule, OR quality-fallback
+escalation), the current request routes to Qwen 122B with
+`routing_reason="sticky_to_122b"` regardless of how "easy" the current prompt looks.
+Debugging continuity is preserved across the session.
+
+**X-Session-Id convention:** Pass an opaque string (UUID, thread ID, conversation ID — any
+stable identifier for the session). The header is opt-in: requests without `X-Session-Id`
+(v1.x backward-compat clients) continue working stateless — no sticky bucket is created, the
+cascade falls through to the default at Stage 3.
+
+**Sticky rule:** only escalation is sticky. If a session's `LastModel=Qwen35B`, requests
+continue routing normally (Hard Rules and task table still apply; Stage 3 falls through to
+the default algorithm). Sticky only locks in when `LastModel=Qwen122B`.
+
+**Session store:** in-memory `ConcurrentDictionary` bounded at `Routing.Session.MaxEntries`
+(default 10000) with `Routing.Session.TtlMinutes` sliding TTL (default 30 minutes).
+A `SessionTtlEvictionService` BackgroundService sweeps every 5 minutes, removing entries
+idle longer than `TtlMinutes`. Restart clears all sessions — sticky escalation is a
+within-session concern, not a durability requirement.
+
+**Write-time semantics (122B-wins merge):** Point B writes `finalDecision.Target` to the
+session store after the full cascade (including quality fallback and judge) resolves. A
+concurrent 35B write can never overwrite a 122B escalation — `AddOrUpdate` keeps 122B on
+collision regardless of write order.
+
+Phase 19 will insert 35B self-classify BEFORE the sticky check inside Stage 3
+(non-streaming only); streaming requests always skip self-classify but Stage 3
+sticky still applies to streaming.
+
 ---
 
 ## 6. ML Feedback Loop
@@ -349,6 +384,15 @@ All keys in `src/SmartRouter.Cli/appsettings.json`. The router reads at startup;
 3. Restart the router (`launchctl unload && launchctl load`).
 4. Monitor judge effectiveness via `/stats`: `judge_cache_hits`, `judge_cache_misses`, `judge_call_count`.
 5. Monitor borderline rate via Phase 15's `quality_check_hits_*` counters — if low (< 1% of requests), the judge ROI is marginal.
+
+### Routing.Session
+
+Phase 18. Controls the in-memory session store used by sticky escalation (§5.6).
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `Routing.Session.TtlMinutes` | int | `30` | Session-entry sliding TTL in minutes. Entries idle longer than this value are removed by the `SessionTtlEvictionService` BackgroundService (5-minute sweep interval). `<= 0` resets to default 30. |
+| `Routing.Session.MaxEntries` | int | `10000` | Bound for the in-memory session store. LRU eviction (O(n) min-AccessSeq scan) fires at write time when the cap is exceeded. Restart clears the store. |
 
 ### Routing.Health
 
@@ -528,7 +572,7 @@ One row per request. Daily rotation by filename. Auto-pruned after `DecisionLog.
 | `schema_version` | Currently 1 |
 | `correlation_id` | UUID; sticky for canary bucketing; joinable with operational log + trace log |
 | `target` | `Qwen35B` or `Qwen122B` — model that actually served |
-| `routing_reason` | `explicit_model:{alias}`, `explicit_task:{task}`, `default`, `ml`, `fallback_to_35b` (122B unreachable), `fallback_to_122b` (35B response quality-bad), `hard_rule` (Phase 17: keyword-driven Stage 0 → 122B), or compounds (`ml;upstream_error`, `ml;cancelled`, `ml;stream_error`). `schema_version=1` unchanged — `hard_rule` is an additive enum value. |
+| `routing_reason` | `explicit_model:{alias}`, `explicit_task:{task}`, `default`, `ml`, `fallback_to_35b` (122B unreachable), `fallback_to_122b` (35B response quality-bad), `hard_rule` (Phase 17: keyword-driven Stage 0 → 122B), `sticky_to_122b` (Phase 18: session previously routed to 122B → continuation also routes to 122B), or compounds (`ml;upstream_error`, `ml;cancelled`, `ml;stream_error`). `schema_version=1` unchanged — `sticky_to_122b` is an additive enum value. |
 | `routing_algorithm` | `ml` (v1.x ML classifier, when `Routing.Mode="ml"`), `selfrouting` (v2.0 default — Phase 17 ships stub; Phase 19 ships real 35B self-classify), or `ml-canary` (canary cohort, ml mode only) |
 | `model_version` | `v1`, `v2`, ... baseline; `v3-canary` for canary cohort |
 | `fallback_used` | `true` if reroute happened (either direction) |
