@@ -424,39 +424,57 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
     // of mode so an operator can re-activate ML routing with a config edit + restart.
     services.AddSingleton<RoutingAlgorithmRegistration>(
         Func<IServiceProvider, RoutingAlgorithmRegistration>(fun sp ->
-            // ML branch — resolve adapters once; close over them in the makeApplyML factory.
-            // Phase 9 Plan 09-02: real FeatureManagementCanaryGate + dual-classifier dispatch.
-            // Issue #12: makeApplyML now takes IModelVersionProvider directly so the closure
-            // reads live versions per call (was: closed-over strings, never updated).
-            let opts               = sp.GetRequiredService<IOptions<RoutingOptions>>().Value
-            let embedder           = sp.GetRequiredService<IEmbedder>()
-            let baselineClassifier = sp.GetRequiredKeyedService<IClassifier>("baseline")
-            let canaryClassifier   = sp.GetRequiredKeyedService<IClassifier>("canary")
-            let canaryGate         = sp.GetRequiredService<ICanaryGate>()
-            let vp                 = sp.GetRequiredService<IModelVersionProvider>()
-            let mlPath             = opts.ML.ModelPath
-            let baselineVersion    = sprintf "ml-%s" (computeModelVersion mlPath)
-            let canaryOpts2        = sp.GetRequiredService<IOptions<CanaryOptions>>().Value
-            let canaryPath =
-                if obj.ReferenceEquals(canaryOpts2, null) || String.IsNullOrWhiteSpace(canaryOpts2.CanaryModelPath)
-                then "models/router-canary.zip" else canaryOpts2.CanaryModelPath
-            let canaryVersion =
-                if File.Exists(canaryPath)
-                then sprintf "ml-%s-canary" (computeModelVersion canaryPath)
-                else ""
-            // Seed the provider with the on-disk values so the first request observes them
-            // before any retrain / canary swap fires. Subsequent updates from
-            // RetrainingService and CanaryService flow through unchanged.
-            vp.Update(baselineVersion)
-            vp.UpdateCanary(canaryVersion)
-            { Algorithm    = SmartRouter.Core.ML.makeApplyML
-                                embedder
-                                baselineClassifier
-                                canaryClassifier
-                                canaryGate
-                                vp
-              Name         = "ml"
-              ModelVersion = baselineVersion }))
+            match routingMode with
+            | "ml" ->
+                // ── v1.x ML branch (unchanged from v1.3.0) ──
+                // Phase 9 Plan 09-02: real FeatureManagementCanaryGate + dual-classifier dispatch.
+                // Issue #12: makeApplyML now takes IModelVersionProvider directly so the closure
+                // reads live versions per call (was: closed-over strings, never updated).
+                let opts               = sp.GetRequiredService<IOptions<RoutingOptions>>().Value
+                let embedder           = sp.GetRequiredService<IEmbedder>()
+                let baselineClassifier = sp.GetRequiredKeyedService<IClassifier>("baseline")
+                let canaryClassifier   = sp.GetRequiredKeyedService<IClassifier>("canary")
+                let canaryGate         = sp.GetRequiredService<ICanaryGate>()
+                let vp                 = sp.GetRequiredService<IModelVersionProvider>()
+                let mlPath             = opts.ML.ModelPath
+                let baselineVersion    = sprintf "ml-%s" (computeModelVersion mlPath)
+                let canaryOpts2        = sp.GetRequiredService<IOptions<CanaryOptions>>().Value
+                let canaryPath =
+                    if obj.ReferenceEquals(canaryOpts2, null) || String.IsNullOrWhiteSpace(canaryOpts2.CanaryModelPath)
+                    then "models/router-canary.zip" else canaryOpts2.CanaryModelPath
+                let canaryVersion =
+                    if File.Exists(canaryPath)
+                    then sprintf "ml-%s-canary" (computeModelVersion canaryPath)
+                    else ""
+                // Seed the provider with the on-disk values so the first request observes them
+                // before any retrain / canary swap fires. Subsequent updates from
+                // RetrainingService and CanaryService flow through unchanged.
+                vp.Update(baselineVersion)
+                vp.UpdateCanary(canaryVersion)
+                { Algorithm    = SmartRouter.Core.ML.makeApplyML
+                                    embedder
+                                    baselineClassifier
+                                    canaryClassifier
+                                    canaryGate
+                                    vp
+                  Name         = "ml"
+                  ModelVersion = baselineVersion }
+            | _ ->
+                // ── Phase 17 STUB selfrouting branch (v2.0 default; "selfrouting") ──
+                // Phase 19 replaces this stub with makeSelfRoutingAlgorithm (named "selfrouter"
+                // HttpClient + 1-token SAFE/UNSAFE classify + prompt-hash LRU cache).
+                // For Phase 17, return Qwen35B/Default — Hard Rules (Stage 0) handles the
+                // safety-critical keyword matches; everything else falls through to 35B.
+                // "selfrouting" is the only value that reaches this arm: Task 1's fail-fast
+                // validation guarantees routingMode is in {"selfrouting", "ml"}.
+                { Algorithm    = fun _config _req ->
+                                   { Target       = Qwen35B
+                                     Priority     = Low
+                                     Reason       = Default
+                                     IsFallback   = false
+                                     ModelVersion = "selfrouting-v1" }
+                  Name         = "selfrouting"
+                  ModelVersion = "selfrouting-v1" }))
     |> ignore
 
     // Backwards-compatible alias: register the bare RoutingAlgorithm function so
