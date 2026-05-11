@@ -44,6 +44,7 @@
     <!-- Phase 19: 35B Self-Routing tests -->
     <Compile Include="SelfRouterTests.fs" />
     <Compile Include="SelfRoutingIntegrationTests.fs" />
+    <Compile Include="MlDormantTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
