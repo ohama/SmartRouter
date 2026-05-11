@@ -8,15 +8,15 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 18 in progress (1 of 3 plans done).
+**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 18 in progress (2 of 3 plans done).
 
 ## Current Position
 
 Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-11
 Phase: 18 — Session Store + Sticky Escalation
-Plan: 01 of 3 complete
-Status: 18-01 complete. RouterRequest.SessionId field added; SessionState BCL-only record added; RoutingReason.StickyEscalation 8th DU case; formatReason 8-arm exhaustive match; 10 construction sites cascaded atomically. Build clean (0 warnings, 0 errors). 137 + 17 + 0 test baseline preserved. SES-01/SES-03/SES-06 partially covered. Ready for 18-02 (SessionStore adapter + middleware + cascade Stage 3 wiring).
-Last activity: 2026-05-11 — Completed 18-01-PLAN.md (core-domain-and-du: Domain.fs types + DecisionLogger 8th arm + 10-site construction cascade).
+Plan: 02 of 3 complete
+Status: 18-02 complete. SessionStore adapter (ConcurrentDictionary + 122B-wins merge + LRU cap + TTL-aware TryGet) created. X-Session-Id header threaded through CorrelationMiddleware → req.SessionId. Phase 17 selfrouting stub replaced with sticky-or-default closure. Point B writes wired in both streaming (normal exit) and non-streaming (post-finalDecision) branches. DI triple-reg in configureRequestPipeline + configureWithoutMl. Build clean (0 warnings, 0 errors). 137 + 17 + 0 test baseline preserved. SES-02/SES-03/SES-04/SES-05/SES-07/SES-09 satisfied. Ready for 18-03 (TTL eviction BackgroundService + SessionStoreTests + StickyEscalationTests + README §5/§7/§8).
+Last activity: 2026-05-11 — Completed 18-02-PLAN.md (sessionstore-and-wiring: SessionStore adapter + header threading + CompositionRoot DI + Point B writes).
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -79,6 +79,16 @@ Progress: [███████████████████████
 - 10 RouterRequest construction sites updated atomically (2 production + 8 test)
 - SES-01 satisfied; SES-03 shape satisfied; SES-06 DU+formatReason satisfied (Cli adapter implementation 18-02)
 
+**v2.0 progress (post-18-02):**
+- Tests: 137 passed + 17 ignored + 0 failed (baseline preserved; sticky behavior dormant without X-Session-Id)
+- SessionStore.fs: ConcurrentDictionary + 122B-wins merge (AddOrUpdate updateValueFactory) + LRU eviction stub + TTL-aware TryGet; BackgroundService ExecuteAsync stub (18-03 ships eviction loop)
+- CorrelationMiddleware: SessionIdKey + SessionIdHeader literals; X-Session-Id → ctx.Items[SessionIdKey]
+- ChatCompletions: mapWireToRequest(correlationId, sessionId, wire); handler extracts sessionId from ctx.Items; Point B writes in both streaming (normal exit) and non-streaming (post-finalDecision)
+- CompositionRoot: SessionStore triple-reg (concrete + ISessionStore) in BOTH configureRequestPipeline AND configureWithoutMl; Phase 17 stub → sticky-or-default closure consuming ISessionStore
+- appsettings.json: Routing.Session.{TtlMinutes=30, MaxEntries=10000}
+- SES-02/SES-03/SES-04/SES-05/SES-07/SES-09 satisfied; sticky cascade operational (SES-05 Stage 3)
+- SES-08 (TTL eviction integration tests) + SES-06 (README §5 sticky doc) deferred to 18-03 by design
+
 *Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
 
 ## Accumulated Context
@@ -94,6 +104,14 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 - **schema_version=1 unchanged**: All v2.0 additions are additive enum values on `routing_reason` (`hard_rule`, `sticky_to_122b`, `self_route`) — no field removals, no type changes. Same for DecisionLog and TraceLog.
 - **Hard Rules NOT operator-configurable**: Keyword list hardcoded in `HardRules.fs` (LLVM, MLIR, compiler, segfault, optimization, concurrency). Safety mechanism should not be misconfigurable. README §5.5 documents source-edit requirement (HR-02; resolved gap from Stack vs Architecture researcher conflict).
 - **Hermes-side X-Session-Id propagation is future work**: v2.0 ships smart-router-side machinery only. Hermes Agent PR tracked as HMRS-FUTURE-01/02. Fingerprint fallback (HMRS-02) is opt-in (`Routing.Session.FingerprintEnabled=false` default) for loopback single-client interim case.
+
+**18-02 execution decisions (2026-05-11):**
+- **122B-wins merge uses AddOrUpdate updateValueFactory**: Concurrent 35B write must never overwrite 122B escalation. `if old.LastModel = Qwen122B || model = Qwen122B then Qwen122B else model` is the non-negotiable merge formula.
+- **Point B uses finalDecision.Target, not initialDecision.Target**: Quality fallback (Phase 14) and judge cascade (Phase 16) can escalate 35B→122B post-routing. Session must record what client actually received.
+- **new keyword required for IDisposable-inheriting F# class**: `SessionStore` inherits `BackgroundService` (IDisposable). F# compiler emits FS0760 (promoted to error by TreatWarningsAsErrors) without `new SessionStore(...)` syntax.
+- **ISessionStore hoisted above req.Stream branch**: Both streaming and non-streaming Point B writes need ISessionStore; resolving once above the branch avoids duplication.
+- **Streaming error paths skip session write**: OCE (client disconnected) + general exception arms must NOT write session — client may not have received complete response.
+- **configureWithoutMl gets same triple-reg**: HealthFallbackTests + QualityFallbackTests use configureWithoutMl; ISessionStore must be resolvable to avoid DI graph failures in backward-compat test paths.
 
 **18-01 execution decisions (2026-05-11):**
 - **SessionId is `string` not `option`**: Empty string sentinel matches CorrelationId convention (Phase 9). `""` means stateless per SES-04 / 18-RESEARCH Pitfall 7; avoids Option wrapper allocation on every request.
@@ -123,7 +141,7 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 
 ### Pending Todos
 
-- v2.0 Phase 18 Plan 02 (`/gsd:execute-phase 18-02`) — next action (SessionStore adapter + CorrelationMiddleware + Stage 3 cascade wiring)
+- v2.0 Phase 18 Plan 03 (`/gsd:execute-phase 18-03`) — next action (TTL eviction BackgroundService + SessionStoreTests + StickyEscalationTests + README §5/§7/§8 updates)
 - ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3; MODELS-01/02/03 currently erroring with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests)
 - Remove configureServices backwards-compat alias after ModelsTests migration
 
@@ -136,5 +154,5 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 ## Session Continuity
 
 Last session: 2026-05-11
-Stopped at: Completed 18-01-PLAN.md — core-domain-and-du: RouterRequest.SessionId field + SessionState record + StickyEscalation DU + formatReason 8th arm + 10 construction sites cascaded. Build clean; 137 + 17 + 0 preserved.
-Resume file: None. Next action: `/gsd:execute-phase 18-02` (SessionStore adapter + CorrelationMiddleware + Stage 3 cascade wiring).
+Stopped at: Completed 18-02-PLAN.md — sessionstore-and-wiring: SessionStore adapter + X-Session-Id threading + sticky-or-default closure + Point B writes. Build clean; 137 + 17 + 0 preserved.
+Resume file: None. Next action: `/gsd:execute-phase 18-03` (TTL eviction BackgroundService + SessionStoreTests + StickyEscalationTests + README §5/§7 updates).
