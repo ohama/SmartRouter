@@ -92,7 +92,7 @@ let tryTaskTable (config: RoutingConfig) (req: RouterRequest) : Result<RoutingDe
 
 // ── Pipeline entry point ──────────────────────────────────────────────────────
 
-/// Three-stage pure routing pipeline parameterized by RoutingConfig and a
+/// Four-stage pure routing pipeline parameterized by RoutingConfig and a
 /// pluggable algorithm (ML.applyML; future implementations conform to RoutingAlgorithm shape).
 /// Returns Ok RoutingDecision or Error RouterError.
 /// No IO. No logging. No clock.
@@ -102,13 +102,23 @@ let routeRequest
     (algorithm : RoutingAlgorithm)
     (req       : RouterRequest)
     : Result<RoutingDecision, RouterError> =
+    // ── Stage 0: Hard Rules ───────────────────────────────────────────────────
+    // Phase 17 (HR-03): keyword scan; bypasses ALL other stages.
+    // Per STATE.md decision 5, Hard Rules wins over model override (HR-06 wording in
+    // REQUIREMENTS.md is fixed in Plan 17-03). Safety mechanism: a request with
+    // `model=35b` AND prompt containing "LLVM" still routes to 122B.
+    match HardRules.applyHardRules req with
+    | Some decision -> Ok decision
+    | None ->
+    // ── Stage 1: explicit model override ─────────────────────────────────────
     match tryModelOverride req with
     | Some decision -> Ok decision
     | None ->
+        // ── Stage 2: explicit task table ─────────────────────────────────────
         match tryTaskTable config req with
         | Error e            -> Error e
         | Ok (Some decision) -> Ok decision
-        | Ok None            -> Ok (algorithm config req)
+        | Ok None            -> Ok (algorithm config req)   // Stage 3 (algorithm)
 
 // ── Helpers for tests + startup validation ────────────────────────────────────
 
