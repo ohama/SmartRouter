@@ -14,7 +14,7 @@ These ship in Phase 17 setup as the foundation for ML dormancy.
 
 - [ ] **MODE-01**: `appsettings.json:Routing.Mode` config key (string; default `"selfrouting"`); accepted values `"selfrouting"` | `"ml"`; invalid value fails startup with descriptive error
 - [ ] **MODE-02**: `CompositionRoot.configureRequestPipeline` branches on `Routing.Mode`: `"selfrouting"` → register Hard Rules + SelfRouter + SessionStore (replaces ML stage 3); `"ml"` → register ML classifier (existing v1.x behavior preserved)
-- [ ] **MODE-03**: ML adapters (`BgeM3Embedder`, `MlNetClassifier`, `RetrainingService`, `CanaryService`) remain compiled and DI-registered when `Routing.Mode="ml"`; not registered in routing path when `Routing.Mode="selfrouting"` (but retraining BackgroundService still runs in background to accumulate hard cases)
+- [ ] **MODE-03**: ML adapters (`BgeM3Embedder`, `MlNetClassifier`, `RetrainingService`, `CanaryService`) remain compiled and DI-registered in BOTH modes; `RoutingAlgorithmRegistration.Algorithm` function branches on `Routing.Mode` so ML adapters are not invoked in the routing path when `Routing.Mode=selfrouting` (but `RetrainingService` `BackgroundService` still runs to accumulate hard cases so ML can be re-activated via config edit + restart without retraining from scratch)
 - [ ] **MODE-04**: README §7 documents the `Routing.Mode` key with both modes; CHANGELOG `### Changed` notes the v2.0 default flip
 
 ### Hard Rules Layer (Phase 17 — HR-*)
@@ -24,7 +24,9 @@ These ship in Phase 17 setup as the foundation for ML dormancy.
 - [ ] **HR-03**: Hard Rules cascade position: Stage 0 — runs BEFORE explicit model override / explicit task / self-classify; any keyword match → immediate-122B with `RoutingDecision { Target=Qwen122B; Reason=HardRule; Priority=High }`
 - [ ] **HR-04**: `RoutingReason.HardRule` DU case added (7th case after FallbackTo122B); `DecisionLogger.formatReason` exhaustive 7-arm match → `"hard_rule"` JSONL value; schema_version=1 unchanged
 - [ ] **HR-05**: Hard Rules applies to BOTH streaming and non-streaming branches in `ChatCompletions.fs` (0ms keyword check; no chunk-shipped concern unlike quality fallback)
-- [ ] **HR-06**: Unit tests verify 6 default keywords trigger; case-insensitive matching ("llvm", "Compiler" match); no-match passes through; explicit model override AND explicit task field both BYPASS Hard Rules (cascade ordering verified)
+- [ ] **HR-06**: Unit tests verify 6 default keywords trigger; case-insensitive matching ("llvm", "Compiler" match); no-match passes through; **Hard Rules wins over explicit model override AND explicit task field** (Stage 0 cascade position confirmed per HR-03 and STATE.md design decision 5 — a request with `{"model": "35b", "messages": [{"content": "LLVM ..."}]}` MUST route to 122B with `routing_reason="hard_rule"`, NOT 35B with `routing_reason="explicit_model"`). Hard Rules is a safety mechanism; bypass is intentionally not supported.
+
+> **Note (Phase 17 wording fix):** The original HR-06 text said "explicit model override AND explicit task field both BYPASS Hard Rules." That contradicted HR-03's Stage-0 cascade position and STATE.md decision 5. Updated 2026-05-11 during Phase 17 planning to reflect the locked design: Hard Rules wins. The bypass language was misleading — there is no operator-facing way to disable Hard Rules per-request short of removing the keyword from `HardRules.fs` and rebuilding.
 
 ### Session Store + Sticky Escalation (Phase 18 — SES-*)
 
