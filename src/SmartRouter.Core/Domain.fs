@@ -36,6 +36,7 @@ type RoutingReason =
     | FallbackTo35B   // Phase 10: 122B unavailable, rerouted to 35B
     | FallbackTo122B  // Phase 14: 35B response failed quality check, retried on 122B
     | HardRule        // Phase 17: keyword match (LLVM/MLIR/compiler/segfault/optimization/concurrency) → immediate 122B
+    | StickyEscalation // Phase 18: session previously routed to 122B → continuation also routes to 122B
 
 /// LLM wire message (same shape as blueCode; needed by IUpstreamClient port).
 type MessageRole = System | User | Assistant
@@ -57,7 +58,21 @@ type RouterRequest =
       TopP           : float option
       MaxTokens      : int option
       CorrelationId  : string          // NEW (Phase 9): "" for non-HTTP construction; per-request HttpContext correlation_id otherwise
+      SessionId      : string          // Phase 18: "" = stateless (no session, sticky skipped); set from X-Session-Id header in CorrelationMiddleware
       UnknownFields  : Map<string, System.Text.Json.JsonElement> }
+
+/// Phase 18 — session state carried across requests sharing an X-Session-Id header.
+/// Stored in-memory by SmartRouter.Cli.Adapters.SessionStore (18-02). BCL-only here
+/// so the Phase 19 self-routing algorithm closure can pattern-match on LastModel
+/// without dragging Cli dependencies into Core (ARCH-01).
+///
+/// LastAccessSeq is mutable because the SessionStore updates LRU ordering in-place
+/// via Interlocked.Increment on every read (mirrors Phase 16 JudgeClient.CacheEntry).
+/// Mutation is performed in the Cli adapter, not in Core — ARCH-01 preserved.
+type SessionState =
+    { LastModel       : ModelId                    // Qwen35B | Qwen122B — last model that served the session
+      LastAccessedAt  : System.DateTimeOffset      // UTC; used for TTL eviction by SessionTtlEvictionService (18-03)
+      mutable LastAccessSeq : int64 }              // LRU ordering; bumped by SessionStore.TryGet on every read
 
 /// Errors the Core routing layer can produce.
 /// Does NOT include HTTP errors — those are adapter-side (UpstreamError).
