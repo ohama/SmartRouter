@@ -8,15 +8,15 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 18 COMPLETE. Phase 19 next.
+**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 18 VERIFIED + CLOSED 2026-05-11. Phase 19 (35B Self-Routing) next.
 
 ## Current Position
 
 Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-11
-Phase: 18 — Session Store + Sticky Escalation — COMPLETE
-Plan: 03 of 3 complete
-Status: 18-03 complete. TTL eviction PeriodicTimer (SES-08) shipped in SessionStore.ExecuteAsync. AddHostedService<SessionStore> registered in both configure paths. SessionStoreTests (8 unit) + StickyEscalationTests (5 DI-integration) added; all pass. README §5.6 + §7 Routing.Session table + §9.1 sticky_to_122b updated. CHANGELOG [Unreleased] Phase 18 block added. Build clean (0 warnings, 0 errors). 150 passed + 17 ignored + 0 failed. All 9 SES-* requirements satisfied. All 5 ROADMAP Success Criteria covered. Phase 18 CLOSED.
-Last activity: 2026-05-11 — Completed 18-03-PLAN.md (tests-and-docs: TTL eviction + SessionStoreTests + StickyEscalationTests + README §5/§7/§9.1).
+Phase: 19 — 35B Self-Routing (Stage 5 Self-Classify) — Not started
+Plan: —
+Status: Phase 18 verified (5/5 must-haves, 9/9 SES-* requirements). Two non-blocking deviations recorded in 18-VERIFICATION.md (a) SES-07 ordering text said "AFTER decisionLogger.Log" but code writes session before log call — no functional impact; (b) SessionTtlEvictionService folded into SessionStore class itself (which inherits BackgroundService) — functionally equivalent. Ready to plan Phase 19.
+Last activity: 2026-05-11 — Phase 18 closed; verifier passed; ROADMAP/STATE/REQUIREMENTS updated for milestone progression.
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -42,7 +42,7 @@ Last activity: 2026-05-11 — Completed 18-03-PLAN.md (tests-and-docs: TTL evict
 - `.planning/research/SUMMARY.md` — v2.0 research synthesis (HIGH confidence; phase order locked by Domain.fs compile dependency)
 - Memory note `v2_selfrouting_pivot.md` — pivot rationale + locked decisions
 
-Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 4 of 12 plans complete (Phase 17 complete + 18-01 done).
+Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 6 of 12 plans complete (Phase 17 + Phase 18 both complete; Phase 19-20 next).
 
 ## Performance Metrics
 
