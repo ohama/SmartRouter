@@ -8,15 +8,15 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 18 in progress (2 of 3 plans done).
+**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 18 COMPLETE. Phase 19 next.
 
 ## Current Position
 
 Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-11
-Phase: 18 — Session Store + Sticky Escalation
-Plan: 02 of 3 complete
-Status: 18-02 complete. SessionStore adapter (ConcurrentDictionary + 122B-wins merge + LRU cap + TTL-aware TryGet) created. X-Session-Id header threaded through CorrelationMiddleware → req.SessionId. Phase 17 selfrouting stub replaced with sticky-or-default closure. Point B writes wired in both streaming (normal exit) and non-streaming (post-finalDecision) branches. DI triple-reg in configureRequestPipeline + configureWithoutMl. Build clean (0 warnings, 0 errors). 137 + 17 + 0 test baseline preserved. SES-02/SES-03/SES-04/SES-05/SES-07/SES-09 satisfied. Ready for 18-03 (TTL eviction BackgroundService + SessionStoreTests + StickyEscalationTests + README §5/§7/§8).
-Last activity: 2026-05-11 — Completed 18-02-PLAN.md (sessionstore-and-wiring: SessionStore adapter + header threading + CompositionRoot DI + Point B writes).
+Phase: 18 — Session Store + Sticky Escalation — COMPLETE
+Plan: 03 of 3 complete
+Status: 18-03 complete. TTL eviction PeriodicTimer (SES-08) shipped in SessionStore.ExecuteAsync. AddHostedService<SessionStore> registered in both configure paths. SessionStoreTests (8 unit) + StickyEscalationTests (5 DI-integration) added; all pass. README §5.6 + §7 Routing.Session table + §9.1 sticky_to_122b updated. CHANGELOG [Unreleased] Phase 18 block added. Build clean (0 warnings, 0 errors). 150 passed + 17 ignored + 0 failed. All 9 SES-* requirements satisfied. All 5 ROADMAP Success Criteria covered. Phase 18 CLOSED.
+Last activity: 2026-05-11 — Completed 18-03-PLAN.md (tests-and-docs: TTL eviction + SessionStoreTests + StickyEscalationTests + README §5/§7/§9.1).
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -89,6 +89,16 @@ Progress: [███████████████████████
 - SES-02/SES-03/SES-04/SES-05/SES-07/SES-09 satisfied; sticky cascade operational (SES-05 Stage 3)
 - SES-08 (TTL eviction integration tests) + SES-06 (README §5 sticky doc) deferred to 18-03 by design
 
+**v2.0 progress (post-18-03, Phase 18 COMPLETE):**
+- Tests: 150 passed + 17 ignored + 0 failed (+8 SessionStoreTests + 5 StickyEscalationTests)
+- SessionStore.ExecuteAsync: PeriodicTimer 5-min TTL eviction loop with OCE shutdown + log-and-continue
+- AddHostedService<SessionStore> registered in both configureRequestPipeline + configureWithoutMl (triple-reg complete)
+- SessionStoreTests.fs: empty-sessionId no-op, 122B-wins concurrent (Task.WhenAll), 122B-wins sequential, TTL eviction (TryUpdate mutation), LRU cap
+- StickyEscalationTests.fs (testSequenced): first-122B-then-sticky, stateless-no-header, quality-fallback-writes-session, Hard-Rules-beats-sticky-35B, sticky-persists
+- README §5.1 updated + §5.6 sticky session escalation + §7 Routing.Session table + §9.1 sticky_to_122b
+- CHANGELOG [Unreleased] Phase 18 Added + Notes blocks
+- Phase 18 COMPLETE: all 9 SES-* requirements satisfied; all 5 ROADMAP Success Criteria covered
+
 *Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
 
 ## Accumulated Context
@@ -154,5 +164,5 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 ## Session Continuity
 
 Last session: 2026-05-11
-Stopped at: Completed 18-02-PLAN.md — sessionstore-and-wiring: SessionStore adapter + X-Session-Id threading + sticky-or-default closure + Point B writes. Build clean; 137 + 17 + 0 preserved.
-Resume file: None. Next action: `/gsd:execute-phase 18-03` (TTL eviction BackgroundService + SessionStoreTests + StickyEscalationTests + README §5/§7 updates).
+Stopped at: Completed 18-03-PLAN.md — Phase 18 CLOSED. TTL eviction, 13 new tests, README §5/§7/§9.1 + CHANGELOG. 150 + 17 + 0. All 9 SES-* + 5 ROADMAP SCs satisfied.
+Resume file: None. Next action: `/gsd:execute-phase 19` (35B Self-Routing — SR-01..09; 4 plans).
