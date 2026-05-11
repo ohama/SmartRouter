@@ -310,6 +310,12 @@ let handler
                 else
                     decision
 
+            // Phase 18 — resolve ISessionStore once; used by both streaming and non-streaming
+            // Point B writes. Hoisted here (before the req.Stream branch) to avoid duplicating
+            // the resolution in each branch. GetRequiredService is safe: ISessionStore is
+            // unconditionally registered in both configureRequestPipeline and configureWithoutMl.
+            let sessionStore = ctx.RequestServices.GetRequiredService<ISessionStore>()
+
             // ── existing body UNCHANGED from here onwards ─────────────────────────────
             if req.Stream then
                 // ── SSE streaming branch ──────────────────────────────────────────────
@@ -392,6 +398,17 @@ let handler
                     // Normal path disposal — triggers use _ = resp in StreamAsync → upstream socket close.
                     // DecisionLog AFTER disposal so latency_ms reflects time-to-last-byte (LOG-01).
                     do! enumerator.DisposeAsync()
+
+                    // Phase 18 — Point B (streaming, normal exit only): record decision.Target.
+                    // Streaming has no quality fallback (intentionally skipped per Phase 14 design),
+                    // so finalDecision.Target = decision.Target. Write only on the NORMAL exit path —
+                    // OperationCanceledException and general exception arms skip this write because
+                    // the client may not have received a complete response (Open Question 5 of 18-RESEARCH).
+                    // streamError guard: if upstream sent an error mid-stream, client received partial
+                    // response — skip session write so next request doesn't sticky to an errored model.
+                    if not streamError && not (String.IsNullOrEmpty(req.SessionId)) then
+                        sessionStore.Update(req.SessionId, decision.Target)
+
                     let reason =
                         if streamError
                         then formatReason decision.Reason + ";stream_error"
@@ -602,6 +619,18 @@ let handler
                     // Forward final response to client.
                     ctx.Response.ContentType <- "application/json"
                     do! ctx.Response.WriteAsync(finalBody, ctx.RequestAborted)
+
+                    // Phase 18 — Point B (SES-07): write session store with the model that ACTUALLY
+                    // served the request (finalDecision.Target), NOT initialDecision.Target. This is
+                    // load-bearing — quality fallback (Phase 14) and judge cascade (Phase 16) can
+                    // substitute the served model after the initial routing. If we wrote
+                    // initialDecision.Target here, a 35B→122B quality-fallback escalation would
+                    // silently break sticky continuation for the rest of the session.
+                    //
+                    // String.IsNullOrEmpty guard prevents Pitfall 7 — stateless clients (no
+                    // X-Session-Id header → SessionId = "") never create a sticky bucket.
+                    if not (String.IsNullOrEmpty(req.SessionId)) then
+                        sessionStore.Update(req.SessionId, finalDecision.Target)
 
                     // DecisionLog — final decision wins (target = final model, reason = final reason).
                     let okReason = formatReason finalDecision.Reason
