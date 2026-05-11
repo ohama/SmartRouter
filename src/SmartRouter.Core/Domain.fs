@@ -37,6 +37,7 @@ type RoutingReason =
     | FallbackTo122B  // Phase 14: 35B response failed quality check, retried on 122B
     | HardRule        // Phase 17: keyword match (LLVM/MLIR/compiler/segfault/optimization/concurrency) → immediate 122B
     | StickyEscalation // Phase 18: session previously routed to 122B → continuation also routes to 122B
+    | SelfRoute        // Phase 19 (SR-07): non-streaming self-classify verdict (SAFE → 35B / UNSAFE → 122B)
 
 /// LLM wire message (same shape as blueCode; needed by IUpstreamClient port).
 type MessageRole = System | User | Assistant
