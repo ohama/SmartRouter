@@ -8,15 +8,15 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 17 in progress (Plan 01 complete).
+**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 17 complete, Phase 18 next.
 
 ## Current Position
 
 Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-11
 Phase: 17 — Hard Rules Layer + Routing.Mode Switch
-Plan: 02 of 3 complete
-Status: 17-02 complete. Routing.Mode config switch wired (appsettings.json + CompositionRoot). Selfrouting stub registered; ML adapters DI-registered in both modes (MODE-01..03). Ready for Plan 17-03 (README §5+§7 + HR-06 wording fix + integration tests).
-Last activity: 2026-05-11 — Completed 17-02-PLAN.md (Routing.Mode config switch + RoutingAlgorithmRegistration branch).
+Plan: 03 of 3 complete (Phase 17 COMPLETE)
+Status: 17-03 complete. ModeSwitchTests (9 tests, DI-integration via minimal config). README §5.0/§7/§9.1 updated. CHANGELOG [Unreleased] populated. REQUIREMENTS HR-06+MODE-03 corrected. ROADMAP SC-2+17-02 description corrected. All 10 Phase 17 requirements (MODE-01..04 + HR-01..06) satisfied. Ready for Phase 18 (Session Store + Sticky Escalation).
+Last activity: 2026-05-11 — Completed 17-03-PLAN.md (tests-and-docs: ModeSwitchTests + README §5/§7/§9.1 + CHANGELOG + REQUIREMENTS/ROADMAP wording fixes).
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -42,7 +42,7 @@ Last activity: 2026-05-11 — Completed 17-02-PLAN.md (Routing.Mode config switc
 - `.planning/research/SUMMARY.md` — v2.0 research synthesis (HIGH confidence; phase order locked by Domain.fs compile dependency)
 - Memory note `v2_selfrouting_pivot.md` — pivot rationale + locked decisions
 
-Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 1 of 12 plans.
+Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 3 of 12 plans complete (Phase 17 all 3 plans done).
 
 ## Performance Metrics
 
@@ -62,10 +62,13 @@ Progress: [███████████████████████
 - ARCH-01 invariant preserved across 16 phases / 60 plans
 - 5 NuGet versioned releases (v1.0.0 → v1.3.0)
 
-**v2.0 progress (post-17-02):**
-- Tests: 129 passed + 16 ignored + 0 failed (unchanged — 0 new tests in 17-02; integration tests land in 17-03)
+**v2.0 progress (post-17-03, Phase 17 complete):**
+- Tests: 137 passed + 17 ignored + 0 failed (+8 ModeSwitchTests passing + 1 skip-guarded ml-mode test)
 - HardRules.fs shipped: Stage 0 in routeRequest, cascade order locked (17-01)
 - Routing.Mode config switch shipped: appsettings.json + CompositionRoot (17-02)
+- ModeSwitchTests (9 tests): DI-integration via minimal config, cascade ordering verified (17-03)
+- README §5.0/§7/§9.1 + CHANGELOG [Unreleased] + REQUIREMENTS HR-06/MODE-03 + ROADMAP SC-2/17-02 (17-03)
+- Phase 17 COMPLETE: all 10 requirements (MODE-01..04 + HR-01..06) satisfied
 
 *Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
 
@@ -82,6 +85,10 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 - **schema_version=1 unchanged**: All v2.0 additions are additive enum values on `routing_reason` (`hard_rule`, `sticky_to_122b`, `self_route`) — no field removals, no type changes. Same for DecisionLog and TraceLog.
 - **Hard Rules NOT operator-configurable**: Keyword list hardcoded in `HardRules.fs` (LLVM, MLIR, compiler, segfault, optimization, concurrency). Safety mechanism should not be misconfigurable. README §5.5 documents source-edit requirement (HR-02; resolved gap from Stack vs Architecture researcher conflict).
 - **Hermes-side X-Session-Id propagation is future work**: v2.0 ships smart-router-side machinery only. Hermes Agent PR tracked as HMRS-FUTURE-01/02. Fingerprint fallback (HMRS-02) is opt-in (`Routing.Session.FingerprintEnabled=false` default) for loopback single-client interim case.
+
+**17-03 execution decisions (2026-05-11):**
+- **Minimal in-memory config (no Routing:ML section) for ModeSwitch DI tests**: Production appsettings.json includes Routing:ML section → mlOpts non-null → ensureEmbeddingFilesPresent throws FileNotFoundException (ONNX files absent). Solution: minimal in-memory dict omitting Routing:ML so mlOpts=null and ML bootstrap is skipped. ML-mode test skip-guarded with File.Exists(onnxEmbedPath) — W4 pattern.
+- **§2 Architecture updated (deviation Rule 2)**: §2 said "3 stages, pure → 1. model override → 2. task table → 3. ML". Updated to "4 stages" with Stage 0 Hard Rules and mode-dependent Stage 3. Plan only specified §5/§7/§9.1; §2 was stale and had to be fixed.
 
 **17-02 execution decisions (2026-05-11):**
 - **Direct config read chosen for Routing.Mode**: `config.["Routing:Mode"]` mirrors Phase 16 Judge pattern; avoids CLIMutable RoutingOptions extension + test fixture churn across MLRoutingTests/CanaryTests.
@@ -100,8 +107,7 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 
 ### Pending Todos
 
-- v2.0 Phase 17 Plan 03 (`/gsd:execute-phase 17-03`) — next action (README §5+§7 + HR-06 wording fix + integration tests for invalid-mode startup throw + mode-switch end-to-end)
-- ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3)
+- v2.0 Phase 18 Plan 01 (`/gsd:execute-phase 18-01`) — next action (Session Store + Sticky Escalation)
 - ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3; MODELS-01/02/03 currently erroring with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests)
 - Remove configureServices backwards-compat alias after ModelsTests migration
 
@@ -114,5 +120,5 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 ## Session Continuity
 
 Last session: 2026-05-11
-Stopped at: Completed 17-02-PLAN.md — Routing.Mode config switch + RoutingAlgorithmRegistration branch (2 tasks, 2 commits, 0 new tests, 129 total passing).
-Resume file: None. Next action: `/gsd:execute-phase 17-03` (README §5+§7 + HR-06 wording fix + integration tests).
+Stopped at: Completed 17-03-PLAN.md — tests-and-docs: ModeSwitchTests (9 tests) + README §5/§7/§9.1 + CHANGELOG + REQUIREMENTS/ROADMAP wording fixes. Phase 17 COMPLETE (3 of 3 plans done, all 10 requirements satisfied, 137 passing).
+Resume file: None. Next action: `/gsd:execute-phase 18-01` (Session Store + Sticky Escalation).
