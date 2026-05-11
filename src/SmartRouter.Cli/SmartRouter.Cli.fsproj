@@ -23,6 +23,8 @@
     <Compile Include="Adapters/QualityCheck.fs" />        <!-- Phase 14: isBadResponse heuristic + QualityFallbackOptions (BCL only) -->
     <Compile Include="Adapters/BorderlineClassifier.fs" /> <!-- Phase 16: borderline detection (BCL only) -->
     <Compile Include="Adapters/JudgeClient.fs" />          <!-- Phase 16: judge port + LRU cache + IJudgeStats -->
+    <!-- Phase 18: Session Store + Sticky Escalation -->
+    <Compile Include="Adapters/SessionStore.fs" />
     <Compile Include="Adapters/DecisionLogger.fs" />
     <Compile Include="Adapters/DecisionLogWriter.fs" />
     <Compile Include="Adapters/TraceLogger.fs" />           <!-- Phase 14: trace JSONL writer (Channel + BackgroundService) -->
