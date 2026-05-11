@@ -7,8 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-05-11
+
+122B-as-judge release. Borderline 35B responses (entropy/length band
+edge) can now be verified by a 1-token call to 122B before falling
+through to a full retry. Disabled by default — operators opt in after
+inspecting Phase 1.2.0's `quality_check_hits_*` counters to see whether
+the heuristic is firing too often or not often enough.
+
 ### Added
-- **Phase 16 — 122B-as-Judge for Borderline Cases (OPT-IN).** When `Routing.Judge.Enabled = true`, 35B responses that pass Phase 15's heuristic but fall in the entropy/length band edge get a 1-token verification call to 122B (`ROUTE_YES`/`ROUTE_NO`). Cached by `(prompt_hash, response_hash)` LRU (default 10000 entries). New trace fields `judge_called` / `judge_verdict` / `judge_latency_ms` (schema_version=1 unchanged — additive). New `/stats` fields `judge_cache_hits` / `judge_cache_misses` / `judge_call_count`. New `Routing.Judge.*` config block (5 keys). Streaming responses bypass the judge. **Default OFF** — operators opt in after evaluating borderline rate via Phase 15's `quality_check_hits_*` /stats counters.
+
+- **122B-as-Judge for Borderline Cases (OPT-IN).** When `Routing.Judge.Enabled = true`, 35B responses that pass the heuristic but fall in the entropy/length band edge get a 1-token verification call to 122B (`ROUTE_YES`/`ROUTE_NO`). Cached by `(prompt_hash, response_hash)` LRU (default 10000 entries). Streaming responses bypass the judge entirely. **Default OFF** — judge adds a 122B network call on every borderline case, so opt in after evaluating borderline rate via the existing `quality_check_hits_*` /stats counters.
+- TraceLog fields `judge_called` / `judge_verdict` / `judge_latency_ms` (schema_version=1 unchanged — additive).
+- `/stats` fields `judge_cache_hits` / `judge_cache_misses` / `judge_call_count` (all int64; process-lifetime; resolved null-safe so /stats keeps working when judge is disabled).
+- Config block `Routing.Judge.*` with 5 keys: `Enabled` (bool, default `false`), `Endpoint` (string, default `""` — derives from `Upstreams.Model122B`), `PromptPath` (default `prompts/judge-prompt.md`), `TimeoutSeconds`, `MaxCacheEntries`.
+- Operator-tunable judge prompt at `prompts/judge-prompt.md` with `{{QUESTION}}` and `{{RESPONSE}}` placeholders + `ROUTE_YES`/`ROUTE_NO` sentinels.
 
 ## [1.2.0] - 2026-05-10
 
