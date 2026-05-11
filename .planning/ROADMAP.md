@@ -91,7 +91,7 @@ Plans:
 4. **Prompt-hash cache hits skip the HTTP call**: Send the same prompt twice (non-streaming). The first request increments `selfrouter_call_count` and `selfrouter_cache_misses` in `GET /stats`; the second request increments `selfrouter_cache_hits` but NOT `selfrouter_call_count`. Verified by `/stats` snapshot before and after.
 5. **ML dormant integration test stays green**: With `Routing.Mode="ml"`, the existing v1.x ML routing path remains functional — `MlDormantTests.fs` exercises a request through the ML classifier and asserts `routing_algorithm="ml"` (or `"ml-canary"`) in DecisionLog. The test runs in CI to prevent dormant ML code from silently breaking across v2.x phases.
 
-**Plans**: TBD (estimated 3-4 plans)
+**Plans**: 4 plans
 
 Plans:
 - [ ] 19-01: SelfRouter adapter + DU — `SmartRouter.Cli.Adapters.SelfRouter` (named `"selfrouter"` HttpClient via `.ConfigureHttpClient` chain pointing to `Upstreams.Model35B`; 5s timeout; 1 retry at 200ms via `AddResilienceHandler`; mirrors JudgeClient architecture from Phase 16); `SelfRouteVerdict` DU (`RouteSafe | RouteUnsafe | RouteSkipped of string | RouteFailed of string`) with safety-biased parser (ambiguous → `RouteUnsafe`); `prompts/self-router-prompt.md` operator-tunable template with `{{PROMPT}}` placeholder + SAFE/UNSAFE instruction (per `.planning/docs/35b-selfrouting-prompt.md`); `RoutingReason.SelfRoute` 9th DU case → `"self_route"`; `formatReason` cascaded
