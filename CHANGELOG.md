@@ -73,6 +73,57 @@ re-activatable with a one-line `appsettings.json` edit + restart.
 - `X-Session-Id` header propagation from Hermes Agent is future work (HMRS-FUTURE-01;
   Phase 20 ships smart-router-side machinery + an opt-in fingerprint fallback).
 
+---
+
+### Added (Phase 19 — 35B Self-Routing, Stage 4 self-classify)
+
+- **v2.0 self-routing paradigm (Stage 4 self-classify).** For non-streaming requests that
+  reach the routing default stage without being decided by Hard Rules, an explicit override,
+  or sticky session, the router now calls the 35B model itself via a dedicated
+  `"selfrouter"` named HttpClient (5s timeout, 1 retry at 200ms, `max_tokens=8`,
+  `temperature=0`) to classify the prompt as SAFE (route to 35B) or UNSAFE (escalate to
+  122B). Streaming requests skip Stage 4 entirely — Hard Rules (Stage 0) + sticky
+  escalation (Stage 3) still apply to streaming. Operators can rollback to v1.x ML routing
+  by setting `Routing.Mode="ml"` in `appsettings.json` + restart (no rebuild required).
+- **Operator-tunable classify prompt.** `prompts/self-router-prompt.md` shipped with the
+  repo. Operator edits `{{PROMPT}}`-based template to refine SAFE/UNSAFE criteria; changes
+  take effect on next restart. See README §5.7 and §7.
+- **Prompt-hash LRU cache.** Identical prompts hit a 10,000-entry per-process cache
+  (keyed by SHA-256 of the full conversation content); cache hits skip the HTTP round-trip.
+  Bounded by `Routing.SelfRouter.MaxCacheEntries` (default 10000). Restart clears the cache.
+- **DecisionLog enum values:** `routing_reason="self_route"` (Stage 4 verdict);
+  `routing_algorithm="selfrouting"` (v2.0 cascade). `model_version` is set to
+  `"selfrouting-{hex8}"` for self-routed decisions, where `{hex8}` is the first 8 hex chars
+  of SHA-256 of `prompts/self-router-prompt.md` at startup — operators can detect
+  prompt-template drift between restarts by watching this field in the DecisionLog.
+  **`schema_version=1` unchanged** — all Phase 19 additions are additive enum values only;
+  no field removals, no type changes.
+- **`/stats` endpoint fields:** `selfrouter_cache_hits`, `selfrouter_cache_misses`,
+  `selfrouter_call_count`, `selfrouter_skipped` (all `int64`, process-lifetime). Returns 0
+  for all four when `Routing.Mode="ml"`. See README §8.
+- **Configuration keys.** `Routing.SelfRouter.Endpoint` (default `""` → derives from
+  `Upstreams.Model35B`), `Routing.SelfRouter.PromptPath` (default
+  `"prompts/self-router-prompt.md"`), `Routing.SelfRouter.TimeoutSeconds` (default `5`),
+  `Routing.SelfRouter.MaxCacheEntries` (default `10000`). All in `appsettings.json`; restart
+  required after changes. See README §7.
+- **ML dormant integration test.** `tests/SmartRouter.Tests/MlDormantTests.fs` boots
+  `Routing.Mode="ml"` and asserts `RoutingAlgorithmRegistration.Name="ml"` — prevents silent
+  v1.x ML-path regression across v2.x phases. Skip-guarded on hosts without ONNX embedding
+  files (W4 pattern; confirmed by `File.Exists` guard).
+
+### Notes (Phase 19)
+
+- DecisionLog `schema_version` stays at `1`. All Phase 19 additions (`self_route` routing
+  reason, `selfrouting` routing algorithm) are additive enum values on existing string fields.
+  Readers that ignore unknown `routing_reason` / `routing_algorithm` values remain
+  forward-compatible.
+- Stage 4 self-classify uses the same 35B model as inference. The `"selfrouter"` named
+  HttpClient has its own connection pool + timeout — it does not compete with the 122B
+  `SemaphoreSlim(1)` gate or the 300s inference timeout.
+- Fail-open: any classify failure (HTTP timeout, template missing, ambiguous response) falls
+  through to Stage 5 default (35B). No request is dropped; `selfrouter_skipped` or
+  `selfrouter_call_count` movements in `/stats` signal failures.
+
 ## [1.3.0] - 2026-05-11
 
 122B-as-judge release. Borderline 35B responses (entropy/length band
