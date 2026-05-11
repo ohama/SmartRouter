@@ -36,6 +36,7 @@ let private emptyRequest : RouterRequest =
       TopP           = None
       MaxTokens      = None
       CorrelationId  = ""
+      SessionId      = ""
       UnknownFields  = Map.empty }
 
 let private defaultOpts =

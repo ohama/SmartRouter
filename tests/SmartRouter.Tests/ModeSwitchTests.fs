@@ -236,6 +236,7 @@ let tests : Test =
                   TopP          = None
                   MaxTokens     = None
                   CorrelationId = ""
+                  SessionId     = ""
                   UnknownFields = Map.empty }
             match routeRequest defaultRoutingConfig regn.Algorithm req with
             | Ok d ->
@@ -254,6 +255,7 @@ let tests : Test =
                   TopP          = None
                   MaxTokens     = None
                   CorrelationId = ""
+                  SessionId     = ""
                   UnknownFields = Map.empty }
             match routeRequest defaultRoutingConfig regn.Algorithm req with
             | Ok d ->
@@ -275,6 +277,7 @@ let tests : Test =
                   TopP          = None
                   MaxTokens     = None
                   CorrelationId = ""
+                  SessionId     = ""
                   UnknownFields = Map.empty }
             match routeRequest defaultRoutingConfig regn.Algorithm req with
             | Ok d ->

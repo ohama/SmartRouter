@@ -21,6 +21,7 @@ let private mkReq (task: string option) (model: string option) (content: string)
       TopP           = None
       MaxTokens      = None
       CorrelationId  = ""
+      SessionId      = ""
       UnknownFields  = Map.empty }
 
 let private defaultConfig : RoutingConfig = defaultRoutingConfig

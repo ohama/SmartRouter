@@ -69,6 +69,7 @@ let private buildRequest (correlationId: string) (content: string) : RouterReque
       TopP           = None
       MaxTokens      = None
       CorrelationId  = correlationId
+      SessionId      = ""
       UnknownFields  = Map.empty }
 
 let private testCfg : RoutingConfig =

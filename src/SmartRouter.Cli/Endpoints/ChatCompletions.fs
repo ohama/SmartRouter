@@ -112,6 +112,7 @@ let private mapWireToRequest (correlationId: string) (wire: RouterRequestWire) :
       TopP           = if wire.top_p.HasValue then Some wire.top_p.Value else None
       MaxTokens      = if wire.max_tokens.HasValue then Some wire.max_tokens.Value else None
       CorrelationId  = correlationId   // NEW Phase 9
+      SessionId      = ""              // Phase 18: threaded from X-Session-Id header in 18-02
       UnknownFields  = unknownFields }
 
 // ── DecisionLog helpers ──────────────────────────────────────────────────────
@@ -221,6 +222,7 @@ let handler
                   TopP           = None
                   MaxTokens      = None
                   CorrelationId  = correlationId   // NEW Phase 9 — even synthetic requests carry the correlation ID
+                  SessionId      = ""              // Phase 18: null body has no headers; stateless sentinel
                   UnknownFields  = Map.empty }
             ctx.Response.StatusCode <- 400
             do! ctx.Response.WriteAsJsonAsync(

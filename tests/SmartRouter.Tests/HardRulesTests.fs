@@ -17,6 +17,7 @@ let private mkReq content =
       TopP           = None
       MaxTokens      = None
       CorrelationId  = ""
+      SessionId      = ""
       UnknownFields  = Map.empty }
 
 /// Helper: stub algorithm that always returns Qwen35B/Default — used to verify
