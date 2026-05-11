@@ -26,6 +26,7 @@ open SmartRouter.Cli.Adapters.QueueDispatcher   // IQualityCheckStats
 open SmartRouter.Cli.Adapters.TraceLogger
 open SmartRouter.Cli.Adapters.BorderlineClassifier   // Phase 16: classifyBorderline
 open SmartRouter.Cli.Adapters.JudgeClient            // Phase 16: IJudgeClient + JudgeVerdict
+open SmartRouter.Cli.Adapters.SessionStore           // Phase 18: ISessionStore
 
 // ── Phase 14 — string truncation for trace excerpts ──────────────────────────
 
@@ -87,7 +88,10 @@ let private parseRole (s: string) : MessageRole =
 /// Convert the wire request type to the Core RouterRequest domain type.
 /// Phase 9: correlationId threaded through so RouterRequest.CorrelationId carries
 /// the HttpContext-extracted value into Core for the canary gate (ML.fs).
-let private mapWireToRequest (correlationId: string) (wire: RouterRequestWire) : RouterRequest =
+/// Phase 18: sessionId additionally threaded through so RouterRequest.SessionId
+/// carries the X-Session-Id header value (or "" for stateless requests) into
+/// the routing algorithm closure for sticky-escalation lookup.
+let private mapWireToRequest (correlationId: string) (sessionId: string) (wire: RouterRequestWire) : RouterRequest =
     let messages =
         if isNull wire.messages then []
         else
@@ -111,8 +115,8 @@ let private mapWireToRequest (correlationId: string) (wire: RouterRequestWire) :
       Temperature    = if wire.temperature.HasValue then Some wire.temperature.Value else None
       TopP           = if wire.top_p.HasValue then Some wire.top_p.Value else None
       MaxTokens      = if wire.max_tokens.HasValue then Some wire.max_tokens.Value else None
-      CorrelationId  = correlationId   // NEW Phase 9
-      SessionId      = ""              // Phase 18: threaded from X-Session-Id header in 18-02
+      CorrelationId  = correlationId   // Phase 9
+      SessionId      = sessionId       // Phase 18: threaded from X-Session-Id header via CorrelationMiddleware
       UnknownFields  = unknownFields }
 
 // ── DecisionLog helpers ──────────────────────────────────────────────────────
@@ -208,6 +212,14 @@ let handler
             | true, (:? string as cid) when not (String.IsNullOrEmpty(cid)) -> cid
             | _ -> Guid.NewGuid().ToString("N")
 
+        // Phase 18 — extract session ID from middleware-populated ctx.Items.
+        // Empty string sentinel when X-Session-Id header was absent (v1.x backward-compat).
+        // Sticky stage in the algorithm closure (CompositionRoot) is a no-op when sessionId is "".
+        let sessionId =
+            match ctx.Items.TryGetValue(SessionIdKey) with
+            | true, (:? string as sid) -> sid
+            | _ -> ""
+
         // 1. Parse wire body — use wireJsonOptions (allows missing/null fields for optional wire fields)
         let! wireBody = ctx.Request.ReadFromJsonAsync<RouterRequestWire>(wireJsonOptions, ctx.RequestAborted)
 
@@ -232,7 +244,7 @@ let handler
             decisionLogger.Log(buildDecisionLog emptyReq regn versionProvider correlationId started None "unknown" "error:null_body" false)
         else
 
-        let req = mapWireToRequest correlationId wireBody
+        let req = mapWireToRequest correlationId sessionId wireBody
 
         // 2. Pure routing — config-driven. The RoutingConfig singleton was built from
         //    appsettings.json at startup; editing JSON + restart changes this behavior (ROUT-05).
