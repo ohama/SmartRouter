@@ -8,15 +8,15 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 17 complete, Phase 18 next.
+**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 18 in progress (1 of 3 plans done).
 
 ## Current Position
 
 Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-11
-Phase: 17 — Hard Rules Layer + Routing.Mode Switch
-Plan: 03 of 3 complete (Phase 17 COMPLETE)
-Status: 17-03 complete. ModeSwitchTests (9 tests, DI-integration via minimal config). README §5.0/§7/§9.1 updated. CHANGELOG [Unreleased] populated. REQUIREMENTS HR-06+MODE-03 corrected. ROADMAP SC-2+17-02 description corrected. All 10 Phase 17 requirements (MODE-01..04 + HR-01..06) satisfied. Ready for Phase 18 (Session Store + Sticky Escalation).
-Last activity: 2026-05-11 — Completed 17-03-PLAN.md (tests-and-docs: ModeSwitchTests + README §5/§7/§9.1 + CHANGELOG + REQUIREMENTS/ROADMAP wording fixes).
+Phase: 18 — Session Store + Sticky Escalation
+Plan: 01 of 3 complete
+Status: 18-01 complete. RouterRequest.SessionId field added; SessionState BCL-only record added; RoutingReason.StickyEscalation 8th DU case; formatReason 8-arm exhaustive match; 10 construction sites cascaded atomically. Build clean (0 warnings, 0 errors). 137 + 17 + 0 test baseline preserved. SES-01/SES-03/SES-06 partially covered. Ready for 18-02 (SessionStore adapter + middleware + cascade Stage 3 wiring).
+Last activity: 2026-05-11 — Completed 18-01-PLAN.md (core-domain-and-du: Domain.fs types + DecisionLogger 8th arm + 10-site construction cascade).
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -42,7 +42,7 @@ Last activity: 2026-05-11 — Completed 17-03-PLAN.md (tests-and-docs: ModeSwitc
 - `.planning/research/SUMMARY.md` — v2.0 research synthesis (HIGH confidence; phase order locked by Domain.fs compile dependency)
 - Memory note `v2_selfrouting_pivot.md` — pivot rationale + locked decisions
 
-Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 3 of 12 plans complete (Phase 17 all 3 plans done).
+Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 4 of 12 plans complete (Phase 17 complete + 18-01 done).
 
 ## Performance Metrics
 
@@ -70,6 +70,15 @@ Progress: [███████████████████████
 - README §5.0/§7/§9.1 + CHANGELOG [Unreleased] + REQUIREMENTS HR-06/MODE-03 + ROADMAP SC-2/17-02 (17-03)
 - Phase 17 COMPLETE: all 10 requirements (MODE-01..04 + HR-01..06) satisfied
 
+**v2.0 progress (post-18-01):**
+- Tests: 137 passed + 17 ignored + 0 failed (baseline preserved; no behavior change, only type additions)
+- RouterRequest.SessionId : string field added (10th field; "" sentinel = stateless per SES-04)
+- SessionState BCL-only record added to Domain.fs (LastModel + LastAccessedAt + mutable LastAccessSeq)
+- RoutingReason.StickyEscalation 8th DU case added
+- DecisionLogger.formatReason 8-arm exhaustive match; StickyEscalation -> "sticky_to_122b"
+- 10 RouterRequest construction sites updated atomically (2 production + 8 test)
+- SES-01 satisfied; SES-03 shape satisfied; SES-06 DU+formatReason satisfied (Cli adapter implementation 18-02)
+
 *Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
 
 ## Accumulated Context
@@ -85,6 +94,13 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 - **schema_version=1 unchanged**: All v2.0 additions are additive enum values on `routing_reason` (`hard_rule`, `sticky_to_122b`, `self_route`) — no field removals, no type changes. Same for DecisionLog and TraceLog.
 - **Hard Rules NOT operator-configurable**: Keyword list hardcoded in `HardRules.fs` (LLVM, MLIR, compiler, segfault, optimization, concurrency). Safety mechanism should not be misconfigurable. README §5.5 documents source-edit requirement (HR-02; resolved gap from Stack vs Architecture researcher conflict).
 - **Hermes-side X-Session-Id propagation is future work**: v2.0 ships smart-router-side machinery only. Hermes Agent PR tracked as HMRS-FUTURE-01/02. Fingerprint fallback (HMRS-02) is opt-in (`Routing.Session.FingerprintEnabled=false` default) for loopback single-client interim case.
+
+**18-01 execution decisions (2026-05-11):**
+- **SessionId is `string` not `option`**: Empty string sentinel matches CorrelationId convention (Phase 9). `""` means stateless per SES-04 / 18-RESEARCH Pitfall 7; avoids Option wrapper allocation on every request.
+- **SessionState in Core (Domain.fs) not Cli**: Data shape is BCL-only. `ISessionStore` + `SessionStore` (Serilog/IHostedService) go in Cli adapter (18-02). ARCH-01 preserved.
+- **ChatCompletions mapWireToRequest keeps SessionId="" hardcoded**: sessionId parameter threading deferred to 18-02 which extends CorrelationMiddleware to extract X-Session-Id header.
+- **No catch-all arm on formatReason**: Exhaustive match enforced by FS0025/TreatWarningsAsErrors; Phase 19 SelfRoute DU case will force a 9th arm at compile time.
+- **Task 1 and Task 2 committed separately**: Task 1 leaves Cli in intentional broken state (FS0025 at formatReason); Task 2 resolves it. Atomic pair pattern established for DU case + formatReason arm additions.
 
 **17-03 execution decisions (2026-05-11):**
 - **Minimal in-memory config (no Routing:ML section) for ModeSwitch DI tests**: Production appsettings.json includes Routing:ML section → mlOpts non-null → ensureEmbeddingFilesPresent throws FileNotFoundException (ONNX files absent). Solution: minimal in-memory dict omitting Routing:ML so mlOpts=null and ML bootstrap is skipped. ML-mode test skip-guarded with File.Exists(onnxEmbedPath) — W4 pattern.
@@ -107,7 +123,7 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 
 ### Pending Todos
 
-- v2.0 Phase 18 Plan 01 (`/gsd:execute-phase 18-01`) — next action (Session Store + Sticky Escalation)
+- v2.0 Phase 18 Plan 02 (`/gsd:execute-phase 18-02`) — next action (SessionStore adapter + CorrelationMiddleware + Stage 3 cascade wiring)
 - ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3; MODELS-01/02/03 currently erroring with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests)
 - Remove configureServices backwards-compat alias after ModelsTests migration
 
@@ -120,5 +136,5 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 ## Session Continuity
 
 Last session: 2026-05-11
-Stopped at: Completed 17-03-PLAN.md — tests-and-docs: ModeSwitchTests (9 tests) + README §5/§7/§9.1 + CHANGELOG + REQUIREMENTS/ROADMAP wording fixes. Phase 17 COMPLETE (3 of 3 plans done, all 10 requirements satisfied, 137 passing).
-Resume file: None. Next action: `/gsd:execute-phase 18-01` (Session Store + Sticky Escalation).
+Stopped at: Completed 18-01-PLAN.md — core-domain-and-du: RouterRequest.SessionId field + SessionState record + StickyEscalation DU + formatReason 8th arm + 10 construction sites cascaded. Build clean; 137 + 17 + 0 preserved.
+Resume file: None. Next action: `/gsd:execute-phase 18-02` (SessionStore adapter + CorrelationMiddleware + Stage 3 cascade wiring).
