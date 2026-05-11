@@ -8,15 +8,15 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 18 VERIFIED + CLOSED 2026-05-11. Phase 19 (35B Self-Routing) next.
+**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 19 (35B Self-Routing) IN PROGRESS. Plan 19-01 complete.
 
 ## Current Position
 
-Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-11
-Phase: 19 — 35B Self-Routing (Stage 5 Self-Classify) — Not started
-Plan: —
-Status: Phase 18 verified (5/5 must-haves, 9/9 SES-* requirements). Two non-blocking deviations recorded in 18-VERIFICATION.md (a) SES-07 ordering text said "AFTER decisionLogger.Log" but code writes session before log call — no functional impact; (b) SessionTtlEvictionService folded into SessionStore class itself (which inherits BackgroundService) — functionally equivalent. Ready to plan Phase 19.
-Last activity: 2026-05-11 — Phase 18 closed; verifier passed; ROADMAP/STATE/REQUIREMENTS updated for milestone progression.
+Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-12
+Phase: 19 — 35B Self-Routing (Stage 5 Self-Classify) — In progress (1/4 plans complete)
+Plan: 19-01 complete — DU + adapter + prompt template foundation
+Status: 19-01 COMPLETE (3/3 tasks, 0 deviations). RoutingReason.SelfRoute DU + ISelfRouter adapter + prompts/self-router-prompt.md shipped. Adapter inert — DI registration in 19-02, cascade wiring in 19-03.
+Last activity: 2026-05-12 — Phase 19 Plan 01 executed; 150 + 17 + 0 baseline preserved.
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -99,6 +99,19 @@ Progress: [███████████████████████
 - CHANGELOG [Unreleased] Phase 18 Added + Notes blocks
 - Phase 18 COMPLETE: all 9 SES-* requirements satisfied; all 5 ROADMAP Success Criteria covered
 
+**v2.0 progress (post-19-01):**
+- Tests: 150 passed + 17 ignored + 0 failed (baseline preserved; adapter inert — no request path wiring yet)
+- RoutingReason.SelfRoute: 9th DU case added to Domain.fs (atomic pair with formatReason 9th arm)
+- formatReason: `| SelfRoute -> "self_route"` — schema_version=1 unchanged (additive enum value)
+- SelfRouter.fs: 339-line adapter — ISelfRouter (ClassifyAsync + PromptVersion) + ISelfRouterStats + LRU cache
+- Safety-biased parser: `hasUnsafe` checked BEFORE `hasSafe` (SAFE ⊂ UNSAFE — load-bearing order, PITFALL #1)
+- PromptVersion: SHA-256 hex8 prefix of prompt file at construction time (`"selfrouting-84e243ae"` for initial prompt)
+- JsonFSharpConverter in buildBody for anonymous record serialization (PITFALL #2 — preserved from JudgeClient pattern)
+- Cache key: single string (promptHash) vs JudgeClient tuple (no response to hash in self-classify)
+- prompts/self-router-prompt.md: SAFE/UNSAFE classifier prompt; retry/fix/continue workflows in UNSAFE section (PITFALL #6)
+- SmartRouter.Cli.fsproj: SelfRouter.fs registered after DecisionLogger.fs (compile order)
+- SR-01/SR-02/SR-03/SR-04/SR-07 satisfied; DI registration (SR-01 named client) + cascade wiring (SR-06) deferred to 19-02/19-03 by design
+
 *Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
 
 ## Accumulated Context
@@ -114,6 +127,14 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 - **schema_version=1 unchanged**: All v2.0 additions are additive enum values on `routing_reason` (`hard_rule`, `sticky_to_122b`, `self_route`) — no field removals, no type changes. Same for DecisionLog and TraceLog.
 - **Hard Rules NOT operator-configurable**: Keyword list hardcoded in `HardRules.fs` (LLVM, MLIR, compiler, segfault, optimization, concurrency). Safety mechanism should not be misconfigurable. README §5.5 documents source-edit requirement (HR-02; resolved gap from Stack vs Architecture researcher conflict).
 - **Hermes-side X-Session-Id propagation is future work**: v2.0 ships smart-router-side machinery only. Hermes Agent PR tracked as HMRS-FUTURE-01/02. Fingerprint fallback (HMRS-02) is opt-in (`Routing.Session.FingerprintEnabled=false` default) for loopback single-client interim case.
+
+**19-01 execution decisions (2026-05-12):**
+- **Safety-biased parser: UNSAFE before SAFE**: `"SAFE"` is a substring of `"UNSAFE"`. Checking `hasSafe` first would cause `"UNSAFE"` model responses to match SAFE and silently route to 35B (SC-2 failure). The `| true, _ -> RouteUnsafe` match arm MUST precede `| false, true -> RouteSafe`. This is the single most dangerous implementation error in Phase 19.
+- **max_tokens=8 (not 4)**: RESEARCH §9 PITFALL #5 recommends 8 over 4 to absorb whitespace/punctuation drift from mlx_lm.server while keeping classify fast.
+- **Single-string cache key**: `promptHash: string` vs JudgeClient's `(promptHash, responseHash)` tuple. Self-classify has no response to include in the cache key — the substitution is correct and intentional.
+- **PromptVersion at construction time**: `SHA256.ComputeHash(File.ReadAllBytes(promptPath))` in the class initializer. Captures the prompt state when the service started; operator runtime edits do not change the version until next restart.
+- **factory.CreateClient("selfrouter") only**: `IUpstreamClient` routes through `QueueDispatcher` holding the 122B `SemaphoreSlim(1)`. Using it for classify calls would make the classifier compete with real inference traffic.
+- **No open DecisionLogger in SelfRouter.fs**: The plan's skeleton comment said `open DecisionLogger // for computePromptHash`, but `computePromptHash` is called by the caller (ChatCompletions.fs in 19-03), not SelfRouter itself. SelfRouter receives `promptHash` as a parameter — same pattern as JudgeClient receives pre-computed hashes. No import needed.
 
 **18-02 execution decisions (2026-05-11):**
 - **122B-wins merge uses AddOrUpdate updateValueFactory**: Concurrent 35B write must never overwrite 122B escalation. `if old.LastModel = Qwen122B || model = Qwen122B then Qwen122B else model` is the non-negotiable merge formula.
@@ -151,7 +172,7 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 
 ### Pending Todos
 
-- v2.0 Phase 18 Plan 03 (`/gsd:execute-phase 18-03`) — next action (TTL eviction BackgroundService + SessionStoreTests + StickyEscalationTests + README §5/§7/§8 updates)
+- v2.0 Phase 19 Plan 02 (`/gsd:execute-phase 19-02`) — next action (DI registration for ISelfRouter + "selfrouter" named HttpClient + SelfRouterOptions binding + /stats exposure)
 - ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3; MODELS-01/02/03 currently erroring with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests)
 - Remove configureServices backwards-compat alias after ModelsTests migration
 
@@ -163,6 +184,6 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 
 ## Session Continuity
 
-Last session: 2026-05-11
-Stopped at: Completed 18-03-PLAN.md — Phase 18 CLOSED. TTL eviction, 13 new tests, README §5/§7/§9.1 + CHANGELOG. 150 + 17 + 0. All 9 SES-* + 5 ROADMAP SCs satisfied.
-Resume file: None. Next action: `/gsd:execute-phase 19` (35B Self-Routing — SR-01..09; 4 plans).
+Last session: 2026-05-12
+Stopped at: Completed 19-01-PLAN.md — DU + adapter + prompt template. RoutingReason.SelfRoute (9th case), ISelfRouter + ISelfRouterStats, prompts/self-router-prompt.md. 150 + 17 + 0 preserved. Adapter inert — no DI/pipeline wiring yet.
+Resume file: None. Next action: `/gsd:execute-phase 19-02` (DI registration + stats endpoint).
