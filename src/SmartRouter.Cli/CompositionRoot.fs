@@ -50,6 +50,7 @@ open SmartRouter.Cli.Adapters.TraceLogger
 open SmartRouter.Cli.Adapters.QualityCheck
 open SmartRouter.Cli.Adapters.JudgeClient    // Phase 16: JudgeOptions, JudgeClient, IJudgeClient, IJudgeStats
 open SmartRouter.Cli.Adapters.SessionStore   // Phase 18: SessionOptions, SessionStore, ISessionStore
+open SmartRouter.Cli.Adapters.SelfRouter    // Phase 19: SelfRouterOptions, SelfRouter, ISelfRouter, ISelfRouterStats
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -442,11 +443,92 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         sp.GetRequiredService<SessionStore>())
     |> ignore
 
+    // Phase 19 (SR-01): SelfRouter DI — mode-gated.
+    //
+    // "selfrouting" arm: named "selfrouter" HttpClient (5s timeout, NOT 300s inference timeout)
+    //   + concrete SelfRouter singleton + ISelfRouter alias + ISelfRouterStats alias.
+    //   Triple-reg mirrors SessionStore/JudgeClient patterns — all resolve same instance.
+    //   Note: the actual self-classify CALL lives in ChatCompletions.fs (Plan 19-03).
+    //   This plan only makes ISelfRouter resolvable. See Phase 19-03 for the cascade wiring.
+    //
+    // "ml" arm: ISelfRouterStats NoOp only — so /stats responds with selfrouter_* = 0
+    //   instead of null-deref 500. ISelfRouter intentionally NOT registered in ml mode;
+    //   ChatCompletions guards via GetService<ISelfRouter>() null check (Plan 19-03).
+    //
+    // PITFALL #7 (19-RESEARCH): BOTH mode arms must register ISelfRouterStats or /stats
+    // will null-deref when the mode is "ml". NoOp is the correct minimal registration.
+    if routingMode = "selfrouting" then
+        // ── Build effective SelfRouterOptions (empty Endpoint → resolve Upstreams.Model35B) ──
+        let selfRouterRaw = config.GetSection("Routing:SelfRouter").Get<SelfRouterOptions>()
+        let selfRouterOpts : SelfRouterOptions = {
+            Endpoint        = if isNull (box selfRouterRaw) || String.IsNullOrWhiteSpace(selfRouterRaw.Endpoint)        then upstreamOptsLazy.Model35B                       else selfRouterRaw.Endpoint
+            PromptPath      = if isNull (box selfRouterRaw) || String.IsNullOrWhiteSpace(selfRouterRaw.PromptPath)      then "prompts/self-router-prompt.md"                 else selfRouterRaw.PromptPath
+            TimeoutSeconds  = if isNull (box selfRouterRaw) || selfRouterRaw.TimeoutSeconds  <= 0                       then 5                                               else selfRouterRaw.TimeoutSeconds
+            MaxCacheEntries = if isNull (box selfRouterRaw) || selfRouterRaw.MaxCacheEntries <= 0                       then 10000                                           else selfRouterRaw.MaxCacheEntries
+        }
+
+        // Named "selfrouter" HttpClient — 5s timeout (SR-01; classify must be quick; NOT the 300s
+        // inference upstream clients). Separate from "upstream35b" to prevent classify calls from
+        // inheriting the 300s inference resilience config. Mirrors "judge" registration shape.
+        services.AddHttpClient("selfrouter", fun (c: System.Net.Http.HttpClient) ->
+            c.BaseAddress <- Uri(selfRouterOpts.Endpoint)
+            c.Timeout     <- TimeSpan.FromSeconds(float selfRouterOpts.TimeoutSeconds))
+            .AddResilienceHandler("selfrouter-pipeline", fun (builder: Polly.ResiliencePipelineBuilder<System.Net.Http.HttpResponseMessage>) ->
+                // SR-01: 1 retry at 200ms constant delay (fail-fast; judge uses 2 retries
+                // with exponential backoff but classify is on the hot path — we want to
+                // fail-open quickly rather than accumulate retry latency).
+                let retryOpts = HttpRetryStrategyOptions()
+                retryOpts.MaxRetryAttempts <- 1
+                retryOpts.BackoffType      <- DelayBackoffType.Constant
+                retryOpts.Delay            <- TimeSpan.FromMilliseconds(200.0)
+                retryOpts.ShouldHandle     <-
+                    Func<RetryPredicateArguments<System.Net.Http.HttpResponseMessage>, System.Threading.Tasks.ValueTask<bool>>(
+                        fun args ->
+                            let retry =
+                                match args.Outcome.Exception with
+                                | :? System.Net.Http.HttpRequestException -> true
+                                | :? System.Threading.Tasks.TaskCanceledException -> true
+                                | null ->
+                                    let resp = args.Outcome.Result
+                                    not (isNull resp) && int resp.StatusCode >= 500
+                                | _ -> false
+                            System.Threading.Tasks.ValueTask.FromResult(retry))
+                builder.AddRetry(retryOpts) |> ignore
+                builder.AddTimeout(TimeSpan.FromSeconds(float selfRouterOpts.TimeoutSeconds)) |> ignore)
+            |> ignore
+
+        // Triple-reg: concrete SelfRouter + ISelfRouter alias + ISelfRouterStats alias.
+        // All three resolve to the same singleton instance (shared LRU cache + counters).
+        // Mirrors JudgeClient triple-reg (lines ~694-714).
+        services.AddSingleton<SelfRouter>(
+            Func<IServiceProvider, SelfRouter>(fun sp ->
+                SelfRouter(
+                    sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(),
+                    selfRouterOpts,
+                    sp.GetRequiredService<ILogger<SelfRouter>>()))) |> ignore
+
+        services.AddSingleton<ISelfRouter>(
+            Func<IServiceProvider, ISelfRouter>(fun sp ->
+                sp.GetRequiredService<SelfRouter>() :> ISelfRouter)) |> ignore
+
+        services.AddSingleton<ISelfRouterStats>(
+            Func<IServiceProvider, ISelfRouterStats>(fun sp ->
+                sp.GetRequiredService<SelfRouter>() :> ISelfRouterStats)) |> ignore
+
+    else
+        // "ml" mode — ISelfRouterStats NoOp: /stats must return selfrouter_* = 0, not 500.
+        // ISelfRouter deliberately NOT registered; ChatCompletions.GetService<ISelfRouter>()
+        // returns null and skips self-classify (Plan 19-03 guards on null).
+        services.AddSingleton<ISelfRouterStats>(fun _ ->
+            { new ISelfRouterStats with
+                member _.GetSelfRouterStats() = struct (0L, 0L, 0L, 0L) }) |> ignore
+
     // Phase 17 (MODE-02): RoutingAlgorithmRegistration factory branches on routingMode.
     // - "ml"          → existing v1.x ML closure (unchanged behavior; v1.3 baseline)
     // - "selfrouting" → Phase 18 sticky-or-default closure (consults ISessionStore.TryGet).
-    //                   Hard Rules (Stage 0, Plan 17-01) still fires for keyword matches.
-    //                   Phase 19 inserts self-classify inside this closure before sticky check.
+    //                   Hard Rules (Stage 0, Plan 17-01) fires before this closure.
+    //                   Phase 19 self-classify lives in ChatCompletions.fs (synchronous
+    //                   algorithm constraint — see 19-RESEARCH Open Question #1).
     //
     // ML adapter DI (embedder, baseline/canary classifiers, retraining, canary) remains
     // unconditional above (MODE-03): RetrainingService accumulates hard cases regardless
@@ -490,12 +572,12 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
                   ModelVersion = baselineVersion }
             | _ ->
                 // ── Phase 18 selfrouting branch: sticky-or-default ─────────────────────
-                // Replaces the Phase 17 stub. Phase 19 will insert self-classify BEFORE
-                // the sticky check inside this closure, making the order:
-                //   Stage 3 algorithm closure: self-classify → sticky → default
-                //
-                // For Phase 18 standalone, the order is:
+                // Replaces the Phase 17 stub. This closure handles Stage 3 of the cascade:
                 //   Stage 3 algorithm closure: sticky → default
+                //
+                // Phase 19 self-classify lives in ChatCompletions.fs (synchronous algorithm
+                // constraint — see 19-RESEARCH Open Question #1). The classify call happens
+                // ABOVE this closure at the call site, NOT inside the closure.
                 //
                 // Hard Rules (Stage 0) + explicit overrides (Stage 1 + 2) still fire
                 // BEFORE this closure is reached, so a Hard Rule + sticky-to-35B request
@@ -517,7 +599,8 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
                                          ModelVersion = "selfrouting-v1" }
                                    | _ ->
                                        // No session, expired session, or last model was 35B → default 35B.
-                                       // Phase 19 will replace this branch with self-classify call.
+                                       // Phase 19 self-classify (Plan 19-03) layers above this call site
+                                       // in ChatCompletions.fs — returns SelfRoute reason when classify fires.
                                        { Target       = Qwen35B
                                          Priority     = Low
                                          Reason       = Default
@@ -694,7 +777,7 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         services.AddSingleton<JudgeClient>(fun sp ->
             let opts = sp.GetRequiredService<IOptions<JudgeOptions>>().Value
             // Defensive defaults if the section parsed to null fields.
-            let normalized =
+            let normalized : JudgeOptions =
                 { Endpoint        = effectiveEndpoint
                   PromptPath      = if String.IsNullOrWhiteSpace(opts.PromptPath)  then "prompts/judge-prompt.md" else opts.PromptPath
                   TimeoutSeconds  = effectiveTimeoutSec
@@ -1118,6 +1201,14 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
     services.AddSingleton<IJudgeStats>(fun _ ->
         { new IJudgeStats with
             member _.GetJudgeStats() = struct (0L, 0L, 0L) })
+        |> ignore
+
+    // Phase 19 — ISelfRouterStats NoOp for offline path. Same rationale as
+    // IJudgeStats NoOp above — /stats must not 500 on the --retrain path.
+    // ISelfRouter deliberately NOT registered offline (no classify needed without request path).
+    services.AddSingleton<ISelfRouterStats>(fun _ ->
+        { new ISelfRouterStats with
+            member _.GetSelfRouterStats() = struct (0L, 0L, 0L, 0L) })
         |> ignore
 
     // Phase 18 — SessionStore DI for backward-compat test paths using configureWithoutMl.
