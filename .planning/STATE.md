@@ -8,15 +8,15 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — ROADMAP.md created. Ready for `/gsd:plan-phase 17`.
+**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 17 in progress (Plan 01 complete).
 
 ## Current Position
 
-Milestone: v2.0 Self-Routing + Session-Aware — IN PLANNING 2026-05-11 (v1.3 ✅ archived; ROADMAP.md complete)
-Phase: 17 (next to plan) — Hard Rules Layer + Routing.Mode Switch
-Plan: —
-Status: Roadmap created. 32 v2.0 requirements mapped to 4 phases (17 Hard Rules + Routing.Mode | 18 Session Store + Sticky | 19 35B Self-Routing | 20 Hermes Integration). Phase ordering driven by `RouterRequest.SessionId` compile dependency (Phase 18 must precede Phase 19). Awaiting `/gsd:plan-phase 17`.
-Last activity: 2026-05-11 — v2.0 ROADMAP.md created via /gsd:new-milestone roadmapper.
+Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-11
+Phase: 17 — Hard Rules Layer + Routing.Mode Switch
+Plan: 01 of 3 complete
+Status: 17-01 complete. HardRules.fs shipped as Stage 0 in routeRequest. Cascade order locked in code. Ready for Plan 17-02 (Routing.Mode config switch + README §5 + §7).
+Last activity: 2026-05-11 — Completed 17-01-PLAN.md (Hard Rules Core module + cascade Stage 0).
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -42,7 +42,7 @@ Last activity: 2026-05-11 — v2.0 ROADMAP.md created via /gsd:new-milestone roa
 - `.planning/research/SUMMARY.md` — v2.0 research synthesis (HIGH confidence; phase order locked by Domain.fs compile dependency)
 - Memory note `v2_selfrouting_pivot.md` — pivot rationale + locked decisions
 
-Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 0 of 12 plans.
+Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 1 of 12 plans.
 
 ## Performance Metrics
 
@@ -62,6 +62,10 @@ Progress: [███████████████████████
 - ARCH-01 invariant preserved across 16 phases / 60 plans
 - 5 NuGet versioned releases (v1.0.0 → v1.3.0)
 
+**v2.0 progress (post-17-01):**
+- Tests: 129 passed + 16 ignored + 0 failed (+16 HardRulesTests)
+- HardRules.fs shipped: Stage 0 in routeRequest, cascade order locked
+
 *Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
 
 ## Accumulated Context
@@ -78,11 +82,19 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 - **Hard Rules NOT operator-configurable**: Keyword list hardcoded in `HardRules.fs` (LLVM, MLIR, compiler, segfault, optimization, concurrency). Safety mechanism should not be misconfigurable. README §5.5 documents source-edit requirement (HR-02; resolved gap from Stack vs Architecture researcher conflict).
 - **Hermes-side X-Session-Id propagation is future work**: v2.0 ships smart-router-side machinery only. Hermes Agent PR tracked as HMRS-FUTURE-01/02. Fingerprint fallback (HMRS-02) is opt-in (`Routing.Session.FingerprintEnabled=false` default) for loopback single-client interim case.
 
+**17-01 execution decisions (2026-05-11):**
+- **Cascade Stage 0 locked in code**: `routeRequest` now 4-stage; Hard Rules fires before `tryModelOverride`. Any future stage insertion (18: sticky, 19: self-classify) must be Stage 3/4 respectively — Stage 0 is immutable.
+- **`HardRule` DU case has no payload**: Target=Qwen122B and Priority=High are invariant for keyword matches. No need for a keyword-name payload (not logged to DecisionLog at this resolution).
+- **No `open` needed in Routing.fs for HardRules**: `HardRules.applyHardRules` resolves via module name alone; both files are in `SmartRouter.Core` namespace scope.
+- **16 HardRulesTests all pure**: No `testSequenced` wrapper needed (no Console.SetOut, no temp dirs, no Kestrel).
+- **HR-06 wording fix deferred to 17-03**: REQUIREMENTS.md HR-06 says "explicit override bypasses Hard Rules" which is incorrect. The fix (Hard Rules wins per STATE.md decision 5) lands in Plan 17-03 Task 4. Tests in 17-01 already verify the correct behavior.
+
 (v1.x execution-level decisions — full plan-by-plan log — archived in `.planning/milestones/v1.3-ROADMAP.md` plan post-mortems.)
 
 ### Pending Todos
 
-- v2.0 Phase 17 planning (`/gsd:plan-phase 17`) — next action
+- v2.0 Phase 17 Plan 02 (`/gsd:execute-phase 17-02`) — next action (Routing.Mode config switch + README §5 + §7)
+- v2.0 Phase 17 Plan 03 — HR-06 REQUIREMENTS.md wording fix + any plan-checker items
 - ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3; MODELS-01/02/03 currently erroring with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests)
 - Remove configureServices backwards-compat alias after ModelsTests migration
 
@@ -95,5 +107,5 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 ## Session Continuity
 
 Last session: 2026-05-11
-Stopped at: v2.0 ROADMAP.md created via /gsd:new-milestone roadmapper. 32 v2.0 requirements mapped to 4 phases (17-20). REQUIREMENTS.md traceability table already populated (filled during requirements-gathering phase). STATE.md updated to reflect roadmap-complete state.
-Resume file: None. Next action: `/gsd:plan-phase 17` (Hard Rules Layer + Routing.Mode Switch).
+Stopped at: Completed 17-01-PLAN.md — Hard Rules Core module + cascade Stage 0 (3 tasks, 3 commits, 16 new tests, 129 total passing).
+Resume file: None. Next action: `/gsd:execute-phase 17-02` (Routing.Mode config switch + README §5 + §7 update).
