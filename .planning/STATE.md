@@ -7,15 +7,15 @@ See: .planning/MILESTONES.md (v1.3 + v2.0 entries; reverse chronological)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.1 Hermes-less Session Tiering — COMPLETE 2026-05-12.
+**Current focus:** v2.1 Hermes-less Session Tiering — Phase 24 gap closure pending before milestone archive.
 
 ## Current Position
 
-Milestone: v2.1 Hermes-less Session Tiering — COMPLETE 2026-05-12
-Phase: Phase 23 — Documentation — COMPLETE (1/1 plans)
-Plan: 23-01 complete (1/1 plans in Phase 23) — Phase 23 COMPLETE — v2.1 MILESTONE CLOSED
-Status: v2.1 fully complete. All 3 phases, 6 plans shipped. README synced to v2.1 behavior. Ready for `/gsd:audit-milestone` and `/gsd:complete-milestone`.
-Last activity: 2026-05-12 — Plan 23-01 executed (4 tasks, 3 content commits + 1 metadata: 9d9f525, 157c49f, c1635fa). README §10 rewritten for v2.1 three-tier cascade; §8 three counter rows added; §9.1 phase-range bumped to 17–22. Phase 23 closed. v2.1 milestone closed.
+Milestone: v2.1 Hermes-less Session Tiering — In progress (Phase 24 gap closure pending)
+Phase: Phase 24 — TIER-04 ml-mode integration test (gap closure) — NEXT
+Plan: 23-01 complete (1/1 plans in Phase 23) — Phase 23 COMPLETE
+Status: Audit ran 2026-05-12: 24/24 reqs satisfied, 0 blocking gaps, 4 tech-debt items. Operator chose to close TD-1 (TC-7 ml-mode DI integration test) before archiving v2.1. Phase 24 added to roadmap. Next action: `/gsd:plan-phase 24`.
+Last activity: 2026-05-12 — `/gsd:audit-milestone` ran (v2.1-MILESTONE-AUDIT.md created; status=tech_debt). Phase 24 added per operator decision to close TD-1 only. TD-2/3 (v1.3 ModelsTests.fs + configureServices alias) and TD-4 (operator-manual smoke run) remain deferred.
 
 **v2.1 phase summary:**
 
@@ -24,6 +24,7 @@ Last activity: 2026-05-12 — Plan 23-01 executed (4 tasks, 3 content commits + 
 | 21 — HSP + CFP Primitives | New BCL-only extraction adapters with unit tests | HSP-01..04, CFP-01..04 (8) | 2 | COMPLETE (21-01 ✓, 21-02 ✓) |
 | 22 — Cascade Rewire + Migration + OBS | CorrelationMiddleware 3-tier cascade; HMRS-02 deleted; stats counters; smoke script updated | TIER-01..05, OBS-01, MIG-01..06 (12) | 3 | COMPLETE (22-01 ✓, 22-02 ✓, 22-03 ✓) |
 | 23 — Documentation | README §10 rewrite; §7 row removal; §8 counter rows; §9.1 review | DOC-01..04 (4) | 1 | COMPLETE (23-01 ✓) |
+| 24 — TIER-04 ml-mode integration test (gap closure) | Executable Routing.Mode=ml DI integration test closing TD-1 from v2.1 audit | TD-1 only (no formal REQ-ID) | 1 | Not started |
 
 **Cumulative project state (post-v2.0):**
 
@@ -108,9 +109,11 @@ Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modif
 
 ### Blockers/Concerns
 
-- None. v2.1 milestone complete.
-- Carry-over from v1.3: ModelsTests.fs IEmbedder errors (non-blocking; tracked above).
-- v2.0 SC-1/SC-2 live-rig acceptance: deferred to operator manual run; not a blocker for next milestone.
+- None blocking Phase 24 start.
+- TD-1 (TC-7 ml-mode DI integration test): selected for Phase 24 gap closure. Test does not yet exist; structural DI proof from Phase 22 audit is sound but the operator chose to upgrade to executable assertion before archiving v2.1.
+- Carry-over from v1.3: ModelsTests.fs IEmbedder errors (non-blocking; deferred past v2.1).
+- TD-3 (configureServices backwards-compat alias removal): blocked on TD-2; deferred past v2.1.
+- TD-4 (operator live-rig smoke acceptance): operator-manual, not a code gap.
 
 ### Plan 23-01 Decisions
 
