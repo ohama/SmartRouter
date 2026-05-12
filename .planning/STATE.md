@@ -12,11 +12,11 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 ## Current Position
 
-Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-12 (11 of 12 plans complete)
-Phase: 20 — Hermes Agent Integration + Documentation — In progress (1 of 2 plans complete)
-Plan: 20-01 complete; 20-02 next
-Status: 20-01 complete. 175 passed + 18 ignored + 0 failed. FingerprintEnabled opt-in shipped; 8 HermesFingerprintTests green; smoke-hermes-session.sh operator-runnable.
-Last activity: 2026-05-12 — Completed 20-01-PLAN.md (fingerprint fallback + smoke test)
+Milestone: v2.0 Self-Routing + Session-Aware — COMPLETE 2026-05-12 (12 of 12 plans complete)
+Phase: 20 — Hermes Agent Integration + Documentation — COMPLETE (2 of 2 plans complete)
+Plan: 20-02 complete (all plans complete; v2.0 milestone READY FOR RELEASE)
+Status: 20-02 complete. 175 passed + 18 ignored + 0 failed. README §10 rewritten for v2.0; §7 FingerprintEnabled row added; CHANGELOG promoted to [2.0.0] - 2026-05-12; HMRS-01..04 closed.
+Last activity: 2026-05-12 — Completed 20-02-PLAN.md (README §10 rewrite + CHANGELOG + REQUIREMENTS closure)
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -42,7 +42,7 @@ Last activity: 2026-05-12 — Completed 20-01-PLAN.md (fingerprint fallback + sm
 - `.planning/research/SUMMARY.md` — v2.0 research synthesis (HIGH confidence; phase order locked by Domain.fs compile dependency)
 - Memory note `v2_selfrouting_pivot.md` — pivot rationale + locked decisions
 
-Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 11 of 12 plans complete (Phases 17, 18, 19 all complete; Phase 20 Plan 20-01 complete; Plan 20-02 remaining).
+Progress: [█████████████████████████████████████████████] 60 of 60 v1.x plans complete. v2.0: 12 of 12 plans complete (Phases 17, 18, 19, 20 ALL COMPLETE). v2.0 milestone READY FOR RELEASE.
 
 ## Performance Metrics
 
@@ -159,11 +159,21 @@ Progress: [███████████████████████
 - scripts/smoke-hermes-session.sh: operator E2E sticky escalation smoke test (no Hermes Agent dep)
 - HMRS-02 core code shipped; HMRS-01..04 requirements closure + README §10 deferred to 20-02
 
-**v2.0 summary (phases 17-19 complete; phase 20 in progress):**
+**v2.0 progress (post-20-02, Phase 20 COMPLETE — v2.0 READY FOR RELEASE):**
+- Tests: 175 passed + 18 ignored + 0 failed (docs-only plan; baseline preserved)
+- README §10 'Hermes / Graphify Integration' fully rewritten for v2.0 selfrouting paradigm (Hermes Agent v2.0 + X-Session-Id opt-in + fingerprint fallback + Graphify preserved)
+- README §7: new Routing.Session.FingerprintEnabled row (bool, default false; proxy warning + §10 cross-ref)
+- CHANGELOG: Phase 20 Added/Changed/Notes block appended; [Unreleased] promoted to [2.0.0] - 2026-05-12
+- REQUIREMENTS.md: HMRS-01..04 [x]; traceability Pending → Complete; footer Phase 20 closure
+- README sync rule audited: areas 9 (§7 config keys) and 10 (§10 Hermes/Graphify) updated; areas 1-8, 11-12 confirmed unchanged
+- Phase 20 COMPLETE: all 4 HMRS-* requirements satisfied (HMRS-01..04)
+- v2.0 milestone COMPLETE: 32/32 requirements across 4 phases; 7 future trackers retained for v2.x
+
+**v2.0 summary (all 4 phases complete — v2.0 READY FOR RELEASE):**
 - Phase 17: Hard Rules Layer + Routing.Mode switch (10 reqs; 3 plans; 8 tests added; v1.x ML dormant)
 - Phase 18: Session Store + Sticky Escalation (9 reqs; 3 plans; 13 tests added; X-Session-Id opt-in)
 - Phase 19: 35B Self-Classify Stage 4 (9 reqs; 4 plans; 17 tests added; streaming-skip; LRU cache; operators can tune via prompts/self-router-prompt.md)
-- Phase 20: Hermes Agent Integration + Documentation (4 reqs; 2 plans; Plan 20-01 complete — fingerprint fallback; Plan 20-02 next — README §10)
+- Phase 20: Hermes Agent Integration + Documentation (4 reqs; 2 plans; fingerprint fallback shipped; README §10 rewritten; CHANGELOG [2.0.0]; HMRS-01..04 CLOSED)
 
 *Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
 
@@ -246,9 +256,10 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 
 ### Pending Todos
 
-- v2.0 Phase 20 Plan 02 (`/gsd:execute-phase 20-02`) — next action (README §10 + §7 FingerprintEnabled row + CHANGELOG + REQUIREMENTS HMRS-01..04 closure)
+- v2.0 milestone COMPLETE. No remaining v2.0 plans.
 - ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3; MODELS-01/02/03 currently erroring with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests)
 - Remove configureServices backwards-compat alias after ModelsTests migration
+- Operator acceptance check: run `./scripts/smoke-hermes-session.sh` against live router to verify sticky escalation E2E (SC-1 manual acceptance for v2.0 release)
 
 ### Blockers/Concerns
 
@@ -259,5 +270,5 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: Completed 20-01-PLAN.md — fingerprint fallback + HermesFingerprintTests + smoke-hermes-session.sh. 175 + 18 + 0. HMRS-02 code shipped.
-Resume file: None. Next action: `/gsd:execute-phase 20-02` (README §10 + HMRS requirements closure).
+Stopped at: Completed 20-02-PLAN.md — README §10 rewrite, CHANGELOG [2.0.0] promotion, HMRS-01..04 closure. 175 + 18 + 0. v2.0 milestone COMPLETE.
+Resume file: None. v2.0 is complete. Next: operator acceptance (`./scripts/smoke-hermes-session.sh`) or post-v2.0 planning.
