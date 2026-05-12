@@ -7,15 +7,15 @@ See: .planning/MILESTONES.md (v1.3 + v2.0 entries; reverse chronological)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.1 Hermes-less Session Tiering — Phase 24 gap closure pending before milestone archive.
+**Current focus:** v2.1 Hermes-less Session Tiering — COMPLETE. All phases done; milestone ready for archive.
 
 ## Current Position
 
-Milestone: v2.1 Hermes-less Session Tiering — In progress (Phase 24 gap closure pending)
-Phase: Phase 24 — TIER-04 ml-mode integration test (gap closure) — NEXT
-Plan: 23-01 complete (1/1 plans in Phase 23) — Phase 23 COMPLETE
-Status: Audit ran 2026-05-12: 24/24 reqs satisfied, 0 blocking gaps, 4 tech-debt items. Operator chose to close TD-1 (TC-7 ml-mode DI integration test) before archiving v2.1. Phase 24 added to roadmap. Next action: `/gsd:plan-phase 24`.
-Last activity: 2026-05-12 — `/gsd:audit-milestone` ran (v2.1-MILESTONE-AUDIT.md created; status=tech_debt). Phase 24 added per operator decision to close TD-1 only. TD-2/3 (v1.3 ModelsTests.fs + configureServices alias) and TD-4 (operator-manual smoke run) remain deferred.
+Milestone: v2.1 Hermes-less Session Tiering — COMPLETE (all phases done; ready for archive)
+Phase: Phase 24 — TIER-04 ml-mode integration test (gap closure) — COMPLETE
+Plan: 24-01 complete (1/1 plans in Phase 24) — Phase 24 COMPLETE
+Status: Phase 24 complete 2026-05-12: TC-7 added, TD-1 from v2.1-MILESTONE-AUDIT.md closed. 187 passed + 18 ignored + 0 failed. v2.1 milestone fully closed. Next action: `/gsd:complete-milestone` to archive v2.1.
+Last activity: 2026-05-12 — Plan 24-01 executed. TC-7 (ISessionCascadeStats resolves in ml-mode DI provider) added to SessionKeyCascadeTests.fs. Test baseline updated 186 → 187. TD-1 closed. Remaining carry-overs (TD-2/3, TD-4) remain deferred.
 
 **v2.1 phase summary:**
 
@@ -24,7 +24,7 @@ Last activity: 2026-05-12 — `/gsd:audit-milestone` ran (v2.1-MILESTONE-AUDIT.m
 | 21 — HSP + CFP Primitives | New BCL-only extraction adapters with unit tests | HSP-01..04, CFP-01..04 (8) | 2 | COMPLETE (21-01 ✓, 21-02 ✓) |
 | 22 — Cascade Rewire + Migration + OBS | CorrelationMiddleware 3-tier cascade; HMRS-02 deleted; stats counters; smoke script updated | TIER-01..05, OBS-01, MIG-01..06 (12) | 3 | COMPLETE (22-01 ✓, 22-02 ✓, 22-03 ✓) |
 | 23 — Documentation | README §10 rewrite; §7 row removal; §8 counter rows; §9.1 review | DOC-01..04 (4) | 1 | COMPLETE (23-01 ✓) |
-| 24 — TIER-04 ml-mode integration test (gap closure) | Executable Routing.Mode=ml DI integration test closing TD-1 from v2.1 audit | TD-1 only (no formal REQ-ID) | 1 | Not started |
+| 24 — TIER-04 ml-mode integration test (gap closure) | Executable Routing.Mode=ml DI integration test closing TD-1 from v2.1 audit | TD-1 only (no formal REQ-ID) | 1 | COMPLETE (24-01 ✓) |
 
 **Cumulative project state (post-v2.0):**
 
@@ -33,7 +33,7 @@ Last activity: 2026-05-12 — `/gsd:audit-milestone` ran (v2.1-MILESTONE-AUDIT.m
 | v1.0–v1.3 | 1-16 | 62 | 113 + 16 ignored | `v1.3.0` | 2026-05-11 |
 | v2.0 | 17-20 | 12 | 175 + 18 ignored | `milestone-v2.0` | 2026-05-12 |
 
-**Test baseline:** 186 passed + 18 ignored + 0 failed (180 from Plan 22-02 + 6 new SessionKeyCascadeTests added in Plan 22-03).
+**Test baseline:** 187 passed + 18 ignored + 0 failed (186 from Plans 22-02/22-03 + 1 new TC-7 from Plan 24-01).
 
 **Architecture invariants preserved (all 20 phases):**
 - ARCH-01: `SmartRouter.Core` BCL-only (no Serilog / HttpClient / Microsoft.ML / ASP.NET Core)
@@ -115,6 +115,11 @@ Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modif
 - TD-3 (configureServices backwards-compat alias removal): blocked on TD-2; deferred past v2.1.
 - TD-4 (operator live-rig smoke acceptance): operator-manual, not a code gap.
 
+### Plan 24-01 Decisions
+
+- **`(box stats)` for `Expect.isNotNull`:** F# interfaces are non-nullable; applied `box` to lift to `obj` (consistent with MLRoutingTests.fs line 146). Semantically correct — `GetRequiredService<T>()` never returns null, only throws.
+- **SC-2 not added:** `resolveSessionCascade` has no mode branch; TC-1..TC-4 already cover all cascade outputs; SC-2 adds zero coverage. Audit ask (TD-1) is SC-1 only.
+
 ### Plan 23-01 Decisions
 
 - **§9.1 cosmetic bump applied:** "Phase 17–19" → "Phase 17–22" (low cost, improves accuracy).
@@ -124,5 +129,5 @@ Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modif
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: Plan 23-01 complete (4/4 tasks, 3 content commits + 1 metadata: 9d9f525, 157c49f, c1635fa + docs). Phase 23 COMPLETE. v2.1 milestone CLOSED. README §10 rewritten for three-tier cascade; §8 three counter rows added; §9.1 phase-range bumped.
-Resume file: None. Next action: `/gsd:audit-milestone` and `/gsd:complete-milestone` to archive v2.1.
+Stopped at: Plan 24-01 complete (2/2 tasks, 1 content commit + 1 metadata: cc5592d + this commit). Phase 24 COMPLETE. v2.1 milestone ALL PHASES DONE. TC-7 added; TD-1 closed; test baseline 186 → 187 passed.
+Resume file: None. Next action: `/gsd:complete-milestone` to archive v2.1.
