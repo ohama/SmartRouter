@@ -7,7 +7,9 @@ open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Hosting
 open Microsoft.Extensions.Options
 open Microsoft.Extensions.Logging
+open System
 open System.IO
+open System.Net
 open Serilog
 open Serilog.Events
 open SmartRouter.Cli.Adapters
@@ -16,6 +18,7 @@ open SmartRouter.Cli.Adapters.CorrelationMiddleware
 open SmartRouter.Cli.Adapters.QueueDispatcher
 open SmartRouter.Cli.Adapters.RoutingAlgorithm
 open SmartRouter.Cli.Adapters.TeacherLabeler
+open SmartRouter.Cli.Adapters.PortProbe
 open SmartRouter.Cli.CompositionRoot
 open SmartRouter.Cli.Endpoints
 open SmartRouter.Core.RetrainingPorts
@@ -95,6 +98,27 @@ let private applyLogLevelFromArgs (args: string array) : unit =
         Logging.setLevel level
         Log.Information("Log level set to {Level} via --log-level CLI flag", level)
     | None -> ()  // levelSwitch default (Information) set by Logging.fs init
+
+/// Phase 25 — extract (host, port) from a Kestrel URL string like
+/// "http://127.0.0.1:4000". Returns None when the URL fails to parse or
+/// doesn't contain a port. The port-probe step is best-effort: if we
+/// can't parse the URL, we skip the probe and let Kestrel surface its
+/// own error (no regression from pre-Phase-25 behavior).
+let private parseListenUrl (urlStr: string) : (string * int) option =
+    match Uri.TryCreate(urlStr, UriKind.Absolute) with
+    | true, uri when uri.Port > 0 -> Some (uri.Host, uri.Port)
+    | _ -> None
+
+/// Phase 25 — is the host string a loopback address? Probe only loopback
+/// listeners (PROBE-02). Non-loopback URLs (`0.0.0.0`, `*`, public IPs,
+/// hostnames other than localhost) are skipped with a debug log line.
+let private isLoopbackHost (host: string) : bool =
+    match host with
+    | "localhost" | "127.0.0.1" | "::1" -> true
+    | other ->
+        match IPAddress.TryParse(other) with
+        | true, ip -> IPAddress.IsLoopback(ip)
+        | _ -> false
 
 [<EntryPoint>]
 let main args =
@@ -245,6 +269,36 @@ let main args =
             // Must run BEFORE configureServices so CompositionRoot.configureRequestPipeline
             // can read Trace:Enabled from builder.Configuration.
             applyTraceFlagFromArgs (builder.Configuration :> IConfigurationBuilder) args
+
+            // Phase 25 — fail-fast port-conflict probe (PROBE-02 + PROBE-03).
+            // Run AFTER --port CLI override merge and AFTER trace-flag merge so
+            // the probe sees the final effective listen URL. Run BEFORE
+            // CompositionRoot.configureServices and BEFORE builder.Build() so
+            // Kestrel never attempts to bind. On conflict: stderr write + exit 1.
+            let listenUrlForProbe =
+                builder.Configuration.["Kestrel:Endpoints:Http:Url"]
+                |> Option.ofObj |> Option.defaultValue "http://localhost:4000"
+            match parseListenUrl listenUrlForProbe with
+            | None ->
+                Log.Debug("Port probe skipped: listen URL {Url} did not parse", listenUrlForProbe)
+            | Some (host, _) when not (isLoopbackHost host) ->
+                Log.Debug("Port probe skipped: host {Host} is not loopback (only 127.0.0.1/::1/localhost are probed)", host)
+            | Some (_, port) ->
+                match PortProbe.tryBind port IPAddress.Loopback with
+                | Ok () -> ()  // port free; continue to Kestrel build
+                | Error err ->
+                    // PROBE-03: write to Console.Error directly (NOT through
+                    // Serilog — must be visible even if logging hasn't initialized
+                    // or hits its own error). Fixed 4-line format per REQUIREMENTS.md.
+                    // No stacktrace. err.Reason is intentionally NOT included in
+                    // the operator-facing block — it lives in the debug log only.
+                    Log.Debug("Port probe rejected port {Port}: {Reason}", err.Port, err.Reason)
+                    eprintfn "ERROR: Port %d is already in use. Smart Router cannot start." err.Port
+                    eprintfn "Likely culprit: another smart-router instance, or a different process bound to :%d." err.Port
+                    eprintfn "To investigate: `lsof -iTCP:%d -sTCP:LISTEN -n -P`" err.Port
+                    eprintfn "To stop a stuck launchd instance: `launchctl unload ~/Library/LaunchAgents/com.ohama.smartrouter.plist`"
+                    Logging.shutdown ()  // flush any pending log writes before exit
+                    Environment.Exit(1)
 
             // Register all DI services: named HttpClients, IUpstreamClient, RoutingConfig
             CompositionRoot.configureServices builder.Services builder.Configuration
