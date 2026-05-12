@@ -28,6 +28,8 @@
     <!-- Phase 21: HSP + CFP extraction primitives (Cli adapter, BCL-only, no DI wiring yet) -->
     <Compile Include="Adapters/HermesSessionExtract.fs" />
     <Compile Include="Adapters/ContentFingerprint.fs" />
+    <!-- Phase 22: 3-tier session cascade observability (OBS-01) -->
+    <Compile Include="Adapters/SessionCascadeStats.fs" />
     <Compile Include="Adapters/DecisionLogger.fs" />
     <Compile Include="Adapters/SelfRouter.fs" />          <!-- Phase 19: self-classify port + LRU cache + ISelfRouterStats -->
     <Compile Include="Adapters/DecisionLogWriter.fs" />

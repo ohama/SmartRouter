@@ -51,6 +51,7 @@ open SmartRouter.Cli.Adapters.QualityCheck
 open SmartRouter.Cli.Adapters.JudgeClient    // Phase 16: JudgeOptions, JudgeClient, IJudgeClient, IJudgeStats
 open SmartRouter.Cli.Adapters.SessionStore   // Phase 18: SessionOptions, SessionStore, ISessionStore
 open SmartRouter.Cli.Adapters.SelfRouter    // Phase 19: SelfRouterOptions, SelfRouter, ISelfRouter, ISelfRouterStats
+open SmartRouter.Cli.Adapters.SessionCascadeStats   // Phase 22: OBS-01 cascade counters
 
 // ── JSON-binding types (Cli-only) ────────────────────────────────────────────
 
@@ -441,6 +442,17 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
     // Same concrete instance as the singleton above (DecisionLogWriter pattern).
     services.AddHostedService<SessionStore>(fun sp ->
         sp.GetRequiredService<SessionStore>())
+    |> ignore
+
+    // Phase 22 (OBS-01): SessionCascadeStats singleton owner of the 3 counters.
+    // Registered unconditionally — TIER-04 requires the cascade to apply in BOTH
+    // Routing.Mode="selfrouting" AND Routing.Mode="ml". Unlike ISelfRouter (mode-
+    // gated), this counter ships in both modes with the SAME concrete class (no
+    // NoOp variant — the class is cheap, 3 int64 fields + 4 sync methods).
+    services.AddSingleton<SessionCascadeStats>() |> ignore
+    services.AddSingleton<ISessionCascadeStats>(
+        Func<IServiceProvider, ISessionCascadeStats>(fun sp ->
+            sp.GetRequiredService<SessionCascadeStats>() :> ISessionCascadeStats))
     |> ignore
 
     // Phase 19 (SR-01): SelfRouter DI — mode-gated.
@@ -1210,6 +1222,16 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
         { new ISelfRouterStats with
             member _.GetSelfRouterStats() = struct (0L, 0L, 0L, 0L) })
         |> ignore
+
+    // Phase 22 (OBS-01): Same SessionCascadeStats registration as configureRequestPipeline.
+    // DI graph integrity for /stats — even though configureWithoutMl is the offline
+    // --retrain path and does not route requests, ISessionCascadeStats must resolve
+    // so /stats responds 200 (returns zeros for all 3 counters in offline mode).
+    services.AddSingleton<SessionCascadeStats>() |> ignore
+    services.AddSingleton<ISessionCascadeStats>(
+        Func<IServiceProvider, ISessionCascadeStats>(fun sp ->
+            sp.GetRequiredService<SessionCascadeStats>() :> ISessionCascadeStats))
+    |> ignore
 
     // Phase 18 — SessionStore DI for backward-compat test paths using configureWithoutMl.
     // The --retrain offline pipeline doesn't route requests, but DI graph integrity
