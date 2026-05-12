@@ -36,19 +36,31 @@ When tradeoffs arise:
   to make a Hermes call wait 200ms than to thrash 122B and starve a Graphify
   graph index.
 
-## Current Milestone: (next — TBD)
+## Current Milestone: v2.1 Hermes-less Session Tiering
 
-**Status:** v2.0 Self-Routing + Session-Aware shipped 2026-05-12. Next milestone not yet scoped.
+**Goal:** Improve session identification accuracy and conversation continuity without modifying Hermes Agent. Replace v2.0's network-level IP+UA fingerprint (HMRS-02) with a multi-tier extraction: (A) parse Hermes' built-in `--pass-session-id` system-prompt line when operator opts in, (B) hash the conversation prefix (system + first user message) as the always-on fallback. Source: `~/projs/smart-router-distillation/idea/hermes-session-without-modification.md`.
 
-**Candidate threads for next milestone:**
-- **Tier 1 session extraction** — `~/projs/smart-router-distillation/idea/hermes-session-without-modification.md` proposes parsing Hermes' `--pass-session-id` system-prompt line (zero Hermes code change, 1 operator flag). Would complement v2.0's HMRS-02 fingerprint without waiting on Hermes-side PR.
-- **Content fingerprint** — Same doc points out network-level fingerprint (RemoteIp+UA, what v2.0 shipped) has NAT/loopback collision risk; system+first-user content fingerprint is more conversation-aligned.
-- **HMRS-FUTURE-01** — Hermes Agent custom provider PR for X-Session-Id propagation.
-- **PROXY-01** — `X-Forwarded-For` parsing for reverse-proxy deployments.
-- **Speculative routing (SPEC-01..03)** — 35B drafts while router evaluates complexity.
-- **Dedicated tiny router model (DRT-01)** — Qwen2.5-3B as separate inference server.
+**Cascade after v2.1:**
+1. `X-Session-Id` HTTP header (unchanged from v2.0; explicit always wins)
+2. **NEW** — System-prompt regex extract (`Session ID: <uuid>` line; only present when operator runs Hermes with `--pass-session-id`)
+3. **NEW** — Content fingerprint: SHA-256(system + "|||" + first_user_message)[0..15]
+4. ~~IP+UA fingerprint~~ — **DELETED** (HMRS-02 adapter, FingerprintEnabled config, 8 HermesFingerprintTests, README §10 PROXY-01 callout all removed)
 
-Next milestone will be initiated via `/gsd:new-milestone` after scope decision.
+**Target features:**
+- New `HermesSessionExtract` adapter (system-prompt regex parse) — Cli adapter; BCL-only regex; null-safe when `Session ID:` line absent
+- New `ContentFingerprint` helper — BCL-only SHA-256 of (system_message + "|||" + first_user_message), 16-hex prefix; deterministic per-conversation; survives multi-turn / continuation
+- `CorrelationMiddleware` rewired: drop fingerprintEnabled config branch; resolve session key in priority order (header → system-prompt parse → content fingerprint)
+- `Routing.Session.FingerprintEnabled` config key REMOVED (breaking; documented in CHANGELOG)
+- Both `Routing.Mode = "selfrouting"` and `"ml"` use the new tiers (matches v2.0 Hard Rules + sticky pattern)
+- `/stats` adds `session_extraction_source_*` counters (header / sysprompt / content / none)
+- README §10 rewritten for v2.1 paradigm + operator guide for `--pass-session-id` opt-in
+- Regression: existing v2.0 sticky-escalation tests + smoke-hermes-session.sh adapted to new tier system
+
+**Out of scope (deferred):**
+- Tier 2 approach C (SQLite state.db direct read) — same-machine coupling concerns; revisit later
+- HMRS-FUTURE-01 (Hermes Agent custom provider PR for X-Session-Id propagation) — stays deferred
+- PROXY-01 (X-Forwarded-For parsing) — moot now that network fingerprint is gone
+- SPEC-01..03 (speculative routing), DRT-01 (dedicated tiny router), MODE-FUTURE-01 (hot-reload Routing.Mode) — all deferred
 
 ## Requirements
 
@@ -159,18 +171,16 @@ Next milestone will be initiated via `/gsd:new-milestone` after scope decision.
 
 ### Active
 
-<!-- Next milestone scope. Will be detailed by /gsd:new-milestone Phase 8 (requirements). -->
+<!-- v2.1 milestone scope. Will be detailed by /gsd:new-milestone Phase 8 (requirements). -->
 
-No active requirements — v2.0 shipped, next milestone not yet scoped.
-
-Candidate capabilities pending scope decision:
-- [ ] System-prompt session_id extraction (Hermes `--pass-session-id` Tier 1 — parse `Session ID: ...` line via regex)
-- [ ] Content-based fingerprint (system + first user hash; complements current network-level fingerprint)
-- [ ] Hermes Agent custom provider PR for X-Session-Id propagation (HMRS-FUTURE-01)
-- [ ] X-Forwarded-For parsing (PROXY-01)
-- [ ] Routing.Mode hot-reload (MODE-FUTURE-01)
-- [ ] Speculative routing (SPEC-01..03)
-- [ ] Dedicated tiny router model (DRT-01)
+High-level v2.1 capabilities (to be decomposed into REQ-IDs):
+- [ ] System-prompt session_id extraction (Hermes `--pass-session-id` Tier 2 — `HermesSessionExtract` adapter; regex parse)
+- [ ] Content fingerprint extraction (Tier 3 — `ContentFingerprint` helper; SHA-256(system + "|||" + first_user)[0..15])
+- [ ] CorrelationMiddleware multi-tier cascade (header → sysprompt → content)
+- [ ] HMRS-02 IP+UA fingerprint code removal (FingerprintEnabled config, adapter logic, 8 tests, README §10 PROXY-01 callout)
+- [ ] `/stats` session_extraction_source_* counters
+- [ ] README §10 rewrite + operator `--pass-session-id` guide
+- [ ] Both Routing.Mode values continue to use the new tiers
 
 ### Out of Scope
 
@@ -328,4 +338,4 @@ regression.
 | **v2.0 fingerprint fallback opt-in (HMRS-02)** | Network-level fingerprint (RemoteIp+UA) has NAT/loopback collision risk; default `false` preserves v1.x stateless behavior. README §10 carries explicit "NOT SAFE BEHIND REVERSE PROXIES" warning (PROXY-01 callout). | ✓ Good (v2.0; FP-1..FP-8 tests cover header-wins, fingerprint-on/off, determinism, sticky integration) |
 
 ---
-*Last updated: 2026-05-12 after v2.0 milestone ✅ SHIPPED (Self-Routing + Session-Aware). 4 phases / 12 plans / 32 requirements satisfied / 175 tests passing. Next milestone TBD; candidates include system-prompt session extraction (Hermes `--pass-session-id` Tier 1), content fingerprint, HMRS-FUTURE-01 Hermes-side PR, PROXY-01, MODE-FUTURE-01 hot-reload, SPEC-01..03 speculative routing, DRT-01 dedicated router model.*
+*Last updated: 2026-05-12 — Started v2.1 milestone "Hermes-less Session Tiering" (Tier-2 system-prompt parse + Tier-3 content fingerprint; replaces v2.0 IP+UA fingerprint). Previous: v2.0 ✅ SHIPPED 2026-05-12 (Self-Routing + Session-Aware; 32/32 reqs; 175 tests).*

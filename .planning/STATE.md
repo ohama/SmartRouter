@@ -7,15 +7,15 @@ See: .planning/MILESTONES.md (v1.3 + v2.0 entries; reverse chronological)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 Self-Routing + Session-Aware **SHIPPED 2026-05-12**. Next milestone not yet scoped.
+**Current focus:** v2.1 Hermes-less Session Tiering — STARTED 2026-05-12. Defining requirements.
 
 ## Current Position
 
-Milestone: — (next milestone TBD; v2.0 shipped 2026-05-12)
-Phase: — (to be defined by `/gsd:new-milestone`)
+Milestone: v2.1 Hermes-less Session Tiering — STARTED 2026-05-12
+Phase: Not started (defining requirements)
 Plan: —
-Status: Ready to start next milestone. v2.0 archived to `.planning/milestones/v2.0-*`. 175 tests passing baseline; ARCH-01 / ARCH-02 / schema_version=1 invariants preserved across 20 phases / 74 plans (v1.0 → v2.0).
-Last activity: 2026-05-12 — v2.0 milestone archived (ROADMAP + REQUIREMENTS + 4 phase dirs + research → `milestones/v2.0-*`); MILESTONES.md / PROJECT.md / STATE.md updated; git tag `milestone-v2.0` pending.
+Status: Scope locked — Tier 2 (system-prompt parse) + Tier 3 (content fingerprint) replace v2.0 IP+UA fingerprint; X-Session-Id header path unchanged. Both Routing.Mode values use the new tiers. Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modification.md`.
+Last activity: 2026-05-12 — PROJECT.md updated with v2.1 milestone goals; STATE.md reset; next step is research decision then REQUIREMENTS.md.
 
 **Cumulative project state (post-v2.0):**
 
@@ -73,19 +73,24 @@ Plan-level execution decisions archived per-phase in `.planning/milestones/v2.0-
 - **Remove configureServices backwards-compat alias** after ModelsTests migration. Non-blocking.
 - **Operator acceptance** of v2.0 SC-1/SC-2: run `./scripts/smoke-hermes-session.sh` against live mlx_lm.server rig to confirm X-Session-Id sticky-122B and fingerprint round-trip. Non-blocking for next milestone scoping.
 
-### Next Milestone Candidates
+### v2.1 Scope (locked 2026-05-12)
 
-Not yet scoped. Candidate threads:
+**In:**
+- Tier 2 system-prompt parse (A): regex `^Session ID:\s*(\S+)` from `system` message; only matches when operator runs Hermes with `--pass-session-id`
+- Tier 3 content fingerprint (B): SHA-256(system_message + "|||" + first_user_message)[0..15]; survives multi-turn + continuation
+- CorrelationMiddleware multi-tier cascade: X-Session-Id header → Tier 2 → Tier 3
+- HMRS-02 IP+UA fingerprint code removal (adapter logic, FingerprintEnabled config, 8 tests, README §10 PROXY-01 warning)
+- `/stats` session_extraction_source_* counters
+- README §10 rewrite (Hermes Integration v2.1 paradigm + operator `--pass-session-id` guide)
+- Both Routing.Mode values use the new tiers
 
-1. **System-prompt session_id extraction (Tier 1)** — `~/projs/smart-router-distillation/idea/hermes-session-without-modification.md` proposes parsing Hermes' `--pass-session-id` system-prompt line (`Session ID: <uuid>`) via regex. Zero Hermes code change; 1 operator flag. Would complement v2.0's HMRS-02 network-level fingerprint with a more accurate Tier 1 path.
-2. **Content-based fingerprint (Tier 3)** — Same doc points out network-level fingerprint (RemoteIp+UA, what v2.0 shipped) has NAT/loopback collision risk; system+first-user content fingerprint is more conversation-aligned and survives multi-turn / continuation requests.
-3. **HMRS-FUTURE-01** — Hermes Agent custom provider PR to send `X-Session-Id` header (Hermes-side wiring).
-4. **PROXY-01** — `X-Forwarded-For` parsing for reverse-proxy deployments.
-5. **MODE-FUTURE-01** — Hot-reload `Routing.Mode` without restart (FileSystemWatcher).
-6. **SPEC-01..03** — Speculative routing (35B drafts while router evaluates).
-7. **DRT-01** — Dedicated tiny router model (Qwen2.5-3B as separate inference server).
+**Deferred (NOT in v2.1):**
+- Approach C (SQLite state.db direct read) — same-machine coupling
+- HMRS-FUTURE-01 (Hermes-side custom-provider PR to send X-Session-Id) — operator wants Hermes-less approach instead
+- PROXY-01 — moot once network fingerprint deleted
+- MODE-FUTURE-01 (Routing.Mode hot-reload), SPEC-01..03 (speculative routing), DRT-01 (dedicated tiny router)
 
-Next step: `/gsd:new-milestone` to scope and plan.
+Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modification.md`.
 
 ### Blockers/Concerns
 
