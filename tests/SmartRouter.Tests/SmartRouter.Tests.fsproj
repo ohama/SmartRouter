@@ -49,6 +49,7 @@
     <Compile Include="HermesFingerprintTests.fs" />
     <!-- Phase 21: HSP + CFP extraction primitives -->
     <Compile Include="HermesSessionExtractTests.fs" />
+    <Compile Include="ContentFingerprintTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
