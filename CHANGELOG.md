@@ -5,6 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.1.1] - 2026-05-12
+
+Phase 23 documentation pass + Phase 24 TIER-04 gap closure. Closes the v2.1
+milestone (4/4 phases shipped; `milestone-v2.1` tag). No production code
+behavior changes — README operator-facing accuracy + executable assertion for
+the previously structural-only ml-mode DI guarantee.
+
+### Added
+
+- **`tests/SmartRouter.Tests/SessionKeyCascadeTests.fs` TC-7** —
+  `"TC-7: ISessionCascadeStats resolves non-null in Routing.Mode=\"ml\" DI provider"`.
+  Constructs a `ServiceCollection` from `minimalConfigPairs` with `Routing:Mode`
+  overridden to `"ml"` (and no `Routing:ML` section so `mlOpts=null` at
+  `CompositionRoot.fs:342` skips the ML bootstrap and avoids the ONNX file
+  dependency in CI), calls `configureRequestPipeline`, builds a provider, and
+  asserts `provider.GetRequiredService<ISessionCascadeStats>()` returns non-null
+  via `Expect.isNotNull (box stats)` (`box` is required because F# interfaces are
+  non-nullable; matches `MLRoutingTests.fs:146` precedent). Closes TD-1 from
+  `.planning/milestones/v2.1-MILESTONE-AUDIT.md` — upgrades TIER-04 evidence from
+  structural inference to executable assertion. Test count: 186 → 187 passed.
+
+### Changed
+
+- **README §10** (Hermes / Graphify Integration) rewritten end-to-end for the
+  v2.1 three-tier paradigm. Operator guide now covers all four
+  `--pass-session-id` enablement options (CLI arg, shell alias, env var,
+  wrapper script) plus content-fingerprint fallback semantics. Stock-Hermes
+  behavior distinction noted: stock `--pass-session-id` fires Tier 2, not
+  Tier 1. (DOC-01)
+- **README §8** (`/stats` field reference) — three new rows documented:
+  `session_extraction_source_header`, `session_extraction_source_sysprompt`,
+  `session_extraction_source_content`. Added to both the JSON example and the
+  description table, plus a jq monitoring snippet for tracking tier distribution
+  over time. (DOC-03)
+- **README §9.1** (DecisionLog schema reference) — schema confirmed unchanged
+  in v2.1 (session_id propagation uses the existing SES-04 channel; no new
+  `routing_reason` values). Cosmetic "Phase 17–19" → "Phase 17–22" phase-range
+  bump applied for accuracy. (DOC-04)
+- **README drift sweep** — confirmed zero residual references to
+  `FingerprintEnabled`, `PROXY-01`, `RemoteIp`, `HMRS-FUTURE-01`, and "network
+  fingerprint" across the entire README. The §7 `FingerprintEnabled` row
+  removal (DOC-02) was committed early in Plan 22-03 (`938c8ac`); §10 callout
+  removal completed in `157c49f`.
+- **Test baseline** updated 186 → 187 passing (+1 from TC-7); 18 ignored
+  unchanged; 0 failed.
+
+### Notes
+
+- **No production code changes.** All Phase 23 work is documentation; Phase 24
+  adds one test case. Operator behavior is identical to v2.1.0.
+- **Pre-existing test flake surfaced (TD-5).** During Phase 24 verification
+  the `PITFALL-10` test in `tests/SmartRouter.Tests/QueueTests.fs` (lines
+  239-307) was observed failing ~60% of the time when run in isolation. Root
+  cause analysis (audit integration checker) confirmed this is a test-side
+  timing assumption flaw — the `Async.Sleep 30` enqueue barrier races against
+  the `LatencyFake(30)` occupy slot release. Production logic in
+  `QueueDispatcher` is correct (Fairness counter assertions always pass; only
+  the FIFO completion order assertion for `high4` is flaky). The flake
+  predates Phase 21 (last touched in `fac58b2`); not introduced or worsened
+  by v2.1. Tracked in `.planning/STATE.md` as TD-5 for future fix (replace
+  sleep barrier with `Barrier` or `SemaphoreSlim` guaranteeing all 5 tasks
+  called `EnqueueAsync` before occupy releases).
+- **Deferred carry-over tech debt** (unchanged from v2.1.0): TD-2
+  (`ModelsTests.fs` IEmbedder errors), TD-3 (`configureServices` alias
+  removal, blocked on TD-2), TD-4 (operator live-rig smoke run).
+
 ## [2.1.0] - 2026-05-12
 
 Phase 22 — Hermes-less Session Tiering. Replaces the v2.0 IP+UA network
