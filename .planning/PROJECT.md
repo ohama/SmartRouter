@@ -36,31 +36,16 @@ When tradeoffs arise:
   to make a Hermes call wait 200ms than to thrash 122B and starve a Graphify
   graph index.
 
-## Current Milestone: v2.1 Hermes-less Session Tiering
+## Current Milestone: (none — v2.1 shipped 2026-05-12; awaiting next milestone via `/gsd:new-milestone`)
 
-**Goal:** Improve session identification accuracy and conversation continuity without modifying Hermes Agent. Replace v2.0's network-level IP+UA fingerprint (HMRS-02) with a multi-tier extraction: (A) parse Hermes' built-in `--pass-session-id` system-prompt line when operator opts in, (B) hash the conversation prefix (system + first user message) as the always-on fallback. Source: `~/projs/smart-router-distillation/idea/hermes-session-without-modification.md`.
+**Last shipped:** v2.1 Hermes-less Session Tiering — three-tier session-key cascade (header → sysprompt → content fingerprint) replacing v2.0's network IP+UA fingerprint; HMRS-02 fully deleted; new `/stats` extraction-source counters; both `Routing.Mode` values use the new tiers (verified by TC-7 executable DI assertion). 4 phases (21-24) / 7 plans / 187 passing tests. See `.planning/MILESTONES.md` (top entry) and `.planning/milestones/v2.1-ROADMAP.md` for full record.
 
-**Cascade after v2.1:**
-1. `X-Session-Id` HTTP header (unchanged from v2.0; explicit always wins)
-2. **NEW** — System-prompt regex extract (`Session ID: <uuid>` line; only present when operator runs Hermes with `--pass-session-id`)
-3. **NEW** — Content fingerprint: SHA-256(system + "|||" + first_user_message)[0..15]
-4. ~~IP+UA fingerprint~~ — **DELETED** (HMRS-02 adapter, FingerprintEnabled config, 8 HermesFingerprintTests, README §10 PROXY-01 callout all removed)
+**Session-key cascade as shipped in v2.1:**
+1. `X-Session-Id` HTTP header (Tier 1; explicit always wins)
+2. System-prompt regex extract (Tier 2; `^Session ID:[ \t]*(\S+)` against first System message; only fires when operator runs Hermes with `--pass-session-id`)
+3. Content fingerprint (Tier 3; SHA-256(truncate(system) + "|||" + truncate(firstUser))[0..15]; deterministic; survives multi-turn / continuation)
 
-**Target features:**
-- New `HermesSessionExtract` adapter (system-prompt regex parse) — Cli adapter; BCL-only regex; null-safe when `Session ID:` line absent
-- New `ContentFingerprint` helper — BCL-only SHA-256 of (system_message + "|||" + first_user_message), 16-hex prefix; deterministic per-conversation; survives multi-turn / continuation
-- `CorrelationMiddleware` rewired: drop fingerprintEnabled config branch; resolve session key in priority order (header → system-prompt parse → content fingerprint)
-- `Routing.Session.FingerprintEnabled` config key REMOVED (breaking; documented in CHANGELOG)
-- Both `Routing.Mode = "selfrouting"` and `"ml"` use the new tiers (matches v2.0 Hard Rules + sticky pattern)
-- `/stats` adds `session_extraction_source_*` counters (header / sysprompt / content / none)
-- README §10 rewritten for v2.1 paradigm + operator guide for `--pass-session-id` opt-in
-- Regression: existing v2.0 sticky-escalation tests + smoke-hermes-session.sh adapted to new tier system
-
-**Out of scope (deferred):**
-- Tier 2 approach C (SQLite state.db direct read) — same-machine coupling concerns; revisit later
-- HMRS-FUTURE-01 (Hermes Agent custom provider PR for X-Session-Id propagation) — stays deferred
-- PROXY-01 (X-Forwarded-For parsing) — moot now that network fingerprint is gone
-- SPEC-01..03 (speculative routing), DRT-01 (dedicated tiny router), MODE-FUTURE-01 (hot-reload Routing.Mode) — all deferred
+IP+UA network fingerprint (v2.0 HMRS-02) is fully deleted — pre-deletion snapshot preserved at `archive/v2.0-network-fingerprint` branch + `v2.0-network-fingerprint` annotated tag at commit `d4797e7`.
 
 ## Requirements
 
@@ -169,18 +154,25 @@ When tradeoffs arise:
 - ✓ ARCH-01 preserved across v2.0 (`HardRules.fs` only new Core file; all other adapters in Cli) — v2.0
 - ✓ 175 tests passing + 18 ignored (+62 new tests across Phases 17-20) — v2.0
 
+**v2.1 Hermes-less Session Tiering (2026-05-12)**
+
+- ✓ `SmartRouter.Cli.Adapters.HermesSessionExtract` module: Tier 2 system-prompt regex parse (`^Session ID:[ \t]*(\S+)` Multiline; module-level pre-compiled `Regex`; case-sensitive; `[ \t]*` chosen over `\s*` to prevent cross-line match) — v2.1 (HSP-01..04)
+- ✓ `SmartRouter.Cli.Adapters.ContentFingerprint` module: Tier 3 SHA-256 prefix hash of `truncate(system) + "|||" + truncate(firstUser)`; 16-char lowercase hex; deterministic; >4000-char truncation; thread-safe per-call `use sha = SHA256.Create()` — v2.1 (CFP-01..04)
+- ✓ Three-tier cascade in `ChatCompletions.fs resolveSessionCascade` (between `mapWireToRequest` and `routeRequest`): header → sysprompt → content fingerprint; first non-empty wins — v2.1 (TIER-01..05)
+- ✓ Cascade fires in BOTH `Routing.Mode = "selfrouting"` and `"ml"` — verified by TC-7 executable DI assertion (Phase 24 gap closure; `SessionKeyCascadeTests.fs:264-281`) — v2.1 (TIER-04)
+- ✓ `/stats` `session_extraction_source_header / _sysprompt / _content` flat Int64 fields backed by `SessionCascadeStats` (`Interlocked.Increment` + `Volatile.Read`); DI-registered unconditionally — v2.1 (OBS-01)
+- ✓ HMRS-02 IP+UA fingerprint code fully deleted: `Routing.Session.FingerprintEnabled` config key, `CorrelationMiddleware.fs` SHA-256(RemoteIp+UA) block, `HermesFingerprintTests.fs` 8 tests, README §10 PROXY-01 callout, README §7 row — all gone — v2.1 (MIG-01..05)
+- ✓ `archive/v2.0-network-fingerprint` branch + `v2.0-network-fingerprint` annotated tag at `d4797e7` preserve pre-deletion snapshot — v2.1 (MIG-06)
+- ✓ README §10 rewritten for v2.1 paradigm with four operator `--pass-session-id` enablement options (CLI arg, shell alias, env var, wrapper script); §7 `FingerprintEnabled` row removed; §8 three new counter rows added (table + JSON example + jq monitoring snippet); §9.1 confirmed schema-unchanged (cosmetic "Phase 17–19" → "Phase 17–22" bump) — v2.1 (DOC-01..04)
+- ✓ `SessionKeyCascadeTests.fs` 7 testCases (TC-1..TC-7) covering header-wins / sysprompt fallback / content fingerprint / determinism / sticky escalation continuity / counter increments / ml-mode DI resolution — v2.1
+- ✓ 187 tests passing + 18 ignored + 0 failed (+12 net across Phases 21-24; +7 HSP + +7 CFP + +6 SessionKeyCascadeTests + 1 TC-7 − 8 HermesFingerprintTests − 1 unrelated drift) — v2.1
+- ✓ `DecisionLog schema_version=1` unchanged in v2.1 (session_id flows through existing SES-04 channel; no new `routing_reason` values) — v2.1
+
 ### Active
 
-<!-- v2.1 milestone scope. Will be detailed by /gsd:new-milestone Phase 8 (requirements). -->
+<!-- Next milestone not yet started. Run /gsd:new-milestone to begin questioning → research → requirements → roadmap for the next version. -->
 
-High-level v2.1 capabilities (to be decomposed into REQ-IDs):
-- [ ] System-prompt session_id extraction (Hermes `--pass-session-id` Tier 2 — `HermesSessionExtract` adapter; regex parse)
-- [ ] Content fingerprint extraction (Tier 3 — `ContentFingerprint` helper; SHA-256(system + "|||" + first_user)[0..15])
-- [ ] CorrelationMiddleware multi-tier cascade (header → sysprompt → content)
-- [ ] HMRS-02 IP+UA fingerprint code removal (FingerprintEnabled config, adapter logic, 8 tests, README §10 PROXY-01 callout)
-- [ ] `/stats` session_extraction_source_* counters
-- [ ] README §10 rewrite + operator `--pass-session-id` guide
-- [ ] Both Routing.Mode values continue to use the new tiers
+(Empty — pending next milestone scoping)
 
 ### Out of Scope
 
@@ -335,7 +327,16 @@ regression.
 | **v2.0 streaming-skip for self-classify (SR-06)** | Mirrors Phase 14 quality-fallback streaming-skip — first-chunk latency budget cannot accommodate classify round-trip. Hard Rules (0ms) + sticky still apply. | ✓ Good (v2.0; explicit `if req.Stream then skip` comment in ChatCompletions.fs; structural zero ClassifyAsync calls verified by tests) |
 | **v2.0 Hard Rules wins over explicit override (HR-06)** | Safety mechanism precedence — operator who wants Hard Rules disabled must source-edit + rebuild. README §5.5 documents source-edit requirement (HR-02). | ✓ Good (v2.0; corrected during 17-03 from misleading "bypasses" wording) |
 | **v2.0 ML adapter unconditional DI registration (MODE-03)** | RetrainingService accumulates hard cases in BOTH `"selfrouting"` and `"ml"` modes so ML re-activation does not require retraining from scratch. | ✓ Good (v2.0; `MlDormantTests.fs` skip-guarded test confirms ML path still wires) |
-| **v2.0 fingerprint fallback opt-in (HMRS-02)** | Network-level fingerprint (RemoteIp+UA) has NAT/loopback collision risk; default `false` preserves v1.x stateless behavior. README §10 carries explicit "NOT SAFE BEHIND REVERSE PROXIES" warning (PROXY-01 callout). | ✓ Good (v2.0; FP-1..FP-8 tests cover header-wins, fingerprint-on/off, determinism, sticky integration) |
+| **v2.0 fingerprint fallback opt-in (HMRS-02)** | Network-level fingerprint (RemoteIp+UA) has NAT/loopback collision risk; default `false` preserves v1.x stateless behavior. README §10 carries explicit "NOT SAFE BEHIND REVERSE PROXIES" warning (PROXY-01 callout). | ⚠️ Superseded by v2.1 (HMRS-02 fully deleted in Phase 22 MIG-01..03; pre-deletion snapshot at `archive/v2.0-network-fingerprint` tag `d4797e7`) |
+| **v2.1 Hermes-less Session Tiering (operator 2026-05-12)**: Replace v2.0 IP+UA fingerprint with three-tier extraction cascade — header (unchanged) → system-prompt regex parse of stock Hermes `--pass-session-id` line → SHA-256 content fingerprint of conversation prefix. Both `Routing.Mode` values use the new tiers. | Source: `~/projs/smart-router-distillation/idea/hermes-session-without-modification.md`. Operator chose Hermes-less path over HMRS-FUTURE-01 (Hermes-side PR) — works with stock Hermes today. Content fingerprint solves loopback collision risk PROXY-01 raised about IP+UA. | ✓ Good (v2.1 shipped 2026-05-12; 24/24 reqs; 187 passing tests; HMRS-02 fully deleted) |
+| **v2.1 adapter placement: `HermesSessionExtract` + `ContentFingerprint` in `SmartRouter.Cli.Adapters`, NOT Core** | Hexagonal invariant is file placement, not BCL usage. Both adapters use BCL only (`System.Text.RegularExpressions`, `System.Security.Cryptography`) but live in Cli to match v2.0 pattern (`SessionStore.fs`, `SelfRouter.fs` in Cli; only `HardRules.fs` was Core-BCL). | ✓ Good (v2.1; ARCH-01 preserved across 24 phases) |
+| **v2.1 HSP regex: `^Session ID:[ \t]*(\S+)` not `^Session ID:\s*(\S+)`** | `\s` matches `\n` enabling cross-line collapse and incorrect matching for HSP-04 case (e) malformed-line-no-value. `[ \t]*` constrains to same-line horizontal whitespace. Auto-fixed during Plan 21-01 execution. | ✓ Good (v2.1; HSP-04 case (e) returns None as required) |
+| **v2.1 TIER-03 placement**: Tier 2 + Tier 3 resolution happens in `ChatCompletions.fs resolveSessionCascade` (between `mapWireToRequest` and `routeRequest`), NOT in `CorrelationMiddleware` itself | `CorrelationMiddleware` runs pre-body-parse and cannot access `req.Messages`. Tier 2/3 require parsed RouterRequest. Resolution placed in handler scope keeps middleware Tier-1-only and avoids double-body-read. | ✓ Good (v2.1; cascade fires deterministically; no middleware-vs-handler ordering bugs) |
+| **v2.1 `SessionCascadeStats` DI registration unconditional** (registered in both `configureRequestPipeline` and `configureWithoutMl`; no NoOp pattern needed) | `GetRequiredService<ISessionCascadeStats>()` at call site guarantees startup failure if either branch missing the registration — both-modes guarantee structurally enforced. TC-7 (Phase 24) upgrades from structural to executable assertion. | ✓ Good (v2.1; closes TIER-04 evidence gap) |
+| **v2.1 Plan 22-02 commit order reversed from MIG REQ numbering** (MIG-06 → MIG-03 → MIG-02 → MIG-01) | Every intermediate state must build. `HermesFingerprintTests.fs` uses `SessionOptions.FingerprintEnabled`; deleting the field first breaks test compile. Delete tests first, then middleware, then config. | ✓ Good (v2.1; every commit in Plan 22-02 builds and tests pass) |
+| **v2.1 `archive/v2.0-network-fingerprint` annotated tag, not lightweight** | Per v2.0 milestone formality convention (`milestone-v1.3`, `milestone-v2.0` are annotated). Pre-deletion snapshot at `d4797e7` archaeologically reachable. | ✓ Good (v2.1; matches `archive/heuristic-baseline` + `v0.5-heuristic-baseline` project pattern) |
+| **v2.1 TC-7 ml-mode DI test (Phase 24 gap closure)**: One-line executable assertion (`Expect.isNotNull (box stats)`) replaces structural-only DI proof for TIER-04 | TD-1 from v2.1-MILESTONE-AUDIT.md (status=tech_debt). Operator chose to close TD-1 before archive — upgrades evidence from "code-reading" to "CI-enforced". `Routing:ML` section omitted so `mlOpts=null` at `CompositionRoot.fs:342` skips ML bootstrap and avoids ONNX dependency in CI. | ✓ Good (v2.1; TC-7 passes; audit re-run promoted v2.1 status to `passed`) |
+| **v2.1 SC-2 descoped per research Q11**: paired counter test running `resolveSessionCascade` end-to-end in ml-mode NOT added | `resolveSessionCascade` has no mode branch — byte-for-byte identical at runtime in `"selfrouting"` and `"ml"`. TC-1..TC-4 already exhaustively cover all four cascade branches; running them again under different DI provider config adds zero coverage. Audit's TD-1 ask is SC-1 (DI resolution) only. | ✓ Good (v2.1; avoided scope inflation; closed TD-1 in 1 plan / 2 task commits) |
 
 ---
-*Last updated: 2026-05-12 — Started v2.1 milestone "Hermes-less Session Tiering" (Tier-2 system-prompt parse + Tier-3 content fingerprint; replaces v2.0 IP+UA fingerprint). Previous: v2.0 ✅ SHIPPED 2026-05-12 (Self-Routing + Session-Aware; 32/32 reqs; 175 tests).*
+*Last updated: 2026-05-12 after v2.1 milestone shipped (Hermes-less Session Tiering; 4 phases / 7 plans / 24 requirements / 187 passing tests). Previous: v2.0 ✅ SHIPPED 2026-05-12 (Self-Routing + Session-Aware; 32/32 reqs; 175 tests). Next milestone: TBD — run `/gsd:new-milestone` to scope.*

@@ -1,5 +1,69 @@
 # Project Milestones: smart-router
 
+## v2.1 Hermes-less Session Tiering (Shipped: 2026-05-12)
+
+**Delivered:** Replace v2.0's network-level IP+UA fingerprint (HMRS-02) with a three-tier extraction cascade — `X-Session-Id` header (unchanged) → system-prompt regex parse of Hermes' built-in `--pass-session-id` line → SHA-256 content fingerprint of conversation prefix — wired into `ChatCompletions.fs resolveSessionCascade`. The fingerprint code path (`FingerprintEnabled` config, `SHA-256(RemoteIp+UA)` middleware block, `HermesFingerprintTests.fs` 8 tests, README §10 PROXY-01 callout) is entirely deleted. Both `Routing.Mode = "selfrouting"` and `"ml"` use the new tiers, verified by TC-7 executable DI assertion (Phase 24 gap closure).
+
+**Phases completed:** 21-24 (4 phases; 7 plans total — including Phase 24 single-plan gap closure)
+
+**Key accomplishments:**
+
+- **Three-tier session-key cascade** — `HermesSessionExtract.extractFromSystemPrompt` adapter (BCL `System.Text.RegularExpressions`; module-level pre-compiled `Regex` with `RegexOptions.Multiline`; pattern `^Session ID:[ \t]*(\S+)` — `[ \t]*` chosen over `\s*` to prevent cross-line match) + `ContentFingerprint.compute` helper (BCL `SHA256.Create()` per call for thread safety; `truncate(s) = s.[..3999]`; lowercase 16-hex via `Array.map (sprintf "%02x")`); both in `SmartRouter.Cli.Adapters` (ARCH-01 preserved); `resolveSessionCascade` in `ChatCompletions.fs:201` placed between `mapWireToRequest` and `routeRequest` per TIER-03
+- **HMRS-02 deletion (breaking)** — `Routing.Session.FingerprintEnabled` config key removed; `CorrelationMiddleware.fs` 71 lines net (SHA-256 block gone, `fingerprintEnabled: bool` parameter removed); `HermesFingerprintTests.fs` (FP-01..FP-08; 130 LOC) deleted entirely; `archive/v2.0-network-fingerprint` branch + `v2.0-network-fingerprint` annotated tag both at `d4797e7` preserve pre-deletion snapshot per MIG-06; commit order reversed from REQ numbering (MIG-06 → MIG-03 → MIG-02 → MIG-01) so every intermediate state builds
+- **Observability counters** — three new flat snake_case Int64 fields in `/stats`: `session_extraction_source_header`, `session_extraction_source_sysprompt`, `session_extraction_source_content`; `SessionCascadeStats` adapter (`Interlocked.Increment` writers + `Volatile.Read` accessors) DI-registered unconditionally in BOTH `configureRequestPipeline` and `configureWithoutMl` so cascade fires in either `Routing.Mode`
+- **Documentation (Phase 23)** — README §10 fully rewritten for v2.1 paradigm with all four `--pass-session-id` operator enablement options (CLI arg, shell alias, env var, wrapper script); §7 `FingerprintEnabled` row removed (pulled forward to Plan 22-03 per CLAUDE.md README-sync rule); §8 three new counter rows added (JSON example + description table + jq monitoring snippet); §9.1 DecisionLog confirmed schema-unchanged (cosmetic "Phase 17–19" → "Phase 17–22" bump applied); zero residual references to `FingerprintEnabled` / `PROXY-01` / `RemoteIp` / `HMRS-FUTURE-01` / `network fingerprint`
+- **TC-7 ml-mode DI integration test (Phase 24 gap closure)** — `SessionKeyCascadeTests.fs:264-281` constructs `ServiceCollection` with `Routing:Mode=ml` (omits `Routing:ML` section so `mlOpts=null` at `CompositionRoot.fs:342` skips ML bootstrap and avoids ONNX dependency in CI); asserts `GetRequiredService<ISessionCascadeStats>()` returns non-null via `Expect.isNotNull (box stats)` (`box` required because F# interfaces are non-nullable; mirrors `MLRoutingTests.fs:146` precedent); closes TD-1 from v2.1-MILESTONE-AUDIT.md (upgrades TIER-04 evidence from structural inference to executable assertion)
+- **SessionKeyCascadeTests.fs integration test suite** — 7 testCases (TC-1 header-wins / TC-2 sysprompt fallback / TC-3 content fingerprint / TC-4 determinism / TC-5 sticky-through-Tier-2 / TC-6 counter increments / TC-7 ml-mode DI resolution); proves all six E2E flows traceable end-to-end without breaks
+- **Schema + architecture invariants preserved** — `DecisionLog schema_version=1` unchanged (no new `routing_reason` values; resolved session_id flows through existing SES-04 channel); ARCH-01 preserved (both new adapters in Cli, not Core); ARCH-02 preserved (synchronous pure functions; `scripts/check-no-async.sh` continues to pass); `TreatWarningsAsErrors=true` build clean
+
+**Stats:**
+
+- 4 phases shipped, 7 plans total (2 + 3 + 1 + 1)
+- 34 phase commits across ~4.5 hours (2026-05-12 10:51 → 2026-05-12 15:15 KST)
+- 50 files changed (+9,891 / -315 since `milestone-v2.0`)
+- 187 tests passed + 18 ignored + 0 failed (was 175+18 at v2.0; +12 net new tests: +7 HSP + +7 CFP + +6 SessionKeyCascadeTests + 1 TC-7 − 8 HermesFingerprintTests − 1 unrelated drift)
+- ~17,800 LOC F# (src + tests; +~440 net from v2.0)
+- Test additions: 7 HermesSessionExtractTests (HSP-04) + 7 ContentFingerprintTests (CFP-04 — split case (b) into 2 testCases) + 6 SessionKeyCascadeTests (TC-1..TC-6 Phase 22) + 1 TC-7 (Phase 24); test deletions: 8 HermesFingerprintTests
+
+**Git range:** `docs(21): research phase domain` (`ee8e8a0`) → `docs(24): complete tier-04 ml-mode integration test phase` (`1e36409`)
+
+**Tags:** `v2.1.0` (release commit `4ad1e52` after Phase 22), `milestone-v2.1` (final; pre-archive); `v2.0-network-fingerprint` + `archive/v2.0-network-fingerprint` branch (pre-deletion snapshot at `d4797e7`)
+
+**Decimal phases:** None — all phases sequential (21, 22, 23, 24).
+
+**Key decisions:**
+
+- Adapter placement: `HermesSessionExtract` + `ContentFingerprint` in `SmartRouter.Cli.Adapters`, NOT Core (hexagonal invariant is file-placement, not BCL usage)
+- HSP regex chose `[ \t]*` over `\s*` (Plan 21-01 auto-fix) — `\s` matches `\n` enabling cross-line collapse; horizontal-whitespace-only constraint required for HSP-04 case (e) malformed-line-no-value
+- CFP signature: `compute : RouterRequest -> string` (no option wrapper; empty Messages yields valid hash of `"|||"`)
+- TIER-03 placement: Tier 2/3 resolution post-`mapWireToRequest` in `ChatCompletions.fs` scope, NOT in `CorrelationMiddleware` itself (middleware runs pre-body-parse, cannot access `req.Messages`)
+- Plan 22-02 commit order reversed from MIG REQ numbering (MIG-06 → MIG-03 → MIG-02 → MIG-01) so every intermediate state builds (HermesFingerprintTests.fs used `SessionOptions.FingerprintEnabled`; field deletion first would break test compile)
+- `SessionCascadeStats` DI registration unconditional (in both `configureRequestPipeline` and `configureWithoutMl`); no NoOp pattern needed
+- `archive/v2.0-network-fingerprint` annotated tag (not lightweight) per v2.0 milestone formality
+- Plan 22-03 chose 6 testCases (TC-1..TC-6), not 8 as RESEARCH §10 projected — TC-7 ml-mode-dormant deferred to Phase 24 gap closure
+- Plan 24-01: SC-2 (paired counter test running `resolveSessionCascade` in ml-mode) descoped per research Q11 — `resolveSessionCascade` has no mode branch; TC-1..TC-4 already exhaustively cover all four cascade branches; SC-2 would add zero coverage
+- `Expect.isNotNull (box stats)` used in TC-7 — F# interfaces are non-nullable reference types; `box` lifts to `obj` for the null check (matches `MLRoutingTests.fs:146`)
+
+**Issues deferred:**
+
+- TD-2: `ModelsTests.fs` IEmbedder errors (v1.3 carry-over; MODELS-01..03 currently error or are suppressed; register a stub IEmbedder in DI fixture)
+- TD-3: `configureServices` backwards-compat alias removal (`CompositionRoot.fs:1369`; blocked on TD-2)
+- TD-4: Operator live-rig smoke acceptance — `./scripts/smoke-hermes-session.sh` against live mlx_lm.server rig (operator-manual, not a code gap)
+- TD-5: `PITFALL-10` timing race in `QueueTests.fs:239-307` (pre-existing flake; `Async.Sleep 30` barrier insufficient; production logic correct; ~60% isolation failure rate; recommended fix: replace sleep with `Barrier` or `SemaphoreSlim`; predates Phase 21 — last touched in `fac58b2`)
+- HMRS-FUTURE-01/02: Hermes Agent custom provider PR for X-Session-Id propagation (operator chose Hermes-less path for v2.1 instead)
+- PROXY-01: X-Forwarded-For parsing — moot now that network fingerprint is deleted
+- MODE-FUTURE-01: Hot-reload `Routing.Mode` without restart
+- SPEC-01..03: Speculative routing (35B drafts while router evaluates)
+- DRT-01: Dedicated tiny router model (Qwen2.5-3B)
+
+**Technical debt incurred:**
+
+- None new from v2.1 phases. TD-1 (originally non-blocking carry-over from Phase 22 verifier recommendation) closed in Phase 24.
+
+**What's next:** Open. Candidate threads — (a) close TD-2/TD-3 (ModelsTests.fs + configureServices alias) in a v2.x maintenance window; (b) fix TD-5 PITFALL-10 timing race; (c) operator-run TD-4 smoke; (d) consider HMRS-FUTURE-01 (Hermes-side X-Session-Id PR) if upstream collaboration opportunity opens; (e) explore SPEC-01..03 speculative routing if first-chunk latency becomes a constraint.
+
+---
+
 ## v2.0 Self-Routing + Session-Aware (Shipped: 2026-05-12)
 
 **Delivered:** Replace v1.x ML-classifier routing path with a three-layer cascade — keyword Hard Rules (Stage 0) → 35B self-classify (1-token SAFE/UNSAFE, non-streaming only) → sticky session escalation — wiring smart-router below Hermes Agent for debugging-continuity across multi-turn sessions. ML code retained but routing-path dormant; `Routing.Mode` switch preserves one-config rollback.
