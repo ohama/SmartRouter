@@ -12,17 +12,17 @@ See: .planning/MILESTONES.md (v1.3 + v2.0 entries; reverse chronological)
 ## Current Position
 
 Milestone: v2.1 Hermes-less Session Tiering — STARTED 2026-05-12
-Phase: Phase 21 — HSP + CFP Extraction Primitives (COMPLETE)
-Plan: 21-02 complete (2/2 plans in Phase 21) — Phase 21 COMPLETE
-Status: Phase 21 complete. Next action: execute Phase 22 (Cascade Rewire + Migration + OBS).
-Last activity: 2026-05-12 — Plan 21-02 executed (3 tasks, 3 commits). ContentFingerprint adapter + 7 tests shipped. 181 → 188 passing tests.
+Phase: Phase 22 — Cascade Rewire + Migration + OBS (IN PROGRESS)
+Plan: 22-01 complete (1/3 plans in Phase 22)
+Status: Plan 22-01 complete. Next action: execute Plan 22-02 (HMRS-02 deletion).
+Last activity: 2026-05-12 — Plan 22-01 executed (3 tasks, 3 commits: 5e04118, fe5c3f0, 814b46e). SessionCascadeStats adapter + cascade wiring + /stats counters. 188 passing tests (baseline preserved).
 
 **v2.1 phase summary:**
 
 | Phase | Goal | Requirements | Plans | Status |
 |-------|------|--------------|-------|--------|
 | 21 — HSP + CFP Primitives | New BCL-only extraction adapters with unit tests | HSP-01..04, CFP-01..04 (8) | 2 | COMPLETE (21-01 ✓, 21-02 ✓) |
-| 22 — Cascade Rewire + Migration + OBS | CorrelationMiddleware 3-tier cascade; HMRS-02 deleted; stats counters; smoke script updated | TIER-01..05, OBS-01, MIG-01..06 (12) | 3 | Not started |
+| 22 — Cascade Rewire + Migration + OBS | CorrelationMiddleware 3-tier cascade; HMRS-02 deleted; stats counters; smoke script updated | TIER-01..05, OBS-01, MIG-01..06 (12) | 3 | In progress (22-01 ✓) |
 | 23 — Documentation | README §10 rewrite; §7 row removal; §8 counter rows; §9.1 review | DOC-01..04 (4) | 1 | Not started |
 
 **Cumulative project state (post-v2.0):**
@@ -32,7 +32,7 @@ Last activity: 2026-05-12 — Plan 21-02 executed (3 tasks, 3 commits). ContentF
 | v1.0–v1.3 | 1-16 | 62 | 113 + 16 ignored | `v1.3.0` | 2026-05-11 |
 | v2.0 | 17-20 | 12 | 175 + 18 ignored | `milestone-v2.0` | 2026-05-12 |
 
-**Test baseline:** 188 passed + 18 ignored + 0 failed (was 175+18 at v2.0 baseline; +6 tests from Plan 21-01 HermesSessionExtractTests; +7 tests from Plan 21-02 ContentFingerprintTests).
+**Test baseline:** 188 passed + 18 ignored + 0 failed (unchanged by Plan 22-01 — cascade is additive over the existing empty-string-sessionId path; new tests land in 22-03).
 
 **Architecture invariants preserved (all 20 phases):**
 - ARCH-01: `SmartRouter.Core` BCL-only (no Serilog / HttpClient / Microsoft.ML / ASP.NET Core)
@@ -75,6 +75,7 @@ Full decision logs are in PROJECT.md Key Decisions table. Milestone-level summar
 - **v2.1** (roadmap 2026-05-12): HermesSessionExtract + ContentFingerprint in `SmartRouter.Cli.Adapters` (ARCH-01); Tier 2/3 resolve post-body-parse in ChatCompletions.fs scope (TIER-03); `archive/v2.0-network-fingerprint` tag before deletion (MIG-06); schema_version=1 unchanged (DOC-04).
 - **Plan 21-01** (2026-05-12): `[ \t]*` not `\s*` in HSP regex — `\s` includes `\n` enabling cross-line match; `[ \t]*` constrains to same-line horizontal whitespace. Pure Cli adapter pattern (no DI/port) for transformation primitives consumed by later middleware cascade.
 - **Plan 21-02** (2026-05-12): `compute : RouterRequest -> string` (no option wrapper — empty Messages yields hash of "|||"); per-call `use sha = SHA256.Create()` for thread-safety; `Array.map (sprintf "%02x")` for lowercase hex (NOT `Convert.ToHexString` which is uppercase). Case (b) uniqueness split into 2 testCases yielding 7 new tests (188 total, not 187 as predicted).
+- **Plan 22-01** (2026-05-12): `resolveSessionCascade` must be placed BEFORE `let handler` (not before `let mapEndpoints`) — F# forward-reference. `open SmartRouter.Cli.Adapters.HermesSessionExtract` brings `extractFromSystemPrompt` into direct scope but NOT the module name as qualifier; used fully-qualified `SmartRouter.Cli.Adapters.HermesSessionExtract.extractFromSystemPrompt` to avoid ambiguity. Unconditional DI registration for ISessionCascadeStats in both pipelines (no NoOp pattern needed). StatsWire fields appended at end for stable JSON ordering.
 
 Plan-level execution decisions archived per-phase in `.planning/milestones/v2.0-phases/*/`.
 
@@ -112,5 +113,5 @@ Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modif
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: Plan 21-02 complete (3/3 tasks, 3 commits: 2454a20, ec16f5e, f2900fd). ContentFingerprint adapter + 7 tests. Phase 21 COMPLETE. 188 + 18 ignored + 0 failed.
-Resume file: None. Next action: execute Phase 22 (Cascade Rewire + Migration + OBS, Plan 22-01).
+Stopped at: Plan 22-01 complete (3/3 tasks, 3 commits: 5e04118, fe5c3f0, 814b46e). SessionCascadeStats adapter + cascade wired in ChatCompletions + /stats counters. 188 + 18 ignored + 0 failed.
+Resume file: None. Next action: execute Plan 22-02 (HMRS-02 IP+UA fingerprint code deletion).
