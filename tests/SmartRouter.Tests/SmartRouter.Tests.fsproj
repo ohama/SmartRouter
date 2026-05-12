@@ -48,6 +48,8 @@
     <!-- Phase 21: HSP + CFP extraction primitives -->
     <Compile Include="HermesSessionExtractTests.fs" />
     <Compile Include="ContentFingerprintTests.fs" />
+    <!-- Phase 22: 3-tier session cascade integration tests (TIER-05 + OBS-01) -->
+    <Compile Include="SessionKeyCascadeTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
