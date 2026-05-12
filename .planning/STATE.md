@@ -12,16 +12,16 @@ See: .planning/MILESTONES.md (v1.3 + v2.0 entries; reverse chronological)
 ## Current Position
 
 Milestone: v2.1 Hermes-less Session Tiering — STARTED 2026-05-12
-Phase: Phase 21 — HSP + CFP Extraction Primitives (not yet started)
-Plan: —
-Status: ROADMAP created. 3 phases (21-23), 6 plans, 24/24 requirements mapped. Next action: `/gsd:plan-phase 21`.
-Last activity: 2026-05-12 — REQUIREMENTS.md defined (24 reqs); ROADMAP.md created (3 phases: 21 adapters, 22 cascade+migration, 23 docs); STATE.md updated to Phase 21.
+Phase: Phase 21 — HSP + CFP Extraction Primitives (in progress)
+Plan: 21-01 complete (1/2 plans in Phase 21)
+Status: Plan 21-01 complete. Next action: execute Plan 21-02 (ContentFingerprint adapter).
+Last activity: 2026-05-12 — Plan 21-01 executed (3 tasks, 3 commits). HermesSessionExtract adapter + 6 tests shipped. 175 → 181 passing tests.
 
 **v2.1 phase summary:**
 
 | Phase | Goal | Requirements | Plans | Status |
 |-------|------|--------------|-------|--------|
-| 21 — HSP + CFP Primitives | New BCL-only extraction adapters with unit tests | HSP-01..04, CFP-01..04 (8) | 2 | Not started |
+| 21 — HSP + CFP Primitives | New BCL-only extraction adapters with unit tests | HSP-01..04, CFP-01..04 (8) | 2 | 1/2 plans done (21-01 ✓) |
 | 22 — Cascade Rewire + Migration + OBS | CorrelationMiddleware 3-tier cascade; HMRS-02 deleted; stats counters; smoke script updated | TIER-01..05, OBS-01, MIG-01..06 (12) | 3 | Not started |
 | 23 — Documentation | README §10 rewrite; §7 row removal; §8 counter rows; §9.1 review | DOC-01..04 (4) | 1 | Not started |
 
@@ -32,7 +32,7 @@ Last activity: 2026-05-12 — REQUIREMENTS.md defined (24 reqs); ROADMAP.md crea
 | v1.0–v1.3 | 1-16 | 62 | 113 + 16 ignored | `v1.3.0` | 2026-05-11 |
 | v2.0 | 17-20 | 12 | 175 + 18 ignored | `milestone-v2.0` | 2026-05-12 |
 
-**Test baseline:** 175 passed + 18 ignored + 0 failed (was 113+16 at v1.3 baseline; +62 tests across v2.0).
+**Test baseline:** 181 passed + 18 ignored + 0 failed (was 175+18 at v2.0 baseline; +6 tests from Plan 21-01 HermesSessionExtractTests).
 
 **Architecture invariants preserved (all 20 phases):**
 - ARCH-01: `SmartRouter.Core` BCL-only (no Serilog / HttpClient / Microsoft.ML / ASP.NET Core)
@@ -73,6 +73,7 @@ Full decision logs are in PROJECT.md Key Decisions table. Milestone-level summar
 - **v1.3** (shipped 2026-05-11): Hexagonal F# Core BCL-only; `task {}` only; bge-m3 int8 multilingual ML; quality fallback + judge OPT-IN; heuristic retirement Phase 12.
 - **v2.0** (shipped 2026-05-12): Selfrouting primary (ML dormant); 35B self-route (NOT 7B separate); Hard Rules keyword-only (NOT full Heuristic.fs revival); Hermes ABOVE smart-router with session_id propagation downward; streaming-skip for self-classify (SR-06); Hard Rules wins over explicit override (HR-06).
 - **v2.1** (roadmap 2026-05-12): HermesSessionExtract + ContentFingerprint in `SmartRouter.Cli.Adapters` (ARCH-01); Tier 2/3 resolve post-body-parse in ChatCompletions.fs scope (TIER-03); `archive/v2.0-network-fingerprint` tag before deletion (MIG-06); schema_version=1 unchanged (DOC-04).
+- **Plan 21-01** (2026-05-12): `[ \t]*` not `\s*` in HSP regex — `\s` includes `\n` enabling cross-line match; `[ \t]*` constrains to same-line horizontal whitespace. Pure Cli adapter pattern (no DI/port) for transformation primitives consumed by later middleware cascade.
 
 Plan-level execution decisions archived per-phase in `.planning/milestones/v2.0-phases/*/`.
 
@@ -110,5 +111,5 @@ Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modif
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: v2.1 ROADMAP.md created (3 phases, 6 plans, 24/24 reqs mapped). STATE.md updated to Phase 21. REQUIREMENTS.md traceability table filled.
-Resume file: None. Next action: `/gsd:plan-phase 21`.
+Stopped at: Plan 21-01 complete (3/3 tasks, 3 commits: 6a7eb37, 2ad565c, 9d2ecd1). HermesSessionExtract adapter + 6 tests. 181 + 18 ignored + 0 failed.
+Resume file: None. Next action: execute Plan 21-02 (ContentFingerprint adapter).
