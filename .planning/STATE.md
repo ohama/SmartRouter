@@ -109,8 +109,9 @@ Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modif
 
 ### Blockers/Concerns
 
-- None blocking Phase 24 start.
-- TD-1 (TC-7 ml-mode DI integration test): selected for Phase 24 gap closure. Test does not yet exist; structural DI proof from Phase 22 audit is sound but the operator chose to upgrade to executable assertion before archiving v2.1.
+- None blocking v2.1 milestone archive.
+- TD-1 (TC-7 ml-mode DI integration test): RESOLVED by Phase 24 (commit cc5592d). TIER-04 evidence upgraded from structural inference to executable assertion.
+- **Flaky test observed (Phase 24 verifier, 2026-05-12):** `PITFALL-10` in `tests/SmartRouter.Tests/QueueTests.fs` (last touched Phase 18, commit d2ae1bf) failed during the verifier's full-suite run while passing during the executor's run minutes earlier. Timing-sensitive concurrency test; not touched by Phase 24. Worth investigating during v2.1 milestone audit but not blocking phase completion. Isolated `SessionKeyCascadeTests` run shows 7/7 passing including TC-7.
 - Carry-over from v1.3: ModelsTests.fs IEmbedder errors (non-blocking; deferred past v2.1).
 - TD-3 (configureServices backwards-compat alias removal): blocked on TD-2; deferred past v2.1.
 - TD-4 (operator live-rig smoke acceptance): operator-manual, not a code gap.

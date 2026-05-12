@@ -20,7 +20,7 @@ v2.1 replaces v2.0's network-level IP+UA fingerprint (`HMRS-02` / `FingerprintEn
 - [x] **Phase 21: HSP + CFP Extraction Primitives** ✓ — New `HermesSessionExtract` adapter (system-prompt regex, Tier 2) and `ContentFingerprint` helper (SHA-256 prefix hash, Tier 3) shipped (2 plans / 8 commits; 188 passed + 18 ignored + 0 failed = +13 new tests; all 8 HSP/CFP requirements verified by gsd-verifier 13/13 must-haves). One auto-fixed deviation in 21-01: regex `\s*` → `[ \t]*` to prevent cross-line matching (HSP-04 case e). ARCH-01 preserved.
 - [x] **Phase 22: Cascade Rewire + Migration + Observability** ✓ — Three-tier cascade live in `ChatCompletions.fs` (`resolveSessionCascade` between `mapWireToRequest` and `routeRequest`); `SessionCascadeStats` adapter (`Interlocked.Increment` + `Volatile.Read`) DI-registered in BOTH Routing.Mode branches; three `/stats` `session_extraction_source_*` flat Int64 fields wired; HMRS-02 fully deleted (`FingerprintEnabled` config, `SHA-256(RemoteIp+UA)` block in CorrelationMiddleware, `HermesFingerprintTests.fs` 8 tests); `archive/v2.0-network-fingerprint` branch + `v2.0-network-fingerprint` annotated tag both at `d4797e7` (pre-deletion); `SessionKeyCascadeTests.fs` 6 testCases (TC-1 header-wins / TC-2 sysprompt / TC-3 content / TC-4 determinism / TC-5 sticky-through-Tier-2 / TC-6 counter increments); `smoke-hermes-session.sh` updated; `CHANGELOG.md [2.1.0]` block written. README §7 `FingerprintEnabled` row also removed in Plan 22-03 (CLAUDE.md README-sync rule pull-forward; satisfies DOC-02 one phase early). 3 plans / 13 commits; 186 passed + 18 ignored + 0 failed (was 188 → 180 after deletion → 186 with +6 cascade tests). All 12 must-haves verified by gsd-verifier (TIER-01..05 + OBS-01 + MIG-01..06).
 - [x] **Phase 23: Documentation** ✓ — README §10 rewritten for v2.1 paradigm (3-tier cascade + `--pass-session-id` operator guide with all 4 enablement options); §8 three new `/stats` counter rows added (header / sysprompt / content) in both JSON example and description table; §9.1 DecisionLog section confirmed current and cosmetically bumped "Phase 17–19" → "Phase 17–22"; full README drift sweep confirmed `FingerprintEnabled` / `PROXY-01` / `RemoteIp` / `HMRS-FUTURE-01` / `network fingerprint` all zero. 1 plan / 4 commits (9d9f525, 157c49f, c1635fa, 0d93c70). All 7 must-haves verified by gsd-verifier (DOC-01..04).
-- [ ] **Phase 24: TIER-04 ml-mode integration test (gap closure)** — Add explicit `Routing.Mode="ml"` integration test to `SessionKeyCascadeTests.fs` (or `ProductionDiTests.fs`) that constructs a DI provider with the ml-mode config and asserts `ISessionCascadeStats` resolves non-null. Closes TD-1 from v2.1 audit (replaces structural DI proof with an executable assertion). Carry-over from Phase 22 verifier recommendation.
+- [x] **Phase 24: TIER-04 ml-mode integration test (gap closure)** ✓ — TC-7 added to `tests/SmartRouter.Tests/SessionKeyCascadeTests.fs` (lines 264-280) inside existing `testList "SessionKeyCascadeTests"`; constructs DI provider with `Routing:Mode="ml"` (omits `Routing:ML` section so `mlOpts=null` skips ML bootstrap and ONNX dependency per `CompositionRoot.fs` line 342); asserts `GetRequiredService<ISessionCascadeStats>()` returns non-null via `Expect.isNotNull (box stats)` (F# interface non-nullability requires `box`; matches `MLRoutingTests.fs:146` precedent). Test count 186 → 187 passed. TD-1 closed: TIER-04 evidence upgraded from structural inference to executable assertion. 1 plan / 2 task commits + 1 metadata commit (cc5592d, 1e3cd44, bb15fb9). All 5 must-haves verified by gsd-verifier.
 
 ## Phase Details
 
@@ -111,7 +111,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 24-01-PLAN.md — TC-7 ml-mode DI integration test + optional paired counter assertion (TD-1)
+- [x] 24-01-PLAN.md — TC-7 ml-mode DI integration test (TD-1) — paired counter assertion descoped per research Q11 (no mode branch in `resolveSessionCascade`)
 
 ---
 
@@ -122,7 +122,7 @@ Plans:
 | 21. HSP + CFP Primitives | v2.1 | 2/2 | ✓ Complete | 2026-05-12 |
 | 22. Cascade Rewire + Migration + OBS | v2.1 | 3/3 | ✓ Complete | 2026-05-12 |
 | 23. Documentation | v2.1 | 1/1 | ✓ Complete | 2026-05-12 |
-| 24. TIER-04 ml-mode integration test (gap closure) | v2.1 | 0/1 | Not Started | — |
+| 24. TIER-04 ml-mode integration test (gap closure) | v2.1 | 1/1 | ✓ Complete | 2026-05-12 |
 
 ## Coverage
 
