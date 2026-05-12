@@ -45,10 +45,10 @@
 
 ### Documentation (DOC-*)
 
-- [ ] **DOC-01**: README §10 "Hermes / Graphify Integration" rewritten for v2.1 — describes the new 3-tier cascade (header → sysprompt → content); explains `Session ID:` line emission from Hermes `--pass-session-id`; operator opt-in guide covering all four enablement options from the source doc (CLI arg, shell alias `hermes-router='hermes --pass-session-id ...'`, env var `HERMES_TUI_PASS_SESSION_ID=1`, wrapper script). NOT SAFE BEHIND REVERSE PROXIES warning + PROXY-01 callout REMOVED (no longer applies)
+- [x] **DOC-01**: README §10 "Hermes / Graphify Integration" rewritten for v2.1 — describes the new 3-tier cascade (header → sysprompt → content); explains `Session ID:` line emission from Hermes `--pass-session-id`; operator opt-in guide covering all four enablement options from the source doc (CLI arg, shell alias `hermes-router='hermes --pass-session-id ...'`, env var `HERMES_TUI_PASS_SESSION_ID=1`, wrapper script). NOT SAFE BEHIND REVERSE PROXIES warning + PROXY-01 callout REMOVED (completed Plan 23-01 commit `157c49f`)
 - [x] **DOC-02**: README §7 Configuration Reference — `Routing.Session.FingerprintEnabled` row REMOVED; existing `Routing.Session.TtlMinutes` and `Routing.Session.MaxEntries` rows preserved unchanged (completed early in Plan 22-03 commit `938c8ac` per CLAUDE.md README-sync rule alongside MIG-01)
-- [ ] **DOC-03**: README §8 `/stats` field reference — `session_extraction_source_header`, `_sysprompt`, `_content` three rows added with semantic explanations matching `IStatsProvider` field meanings
-- [ ] **DOC-04**: README §9 DecisionLog reference — no schema changes for v2.1 (resolved session_id is propagated via existing SES-04 channel; no new routing_reason values); section confirmed still correct as written
+- [x] **DOC-03**: README §8 `/stats` field reference — `session_extraction_source_header`, `_sysprompt`, `_content` three rows added with semantic explanations matching `IStatsProvider` field meanings (completed Plan 23-01 commit `c1635fa` — both JSON example and description table + jq monitoring snippet)
+- [x] **DOC-04**: README §9 DecisionLog reference — no schema changes for v2.1 (resolved session_id is propagated via existing SES-04 channel; no new routing_reason values); section confirmed still correct as written; cosmetic "Phase 17–19" → "Phase 17–22" phase-range bump applied (completed Plan 23-01 commit `9d9f525`)
 
 ## Future Requirements
 
@@ -121,10 +121,10 @@ Assigned by roadmapper 2026-05-12.
 | MIG-04 | Phase 22 | Complete |
 | MIG-05 | Phase 22 | Complete |
 | MIG-06 | Phase 22 | Complete |
-| DOC-01 | Phase 23 | Pending |
+| DOC-01 | Phase 23 | Complete |
 | DOC-02 | Phase 23 → Phase 22 (early) | Complete |
-| DOC-03 | Phase 23 | Pending |
-| DOC-04 | Phase 23 | Pending |
+| DOC-03 | Phase 23 | Complete |
+| DOC-04 | Phase 23 | Complete |
 
 **Coverage:**
 - v2.1 requirements: 24 total (4 HSP + 4 CFP + 5 TIER + 1 OBS + 6 MIG + 4 DOC)

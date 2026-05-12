@@ -19,7 +19,7 @@ v2.1 replaces v2.0's network-level IP+UA fingerprint (`HMRS-02` / `FingerprintEn
 
 - [x] **Phase 21: HSP + CFP Extraction Primitives** ✓ — New `HermesSessionExtract` adapter (system-prompt regex, Tier 2) and `ContentFingerprint` helper (SHA-256 prefix hash, Tier 3) shipped (2 plans / 8 commits; 188 passed + 18 ignored + 0 failed = +13 new tests; all 8 HSP/CFP requirements verified by gsd-verifier 13/13 must-haves). One auto-fixed deviation in 21-01: regex `\s*` → `[ \t]*` to prevent cross-line matching (HSP-04 case e). ARCH-01 preserved.
 - [x] **Phase 22: Cascade Rewire + Migration + Observability** ✓ — Three-tier cascade live in `ChatCompletions.fs` (`resolveSessionCascade` between `mapWireToRequest` and `routeRequest`); `SessionCascadeStats` adapter (`Interlocked.Increment` + `Volatile.Read`) DI-registered in BOTH Routing.Mode branches; three `/stats` `session_extraction_source_*` flat Int64 fields wired; HMRS-02 fully deleted (`FingerprintEnabled` config, `SHA-256(RemoteIp+UA)` block in CorrelationMiddleware, `HermesFingerprintTests.fs` 8 tests); `archive/v2.0-network-fingerprint` branch + `v2.0-network-fingerprint` annotated tag both at `d4797e7` (pre-deletion); `SessionKeyCascadeTests.fs` 6 testCases (TC-1 header-wins / TC-2 sysprompt / TC-3 content / TC-4 determinism / TC-5 sticky-through-Tier-2 / TC-6 counter increments); `smoke-hermes-session.sh` updated; `CHANGELOG.md [2.1.0]` block written. README §7 `FingerprintEnabled` row also removed in Plan 22-03 (CLAUDE.md README-sync rule pull-forward; satisfies DOC-02 one phase early). 3 plans / 13 commits; 186 passed + 18 ignored + 0 failed (was 188 → 180 after deletion → 186 with +6 cascade tests). All 12 must-haves verified by gsd-verifier (TIER-01..05 + OBS-01 + MIG-01..06).
-- [ ] **Phase 23: Documentation** — README §10 rewritten for v2.1 paradigm (3-tier cascade + `--pass-session-id` operator guide); §8 three new `/stats` counter rows added; §9.1 DecisionLog section confirmed current. (§7 `FingerprintEnabled` row removal already complete in Plan 22-03 → DOC-02 satisfied early.)
+- [x] **Phase 23: Documentation** ✓ — README §10 rewritten for v2.1 paradigm (3-tier cascade + `--pass-session-id` operator guide with all 4 enablement options); §8 three new `/stats` counter rows added (header / sysprompt / content) in both JSON example and description table; §9.1 DecisionLog section confirmed current and cosmetically bumped "Phase 17–19" → "Phase 17–22"; full README drift sweep confirmed `FingerprintEnabled` / `PROXY-01` / `RemoteIp` / `HMRS-FUTURE-01` / `network fingerprint` all zero. 1 plan / 4 commits (9d9f525, 157c49f, c1635fa, 0d93c70). All 7 must-haves verified by gsd-verifier (DOC-01..04). v2.1 milestone CLOSED.
 
 ## Phase Details
 
@@ -89,7 +89,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 23-01-PLAN.md — README §10 rewrite + §7 row removal + §8 counter rows + §9.1 review (DOC-01..04)
+- [x] 23-01-PLAN.md — README §10 rewrite + §7 row removal + §8 counter rows + §9.1 review (DOC-01..04)
 
 ---
 
@@ -99,7 +99,7 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 21. HSP + CFP Primitives | v2.1 | 2/2 | ✓ Complete | 2026-05-12 |
 | 22. Cascade Rewire + Migration + OBS | v2.1 | 3/3 | ✓ Complete | 2026-05-12 |
-| 23. Documentation | v2.1 | 0/1 | Not Started | — |
+| 23. Documentation | v2.1 | 1/1 | ✓ Complete | 2026-05-12 |
 
 ## Coverage
 
