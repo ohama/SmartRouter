@@ -12,11 +12,11 @@ See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
 
 ## Current Position
 
-Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-12 (10 of 12 plans complete)
-Phase: 20 — Hermes Agent Integration + Documentation — Not started
-Plan: —
-Status: Phase 19 verified by gsd-verifier (5/5 ROADMAP must-haves, 9/9 SR-* requirements). 167 passed + 18 ignored + 0 failed. One non-blocking human-verification item recorded in 19-VERIFICATION.md: live mlx_lm.server validation that 35B actually returns SAFE/UNSAFE tokens for the shipped prompt template — prompt-quality validation, not a code correctness gap. Ready to plan Phase 20.
-Last activity: 2026-05-12 — Phase 19 closed; verifier passed; ROADMAP/STATE/REQUIREMENTS updated for milestone progression.
+Milestone: v2.0 Self-Routing + Session-Aware — IN PROGRESS 2026-05-12 (11 of 12 plans complete)
+Phase: 20 — Hermes Agent Integration + Documentation — In progress (1 of 2 plans complete)
+Plan: 20-01 complete; 20-02 next
+Status: 20-01 complete. 175 passed + 18 ignored + 0 failed. FingerprintEnabled opt-in shipped; 8 HermesFingerprintTests green; smoke-hermes-session.sh operator-runnable.
+Last activity: 2026-05-12 — Completed 20-01-PLAN.md (fingerprint fallback + smoke test)
 
 **v2.0 phase summary (12 plans across 4 phases):**
 
@@ -42,7 +42,7 @@ Last activity: 2026-05-12 — Phase 19 closed; verifier passed; ROADMAP/STATE/RE
 - `.planning/research/SUMMARY.md` — v2.0 research synthesis (HIGH confidence; phase order locked by Domain.fs compile dependency)
 - Memory note `v2_selfrouting_pivot.md` — pivot rationale + locked decisions
 
-Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 10 of 12 plans complete (Phases 17, 18, 19 all complete; Phase 20 remaining — final v2.0 phase).
+Progress: [████████████████████████████████████████░░░░░] 60 of 60 v1.x plans (Phase 17 ML QualityClassifier deferred). v2.0: 11 of 12 plans complete (Phases 17, 18, 19 all complete; Phase 20 Plan 20-01 complete; Plan 20-02 remaining).
 
 ## Performance Metrics
 
@@ -149,11 +149,21 @@ Progress: [███████████████████████
 - All source-of-truth cross-checks passed: 4 stats field names, 4 config key names, 1 routing_reason enum value — all match source files
 - Phase 19 COMPLETE: all 9 SR-* requirements satisfied (SR-01..09); all 5 ROADMAP SCs verifiable by operators
 
-**v2.0 summary (phases 17-19 complete; phase 20 next):**
+**v2.0 progress (post-20-01):**
+- Tests: 175 passed + 18 ignored + 0 failed (+8 HermesFingerprintTests)
+- SessionOptions: 3 fields (TtlMinutes, MaxEntries, FingerprintEnabled — CLIMutable bool; default false)
+- CorrelationMiddleware: fingerprintEnabled: bool first param; SHA-256(IP+|+UA)[0..15] fingerprint when enabled and header absent
+- Program.fs: startup-time config read; closes over fingerprintEnabled bool in app.Use lambda
+- appsettings.json: Routing.Session.FingerprintEnabled=false (opt-in)
+- HermesFingerprintTests.fs: 8 tests FP-1..FP-8 via DefaultHttpContext
+- scripts/smoke-hermes-session.sh: operator E2E sticky escalation smoke test (no Hermes Agent dep)
+- HMRS-02 core code shipped; HMRS-01..04 requirements closure + README §10 deferred to 20-02
+
+**v2.0 summary (phases 17-19 complete; phase 20 in progress):**
 - Phase 17: Hard Rules Layer + Routing.Mode switch (10 reqs; 3 plans; 8 tests added; v1.x ML dormant)
 - Phase 18: Session Store + Sticky Escalation (9 reqs; 3 plans; 13 tests added; X-Session-Id opt-in)
 - Phase 19: 35B Self-Classify Stage 4 (9 reqs; 4 plans; 17 tests added; streaming-skip; LRU cache; operators can tune via prompts/self-router-prompt.md)
-- Phase 20: Hermes Agent Integration + Documentation — NEXT (4 reqs; 2 plans; README §10 update + fingerprint fallback)
+- Phase 20: Hermes Agent Integration + Documentation (4 reqs; 2 plans; Plan 20-01 complete — fingerprint fallback; Plan 20-02 next — README §10)
 
 *Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
 
@@ -170,6 +180,13 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 - **schema_version=1 unchanged**: All v2.0 additions are additive enum values on `routing_reason` (`hard_rule`, `sticky_to_122b`, `self_route`) — no field removals, no type changes. Same for DecisionLog and TraceLog.
 - **Hard Rules NOT operator-configurable**: Keyword list hardcoded in `HardRules.fs` (LLVM, MLIR, compiler, segfault, optimization, concurrency). Safety mechanism should not be misconfigurable. README §5.5 documents source-edit requirement (HR-02; resolved gap from Stack vs Architecture researcher conflict).
 - **Hermes-side X-Session-Id propagation is future work**: v2.0 ships smart-router-side machinery only. Hermes Agent PR tracked as HMRS-FUTURE-01/02. Fingerprint fallback (HMRS-02) is opt-in (`Routing.Session.FingerprintEnabled=false` default) for loopback single-client interim case.
+
+**20-01 execution decisions (2026-05-12):**
+- **FingerprintEnabled opt-in default false**: Operators not setting this key continue to get v1.x stateless behavior (empty string session ID). No silent behavior change on upgrade.
+- **Startup-time config read close-over**: `fingerprintEnabled` resolved once from `IConfiguration` before `app.Use(...)` lambda registration; closed over by the lambda. Per-request overhead is zero. Mirrors `routingMode` pattern in CompositionRoot.fs.
+- **SHA-256 per-request instance (not shared)**: `use sha = SHA256.Create()` inside `task {}`. SHA256 is not thread-safe to share across concurrent requests. The `use` binding disposes correctly after each request.
+- **Lowercase hex via `sprintf "%02x"`**: Consistent with canonical pattern in DecisionLogger.fs and SelfRouter.fs. `Convert.ToHexString` produces uppercase which would fail FP-3 lowercase assertion.
+- **Auto-fix: LoggingTests + SessionStoreTests compile errors**: CorrelationMiddleware signature change (new first param) and SessionOptions record extension (new field) caused compile errors in two test files. Fixed in same Task 1 commit per deviation Rule 1 (necessary for project to compile).
 
 **19-01 execution decisions (2026-05-12):**
 - **Safety-biased parser: UNSAFE before SAFE**: `"SAFE"` is a substring of `"UNSAFE"`. Checking `hasSafe` first would cause `"UNSAFE"` model responses to match SAFE and silently route to 35B (SC-2 failure). The `| true, _ -> RouteUnsafe` match arm MUST precede `| false, true -> RouteSafe`. This is the single most dangerous implementation error in Phase 19.
@@ -229,7 +246,7 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 
 ### Pending Todos
 
-- v2.0 Phase 20 Plans 01-02 (`/gsd:execute-phase 20-01`) — next action (Hermes Agent Integration: X-Session-Id propagation + fingerprint fallback + README §10)
+- v2.0 Phase 20 Plan 02 (`/gsd:execute-phase 20-02`) — next action (README §10 + §7 FingerprintEnabled row + CHANGELOG + REQUIREMENTS HMRS-01..04 closure)
 - ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3; MODELS-01/02/03 currently erroring with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests)
 - Remove configureServices backwards-compat alias after ModelsTests migration
 
@@ -242,5 +259,5 @@ v2.0 milestone-level decisions (locked 2026-05-11):
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: Completed 19-04-PLAN.md — Phase 19 COMPLETE. README §5.7/§7/§8/§9.1 + CHANGELOG [Unreleased] Phase 19 documentation. 167 + 18 + 0 preserved. All 9 SR-* requirements satisfied.
-Resume file: None. Next action: `/gsd:execute-phase 20-01` (Hermes Agent Integration).
+Stopped at: Completed 20-01-PLAN.md — fingerprint fallback + HermesFingerprintTests + smoke-hermes-session.sh. 175 + 18 + 0. HMRS-02 code shipped.
+Resume file: None. Next action: `/gsd:execute-phase 20-02` (README §10 + HMRS requirements closure).
