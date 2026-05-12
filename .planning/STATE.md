@@ -43,6 +43,12 @@ Last activity: 2026-05-12 — `/gsd:complete-milestone v2.1` archived v2.1 to `.
 
 `session_extraction_source_header / _sysprompt / _content` counters in `/stats` expose which tier resolved each request.
 
+## Pending Todos
+
+1 captured idea awaiting milestone scoping or hotfix work. See `.planning/todos/pending/`.
+
+- **2026-05-12** — Fail fast on port conflict at startup (`fail-fast-on-port-conflict-at-startup.md`) — detect `:4000` already in use → stderr error + Exit(1) + README §13 recipe; current Kestrel SocketException stacktrace is unhelpful for launchd retry loops
+
 ## Open Carry-Over Tech Debt (deferred past v2.1)
 
 - **TD-2:** `ModelsTests.fs` IEmbedder errors (MODELS-01..03 currently error or are suppressed). v1.3 carry-over. Non-blocking. Fix: register stub IEmbedder in DI fixture.
