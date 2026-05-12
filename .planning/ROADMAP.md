@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 17: Hard Rules Layer + Routing.Mode Switch** ✓ — Stage 0 keyword pre-routing + dormant-ML config gate shipped. 3 plans / 3 waves: 17-01 Core (`HardRules.fs` BCL-only + 6 hardcoded keywords + case-insensitive; `RoutingReason.HardRule` 7th DU; `Routing.fs` 4-stage cascade with Stage 0 BEFORE tryModelOverride; `DecisionLogger.formatReason` 7-arm; HR-03 wins per STATE.md decision 5); 17-02 Cli (`Routing.Mode` config + fail-fast validation; `RoutingAlgorithmRegistration` factory mode-branched — `"ml"` = v1.3 verbatim, `"selfrouting"` = stub with `ModelVersion="selfrouting-v1"`; ML adapters unconditionally DI-registered per MODE-03); 17-03 tests + docs (`HardRulesTests.fs` 16 tests, `ModeSwitchTests.fs` 9 tests with mlTestCase skip-guard; README §2/§5.0/§5.1/§7/§9.1; CHANGELOG paradigm pivot; REQUIREMENTS HR-06+MODE-03 wording fixes; ROADMAP SC-2+17-02 description fixes). **137 passed + 17 ignored + 0 failed** (113→+16+8; 1 ml-mode test skip-guarded). gsd-verifier: 18/18 must-haves passed. ARCH-01 preserved. schema_version=1 unchanged.
 - [x] **Phase 18: Session Store + Sticky Escalation** — `RouterRequest.SessionId` field, `ISessionStore` adapter with TTL eviction, sticky-122B continuation logic ✓ (3 plans; 150 passed; all 9 SES-* satisfied; ROADMAP SC-1..5 verified)
 - [x] **Phase 19: 35B Self-Routing** — Named `selfrouter` HttpClient + 1-token SAFE/UNSAFE classify + prompt-hash LRU cache + cascade integration (non-streaming only) ✓ (4 plans / 16 commits; 167 passed + 18 ignored; all 9 SR-* satisfied; ROADMAP SC-1..5 verified)
-- [ ] **Phase 20: Hermes Agent Integration + Documentation** — `X-Session-Id` header convention + IP+UA fingerprint fallback + README/CHANGELOG v2.0 documentation
+- [x] **Phase 20: Hermes Agent Integration + Documentation** ✓ — `X-Session-Id` header convention + IP+UA fingerprint fallback + README/CHANGELOG v2.0 documentation (2 plans / 8 commits; 175 passed + 18 ignored + 0 failed; all 4 HMRS-* satisfied; ROADMAP SC-3/SC-4 verified, SC-1/SC-2 deferred to operator acceptance via `./scripts/smoke-hermes-session.sh`. **v2.0 milestone COMPLETE — 32/32 requirements satisfied; CHANGELOG promoted to [2.0.0] - 2026-05-12.**)
 
 ## Phase Details
 
@@ -119,8 +119,8 @@ Plans:
 **Plans**: TBD (estimated 2 plans)
 
 Plans:
-- [ ] 20-01: Fingerprint fallback + smoke test — `Routing.Session.FingerprintEnabled` config key (default `false`); `CorrelationMiddleware` or `mapWireToRequest` helper: `resolveSessionKey` preferring explicit `X-Session-Id` header, falling back to `SHA-256(RemoteIpAddress + "|" + User-Agent).[0..15]` when fingerprint enabled AND header absent; `scripts/smoke-hermes-session.sh` curl loop + DecisionLog grep assertion; integration test `HermesFingerprintTests.fs` covering both header-explicit and fingerprint paths
-- [ ] 20-02: README §10 rewrite + CHANGELOG + REQUIREMENTS.md closure — README §10 "Hermes Integration" rewritten for v2.0 (selfrouting paradigm description, X-Session-Id opt-in, fingerprint caveats, Hermes-side PR tracked as future work); README §7 `Routing.Session.FingerprintEnabled` documented; CHANGELOG `[Unreleased] ### Added` (Hermes integration) + `### Changed` (paradigm shift) finalized for v2.0.0 release; REQUIREMENTS.md HMRS-FUTURE-01/02 retained as v2.x tracker entries
+- [x] 20-01: Fingerprint fallback + smoke test — `Routing.Session.FingerprintEnabled` config key (default `false`); `CorrelationMiddleware` or `mapWireToRequest` helper: `resolveSessionKey` preferring explicit `X-Session-Id` header, falling back to `SHA-256(RemoteIpAddress + "|" + User-Agent).[0..15]` when fingerprint enabled AND header absent; `scripts/smoke-hermes-session.sh` curl loop + DecisionLog grep assertion; integration test `HermesFingerprintTests.fs` covering both header-explicit and fingerprint paths
+- [x] 20-02: README §10 rewrite + CHANGELOG + REQUIREMENTS.md closure — README §10 "Hermes Integration" rewritten for v2.0 (selfrouting paradigm description, X-Session-Id opt-in, fingerprint caveats, Hermes-side PR tracked as future work); README §7 `Routing.Session.FingerprintEnabled` documented; CHANGELOG `[Unreleased] ### Added` (Hermes integration) + `### Changed` (paradigm shift) finalized for v2.0.0 release; REQUIREMENTS.md HMRS-FUTURE-01/02 retained as v2.x tracker entries
 
 ## Progress
 
@@ -132,7 +132,7 @@ Phases execute in numeric order: 17 → 18 → 19 → 20. Within each phase, pla
 | 17. Hard Rules + Routing.Mode | v2.0 | 3/3 | ✓ Complete | 2026-05-11 |
 | 18. Session Store + Sticky | v2.0 | 0/3 | Not started | - |
 | 19. 35B Self-Routing | v2.0 | 0/4 | Not started | - |
-| 20. Hermes Integration | v2.0 | 0/2 | Not started | - |
+| 20. Hermes Integration | v2.0 | 2/2 | ✓ Complete | 2026-05-12 |
 
 ## Coverage
 
