@@ -54,10 +54,10 @@ These ship in Phase 17 setup as the foundation for ML dormancy.
 
 ### Hermes Agent Integration (Phase 20 — HMRS-*)
 
-- [ ] **HMRS-01**: `X-Session-Id` header opt-in — `CorrelationMiddleware` reads header (already specified in SES-04); session_id propagates through SES-05 → sticky escalation
-- [ ] **HMRS-02**: Fallback fingerprint session key — when `X-Session-Id` header absent AND `Session.FingerprintEnabled=true` (config; default `false`), derive session key from `RemoteIpAddress + User-Agent` SHA-256 prefix (16 hex); loopback single-client use case; documented limitation for reverse-proxy deployments
-- [ ] **HMRS-03**: README §10 "Hermes Integration" section rewritten for v2.0 — describes selfrouting paradigm replacing ML routing, explains `X-Session-Id` header opt-in, fingerprint fallback caveats, and notes that Hermes-side `X-Session-Id` propagation is future (v2.x) work tracked as Hermes Agent PR; current v2.0 ships smart-router-side machinery only
-- [ ] **HMRS-04**: CHANGELOG `[Unreleased] ### Added` v2.0 entry mentions Hermes integration (session-aware capability available; Hermes-side wiring pending) + ### Changed entry for paradigm shift
+- [x] **HMRS-01**: `X-Session-Id` header opt-in — `CorrelationMiddleware` reads header (already specified in SES-04); session_id propagates through SES-05 → sticky escalation
+- [x] **HMRS-02**: Fallback fingerprint session key — when `X-Session-Id` header absent AND `Session.FingerprintEnabled=true` (config; default `false`), derive session key from `RemoteIpAddress + User-Agent` SHA-256 prefix (16 hex); loopback single-client use case; documented limitation for reverse-proxy deployments
+- [x] **HMRS-03**: README §10 "Hermes Integration" section rewritten for v2.0 — describes selfrouting paradigm replacing ML routing, explains `X-Session-Id` header opt-in, fingerprint fallback caveats, and notes that Hermes-side `X-Session-Id` propagation is future (v2.x) work tracked as Hermes Agent PR; current v2.0 ships smart-router-side machinery only
+- [x] **HMRS-04**: CHANGELOG `[Unreleased] ### Added` v2.0 entry mentions Hermes integration (session-aware capability available; Hermes-side wiring pending) + ### Changed entry for paradigm shift
 
 ## Future Requirements
 
@@ -134,10 +134,10 @@ Filled by roadmapper during ROADMAP.md creation.
 | SR-07 | Phase 19 | Complete |
 | SR-08 | Phase 19 | Complete |
 | SR-09 | Phase 19 | Complete |
-| HMRS-01 | Phase 20 | Pending |
-| HMRS-02 | Phase 20 | Pending |
-| HMRS-03 | Phase 20 | Pending |
-| HMRS-04 | Phase 20 | Pending |
+| HMRS-01 | Phase 20 | Complete |
+| HMRS-02 | Phase 20 | Complete |
+| HMRS-03 | Phase 20 | Complete |
+| HMRS-04 | Phase 20 | Complete |
 
 **Coverage:**
 - v2.0 requirements: 32 total (4 MODE + 6 HR + 9 SES + 9 SR + 4 HMRS)
@@ -147,4 +147,4 @@ Filled by roadmapper during ROADMAP.md creation.
 
 ---
 *Requirements defined: 2026-05-11*
-*Last updated: 2026-05-11 after v2.0 milestone initialization via /gsd:new-milestone (research → requirements → roadmap pipeline; selfrouting paradigm replacing v1.x ML routing arc; Hermes Agent integration scaffolding).*
+*Last updated: 2026-05-12 after Phase 20 closure (HMRS-01..04 complete; v2.0 milestone READY FOR RELEASE).*
