@@ -10,17 +10,17 @@
 
 ### Tier 2 — Hermes System-Prompt Parse (HSP-*)
 
-- [ ] **HSP-01**: `SmartRouter.Cli.Adapters.HermesSessionExtract` module with `extractFromSystemPrompt: RouterRequest -> string option`; BCL-only `System.Text.RegularExpressions.Regex` with `RegexOptions.Multiline`; pattern `^Session ID:\s*(\S+)`; returns the captured group when matched, `None` otherwise
-- [ ] **HSP-02**: Match applies only to the first message with `Role = System` in `req.Messages`; returns `None` when no system message exists OR no `Session ID:` line is present (graceful when operator hasn't enabled `--pass-session-id`)
-- [ ] **HSP-03**: Regex is module-level pre-compiled (one allocation at module init; no per-request compilation overhead); pattern is case-sensitive (matches Hermes' exact emission `Session ID: `)
-- [ ] **HSP-04**: Unit tests cover: (a) match-when-line-present (timestamp line + `Session ID: 20260512T1530_a1b2c3` + Model line; extract `20260512T1530_a1b2c3`); (b) no-match-when-line-absent; (c) no-match-when-no-system-message; (d) multi-line system content with `Session ID:` not on first line still matches (Multiline flag); (e) malformed `Session ID:` line with no value returns None
+- [x] **HSP-01**: `SmartRouter.Cli.Adapters.HermesSessionExtract` module with `extractFromSystemPrompt: RouterRequest -> string option`; BCL-only `System.Text.RegularExpressions.Regex` with `RegexOptions.Multiline`; pattern `^Session ID:\s*(\S+)`; returns the captured group when matched, `None` otherwise
+- [x] **HSP-02**: Match applies only to the first message with `Role = System` in `req.Messages`; returns `None` when no system message exists OR no `Session ID:` line is present (graceful when operator hasn't enabled `--pass-session-id`)
+- [x] **HSP-03**: Regex is module-level pre-compiled (one allocation at module init; no per-request compilation overhead); pattern is case-sensitive (matches Hermes' exact emission `Session ID: `)
+- [x] **HSP-04**: Unit tests cover: (a) match-when-line-present (timestamp line + `Session ID: 20260512T1530_a1b2c3` + Model line; extract `20260512T1530_a1b2c3`); (b) no-match-when-line-absent; (c) no-match-when-no-system-message; (d) multi-line system content with `Session ID:` not on first line still matches (Multiline flag); (e) malformed `Session ID:` line with no value returns None
 
 ### Tier 3 — Content Fingerprint (CFP-*)
 
-- [ ] **CFP-01**: `SmartRouter.Cli.Adapters.ContentFingerprint` module with `compute: RouterRequest -> string`; BCL-only `System.Security.Cryptography.SHA256`; output is 16-character lowercase hex prefix of the SHA-256 digest of `key`, where `key = truncate(system) + "|||" + truncate(firstUser)` and `truncate(s) = if s.Length > 4000 then s.[..3999] else s`
-- [ ] **CFP-02**: `system` resolves to the content of the first message with `Role = System`, or empty string when absent; `firstUser` resolves to the content of the first message with `Role = User`, or empty string when absent; the function always returns a valid 16-hex string (no `option` wrapper)
-- [ ] **CFP-03**: Same `(system, firstUser)` input always produces same output (determinism); different inputs produce different outputs with overwhelming probability (cryptographic hash collision resistance); function is pure (no I/O, no allocation beyond the hash buffer)
-- [ ] **CFP-04**: Unit tests cover: (a) determinism (same input twice → identical output); (b) uniqueness (single character change in either system or firstUser → different output); (c) truncation (>4000-char inputs handled without exception; hash uses only first 4000 chars); (d) empty-message handling (empty system + empty firstUser → valid hash of `"|||"`); (e) Korean+English mixed content produces valid 16-hex (UTF-8 byte encoding correct); (f) 16-hex output is exactly 16 chars, lowercase
+- [x] **CFP-01**: `SmartRouter.Cli.Adapters.ContentFingerprint` module with `compute: RouterRequest -> string`; BCL-only `System.Security.Cryptography.SHA256`; output is 16-character lowercase hex prefix of the SHA-256 digest of `key`, where `key = truncate(system) + "|||" + truncate(firstUser)` and `truncate(s) = if s.Length > 4000 then s.[..3999] else s`
+- [x] **CFP-02**: `system` resolves to the content of the first message with `Role = System`, or empty string when absent; `firstUser` resolves to the content of the first message with `Role = User`, or empty string when absent; the function always returns a valid 16-hex string (no `option` wrapper)
+- [x] **CFP-03**: Same `(system, firstUser)` input always produces same output (determinism); different inputs produce different outputs with overwhelming probability (cryptographic hash collision resistance); function is pure (no I/O, no allocation beyond the hash buffer)
+- [x] **CFP-04**: Unit tests cover: (a) determinism (same input twice → identical output); (b) uniqueness (single character change in either system or firstUser → different output); (c) truncation (>4000-char inputs handled without exception; hash uses only first 4000 chars); (d) empty-message handling (empty system + empty firstUser → valid hash of `"|||"`); (e) Korean+English mixed content produces valid 16-hex (UTF-8 byte encoding correct); (f) 16-hex output is exactly 16 chars, lowercase
 
 ### Multi-tier Cascade in CorrelationMiddleware (TIER-*)
 
@@ -101,14 +101,14 @@ Assigned by roadmapper 2026-05-12.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| HSP-01 | Phase 21 | Pending |
-| HSP-02 | Phase 21 | Pending |
-| HSP-03 | Phase 21 | Pending |
-| HSP-04 | Phase 21 | Pending |
-| CFP-01 | Phase 21 | Pending |
-| CFP-02 | Phase 21 | Pending |
-| CFP-03 | Phase 21 | Pending |
-| CFP-04 | Phase 21 | Pending |
+| HSP-01 | Phase 21 | Complete |
+| HSP-02 | Phase 21 | Complete |
+| HSP-03 | Phase 21 | Complete |
+| HSP-04 | Phase 21 | Complete |
+| CFP-01 | Phase 21 | Complete |
+| CFP-02 | Phase 21 | Complete |
+| CFP-03 | Phase 21 | Complete |
+| CFP-04 | Phase 21 | Complete |
 | TIER-01 | Phase 22 | Pending |
 | TIER-02 | Phase 22 | Pending |
 | TIER-03 | Phase 22 | Pending |

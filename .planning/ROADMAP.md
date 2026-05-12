@@ -17,7 +17,7 @@ v2.1 replaces v2.0's network-level IP+UA fingerprint (`HMRS-02` / `FingerprintEn
 - Decimal phases (21.1, 21.2): Urgent insertions — none used yet in v2.1
 - v2.1 continues numbering from v2.0's end at Phase 20
 
-- [ ] **Phase 21: HSP + CFP Extraction Primitives** — New `HermesSessionExtract` adapter (system-prompt regex, Tier 2) and `ContentFingerprint` helper (SHA-256 prefix hash, Tier 3) with full unit test coverage. Both are BCL-only, live in `SmartRouter.Cli.Adapters`, and are independently testable without HTTP or DI. Ships as pure additions; nothing in `CorrelationMiddleware` changes in this phase.
+- [x] **Phase 21: HSP + CFP Extraction Primitives** ✓ — New `HermesSessionExtract` adapter (system-prompt regex, Tier 2) and `ContentFingerprint` helper (SHA-256 prefix hash, Tier 3) shipped (2 plans / 8 commits; 188 passed + 18 ignored + 0 failed = +13 new tests; all 8 HSP/CFP requirements verified by gsd-verifier 13/13 must-haves). One auto-fixed deviation in 21-01: regex `\s*` → `[ \t]*` to prevent cross-line matching (HSP-04 case e). ARCH-01 preserved.
 - [ ] **Phase 22: Cascade Rewire + Migration + Observability** — `CorrelationMiddleware` session-key resolution rewired to the three-tier cascade; `session_extraction_source_*` counters wired; `HMRS-02` code (fingerprint logic, `FingerprintEnabled` config, `HermesFingerprintTests.fs`) deleted; `smoke-hermes-session.sh` updated; `CHANGELOG.md` `[2.1.0]` block written; `archive/v2.0-network-fingerprint` git tag created. Integration tests verify all three tier paths end-to-end, including sticky escalation continuity.
 - [ ] **Phase 23: Documentation** — README §10 rewritten for v2.1 paradigm (3-tier cascade + `--pass-session-id` operator guide); §7 `FingerprintEnabled` row removed; §8 three new `/stats` counter rows added; §9.1 DecisionLog section confirmed current.
 
@@ -41,8 +41,8 @@ v2.1 replaces v2.0's network-level IP+UA fingerprint (`HMRS-02` / `FingerprintEn
 **Plans**: 2 plans
 
 Plans:
-- [ ] 21-01-PLAN.md — `HermesSessionExtract` adapter (HSP-01..04)
-- [ ] 21-02-PLAN.md — `ContentFingerprint` helper (CFP-01..04)
+- [x] 21-01-PLAN.md — `HermesSessionExtract` adapter (HSP-01..04)
+- [x] 21-02-PLAN.md — `ContentFingerprint` helper (CFP-01..04)
 
 ---
 
@@ -97,7 +97,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 21. HSP + CFP Primitives | v2.1 | 0/2 | In Progress | — |
+| 21. HSP + CFP Primitives | v2.1 | 2/2 | ✓ Complete | 2026-05-12 |
 | 22. Cascade Rewire + Migration + OBS | v2.1 | 0/3 | Not Started | — |
 | 23. Documentation | v2.1 | 0/1 | Not Started | — |
 
