@@ -19,15 +19,21 @@ open SmartRouter.Core.Domain
 // Case-sensitive (HSP-03): no RegexOptions.IgnoreCase — `session id:` must NOT
 // match. Hermes always emits the exact capitalization `Session ID: `.
 //
-// `\S+` requires at least one non-whitespace character after the colon, so a
-// malformed line like `Session ID:   ` (HSP-04 case e) yields Success=false.
+// `[ \t]*` allows only horizontal whitespace (spaces, tabs) between the colon
+// and the captured id — NOT newlines. `\s*` would allow the match to cross
+// line boundaries (since `\s` includes `\n`), causing a malformed line like
+// `Session ID:   \nModel: qwen-35b` (HSP-04 case e) to erroneously capture
+// `Model:` from the next line. `[ \t]*` constrains the match to the same line.
+// `\S+` requires at least one non-whitespace character after the horizontal
+// whitespace, so `Session ID:   ` (whitespace only before EOL) yields
+// Success=false and the function returns None (HSP-04 case e).
 //
 // Bound at module level via `let private` so the Regex is allocated once at
 // module init and reused across all calls — no per-request allocation
 // (HSP-03). RegexOptions.Compiled is intentionally NOT set; the JIT-emit cost
 // is not justified for this pattern at our request rate (21-RESEARCH.md).
 let private sessionIdRx =
-    Regex(@"^Session ID:\s*(\S+)", RegexOptions.Multiline)
+    Regex(@"^Session ID:[ \t]*(\S+)", RegexOptions.Multiline)
 
 // ── extractFromSystemPrompt (HSP-01 / HSP-02) ────────────────────────────
 //
