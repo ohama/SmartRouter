@@ -7,15 +7,15 @@ See: .planning/MILESTONES.md (v1.3 + v2.0 + v2.1 entries; reverse chronological)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** Planning next milestone — v2.1 archived 2026-05-12. Run `/gsd:new-milestone` to scope.
+**Current focus:** v2.2 Operator Fail-Fast on Port Conflict — minimal single-phase milestone (Phase 25). Phase 25 not yet planned; run `/gsd:plan-phase 25` (or `/gsd:discuss-phase 25` first).
 
 ## Current Position
 
-Milestone: (none) — v2.1 Hermes-less Session Tiering SHIPPED 2026-05-12
-Phase: Not started
-Plan: Not started
-Status: Ready to plan next milestone. Run `/gsd:new-milestone` to begin questioning → research → requirements → roadmap.
-Last activity: 2026-05-12 — `/gsd:complete-milestone v2.1` archived v2.1 to `.planning/milestones/v2.1-*`. Tag `milestone-v2.1` created.
+Milestone: v2.2 Operator Fail-Fast on Port Conflict — In progress (defining requirements complete; roadmap created)
+Phase: Phase 25 — Port-conflict fail-fast at startup — NEXT
+Plan: Not started (Phase 25 single plan, 25-01-PLAN.md TBD)
+Status: Milestone scoped 2026-05-12. 5 requirements (PROBE-01..05) mapped to Phase 25. Research skipped per `/gsd:new-milestone` Phase 7 (.NET TCP probe is standard; scope is mechanical). Next action: `/gsd:plan-phase 25` (or `/gsd:discuss-phase 25` first for additional context clarification).
+Last activity: 2026-05-12 — `/gsd:new-milestone` ran. v2.2 scoped as minimal single-phase milestone from todo `2026-05-12-fail-fast-on-port-conflict-at-startup.md`. PROJECT.md updated, REQUIREMENTS.md + ROADMAP.md created.
 
 ## Cumulative Project State
 
@@ -24,6 +24,7 @@ Last activity: 2026-05-12 — `/gsd:complete-milestone v2.1` archived v2.1 to `.
 | v1.0–v1.3 | 1-16 | 62 | 113 + 16 ignored | `v1.3.0` / `milestone-v1.3` | 2026-05-11 |
 | v2.0 | 17-20 | 12 | 175 + 18 ignored | `milestone-v2.0` | 2026-05-12 |
 | v2.1 | 21-24 | 7 (2+3+1+1) | 187 + 18 ignored | `v2.1.0` / `milestone-v2.1` | 2026-05-12 |
+| v2.2 | 25 | 0/1 | TBD | — | In progress |
 
 **Test baseline:** 187 passed + 18 ignored + 0 failed (as of v2.1 close).
 
@@ -45,9 +46,7 @@ Last activity: 2026-05-12 — `/gsd:complete-milestone v2.1` archived v2.1 to `.
 
 ## Pending Todos
 
-1 captured idea awaiting milestone scoping or hotfix work. See `.planning/todos/pending/`.
-
-- **2026-05-12** — Fail fast on port conflict at startup (`fail-fast-on-port-conflict-at-startup.md`) — detect `:4000` already in use → stderr error + Exit(1) + README §13 recipe; current Kestrel SocketException stacktrace is unhelpful for launchd retry loops
+0 captured ideas. (`fail-fast-on-port-conflict-at-startup.md` promoted into v2.2 milestone scope as PROBE-01..05 → Phase 25; todo file retained at `.planning/todos/pending/` for source-tracing.)
 
 ## Open Carry-Over Tech Debt (deferred past v2.1)
 

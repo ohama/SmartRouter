@@ -36,7 +36,18 @@ When tradeoffs arise:
   to make a Hermes call wait 200ms than to thrash 122B and starve a Graphify
   graph index.
 
-## Current Milestone: (none — v2.1 shipped 2026-05-12; awaiting next milestone via `/gsd:new-milestone`)
+## Current Milestone: v2.2 Operator Fail-Fast on Port Conflict
+
+**Goal:** When smart-router starts and the configured listen port (default `:4000`) is already bound by another process, emit a clear actionable error to stderr and `Environment.Exit(1)` BEFORE Kestrel attempts to bind. Replaces the current unhelpful `SocketException` / `AddressAlreadyInUse` stacktrace path that traps operators in launchd retry loops.
+
+**Target features:**
+- New `SmartRouter.Cli.Adapters.PortProbe` helper using `TcpListener.Start()` + immediate close as bindability probe (BCL `System.Net.Sockets`; Cli adapter per ARCH-01)
+- Startup hook in `Program.fs` runs probe BEFORE `app.Run()` against the configured loopback port
+- Error message includes operator next-step commands (`lsof -iTCP:4000`, `launchctl unload`)
+- Unit tests cover Ok / port-in-use paths (Expecto, explicit `rootTests`)
+- README §13 Troubleshooting recipe added (CLAUDE.md README-sync rule trigger)
+
+**Minimal scope:** Single phase (Phase 25), 1 plan, ~3 tasks. Other deferred items (TD-2/3/5, HMRS-FUTURE-01, MODE-FUTURE-01, SPEC-01..03, DRT-01, DB-01/02) stay deferred — explicitly out of v2.2.
 
 **Last shipped:** v2.1 Hermes-less Session Tiering — three-tier session-key cascade (header → sysprompt → content fingerprint) replacing v2.0's network IP+UA fingerprint; HMRS-02 fully deleted; new `/stats` extraction-source counters; both `Routing.Mode` values use the new tiers (verified by TC-7 executable DI assertion). 4 phases (21-24) / 7 plans / 187 passing tests. See `.planning/MILESTONES.md` (top entry) and `.planning/milestones/v2.1-ROADMAP.md` for full record.
 
@@ -170,9 +181,19 @@ IP+UA network fingerprint (v2.0 HMRS-02) is fully deleted — pre-deletion snaps
 
 ### Active
 
-<!-- Next milestone not yet started. Run /gsd:new-milestone to begin questioning → research → requirements → roadmap for the next version. -->
+<!-- v2.2 Operator Fail-Fast on Port Conflict — single-phase minimal milestone. Source: .planning/todos/pending/2026-05-12-fail-fast-on-port-conflict-at-startup.md (todo captured during v2.1 archive). -->
 
-(Empty — pending next milestone scoping)
+- [ ] **PROBE-01**: `SmartRouter.Cli.Adapters.PortProbe.tryBind` (or similar): pure-ish function that takes a port (int) and IPAddress (default `127.0.0.1`) and attempts `new TcpListener(addr, port).Start()` then immediate `Stop()`. Returns `Result<unit, PortConflictError>` where `PortConflictError` is a `{ Port: int; Address: string; Reason: string }` record. Lives in Cli adapter (ARCH-01: `System.Net.Sockets` is BCL but adapter placement is the invariant)
+- [ ] **PROBE-02**: In `Program.fs` (or `CompositionRoot` startup, before `app.Run()`), extract port from configured listen URL (`Kestrel:EndpointDefaults:Url` or the equivalent ASP.NET Core binding config) — supports `appsettings.json` value and CLI `--urls` override. Calls `PortProbe.tryBind` against loopback-only (127.0.0.1). Other interfaces NOT probed.
+- [ ] **PROBE-03**: On `Error _`, write the following message to `stderr` (NOT through Serilog; we want the message visible even if logging fails) and call `Environment.Exit(1)`. No stacktrace, no `try/catch` wrapping the probe itself.
+  ```
+  ERROR: Port {N} is already in use. Smart Router cannot start.
+  Likely culprit: another smart-router instance, or a different process bound to :{N}.
+  To investigate: `lsof -iTCP:{N} -sTCP:LISTEN -n -P`
+  To stop a stuck launchd instance: `launchctl unload ~/Library/LaunchAgents/com.ohama.smartrouter.plist`
+  ```
+- [ ] **PROBE-04**: Expecto tests in new test module (suggested: `PortProbeTests.fs`) wired into `RouterTests.fs rootTests`: (a) `tryBind` returns `Ok` for a free port, (b) `tryBind` returns `Error` when test pre-stages a `TcpListener` on a chosen high port, (c) `Error` record carries the correct port number, (d) probe completes in <100ms typical.
+- [ ] **PROBE-05**: README §13 Troubleshooting gains a "Port 4000 already in use" recipe matching the runtime error message (operators can grep either way). CLAUDE.md README-sync rule trigger: §13.
 
 ### Out of Scope
 
