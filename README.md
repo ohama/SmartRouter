@@ -998,6 +998,35 @@ The legacy `--trace` boolean flag was removed — use `--log-level=debug`. Using
 
 ## 13. Troubleshooting
 
+### Port 4000 is already in use
+
+**Symptom.** On startup, `smart-router.err` (or the foreground `dotnet run` stderr) shows:
+
+```
+ERROR: Port 4000 is already in use. Smart Router cannot start.
+Likely culprit: another smart-router instance, or a different process bound to :4000.
+To investigate: `lsof -iTCP:4000 -sTCP:LISTEN -n -P`
+To stop a stuck launchd instance: `launchctl unload ~/Library/LaunchAgents/com.ohama.smartrouter.plist`
+```
+
+Exit code is 1 and the process never reaches the routing pipeline — the fail-fast port probe runs before Kestrel binds.
+
+**Diagnosis.** Find who's holding the port:
+```bash
+lsof -iTCP:4000 -sTCP:LISTEN -n -P
+```
+Typical culprits, in decreasing order of likelihood:
+1. A previously-loaded launchd instance of smart-router (the agent restarted but the old PID survived under a different plist label or was double-loaded).
+2. A foreground `dotnet run` left running in another terminal.
+3. A different service that happens to claim :4000 (uncommon; the port is router-specific by convention).
+
+**Resolution.**
+- launchd duplicate — `launchctl unload ~/Library/LaunchAgents/com.ohama.smartrouter.plist` then `launchctl load -w` the desired plist.
+- Foreground process — `kill <PID>` from the `lsof` output.
+- Need a different port for a one-off — pass `--port 4001` on the CLI (§ 12 CLI Flags). The probe re-runs against the overridden port; if 4001 is also bound, you'll get the same fail-fast message with `:4001`.
+
+The probe targets only loopback (`127.0.0.1` / `::1` / `localhost`). If `Kestrel:Endpoints:Http:Url` is configured to bind a non-loopback address (`0.0.0.0`, a LAN IP), the probe is skipped — Kestrel will surface its own error in that case.
+
 ### `model_unavailable` returned for `graph_indexing`
 
 `/health` shows `qwen122b.reachable: false`. Restart 122B:
