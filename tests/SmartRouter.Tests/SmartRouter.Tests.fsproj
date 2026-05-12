@@ -45,8 +45,6 @@
     <Compile Include="SelfRouterTests.fs" />
     <Compile Include="SelfRoutingIntegrationTests.fs" />
     <Compile Include="MlDormantTests.fs" />
-    <!-- Phase 20: Hermes Agent fingerprint fallback tests -->
-    <Compile Include="HermesFingerprintTests.fs" />
     <!-- Phase 21: HSP + CFP extraction primitives -->
     <Compile Include="HermesSessionExtractTests.fs" />
     <Compile Include="ContentFingerprintTests.fs" />
