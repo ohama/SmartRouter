@@ -2,273 +2,99 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-08)
-See: .planning/REQUIREMENTS.md (v2.0 requirements; 32 reqs across MODE/HR/SES/SR/HMRS categories)
-See: .planning/ROADMAP.md (v2.0 milestone phases 17-20; created 2026-05-11)
+See: .planning/PROJECT.md (updated 2026-05-12 after v2.0 milestone shipped)
+See: .planning/MILESTONES.md (v1.3 + v2.0 entries; reverse chronological)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.0 "Self-Routing + Session-Aware" milestone — Phase 19 VERIFIED + CLOSED 2026-05-12. Phase 20 (Hermes Agent Integration + Documentation) is the final v2.0 phase.
+**Current focus:** v2.0 Self-Routing + Session-Aware **SHIPPED 2026-05-12**. Next milestone not yet scoped.
 
 ## Current Position
 
-Milestone: v2.0 Self-Routing + Session-Aware — COMPLETE 2026-05-12 (12 of 12 plans complete)
-Phase: 20 — Hermes Agent Integration + Documentation — COMPLETE (2 of 2 plans complete)
-Plan: 20-02 complete (all plans complete; v2.0 milestone READY FOR RELEASE)
-Status: 20-02 complete. 175 passed + 18 ignored + 0 failed. README §10 rewritten for v2.0; §7 FingerprintEnabled row added; CHANGELOG promoted to [2.0.0] - 2026-05-12; HMRS-01..04 closed.
-Last activity: 2026-05-12 — Completed 20-02-PLAN.md (README §10 rewrite + CHANGELOG + REQUIREMENTS closure)
+Milestone: — (next milestone TBD; v2.0 shipped 2026-05-12)
+Phase: — (to be defined by `/gsd:new-milestone`)
+Plan: —
+Status: Ready to start next milestone. v2.0 archived to `.planning/milestones/v2.0-*`. 175 tests passing baseline; ARCH-01 / ARCH-02 / schema_version=1 invariants preserved across 20 phases / 74 plans (v1.0 → v2.0).
+Last activity: 2026-05-12 — v2.0 milestone archived (ROADMAP + REQUIREMENTS + 4 phase dirs + research → `milestones/v2.0-*`); MILESTONES.md / PROJECT.md / STATE.md updated; git tag `milestone-v2.0` pending.
 
-**v2.0 phase summary (12 plans across 4 phases):**
+**Cumulative project state (post-v2.0):**
 
-| Phase | Goal | Plans | Requirements |
-|-------|------|-------|--------------|
-| 17 | Hard Rules Layer + Routing.Mode switch (foundation for selfrouting cascade) | 3 | 10 (MODE-01..04 + HR-01..06) |
-| 18 | Session Store + Sticky Escalation (`RouterRequest.SessionId` field + TTL eviction) | 3 | 9 (SES-01..09) |
-| 19 | 35B Self-Routing (SAFE/UNSAFE classify + LRU cache; streaming-skipped) | 4 | 9 (SR-01..09) |
-| 20 | Hermes Agent Integration + Documentation (X-Session-Id + fingerprint fallback + README §10) | 2 | 4 (HMRS-01..04) |
+| Milestone | Phases | Plans | Tests | Tag | Shipped |
+|-----------|--------|-------|-------|-----|---------|
+| v1.0–v1.3 | 1-16 | 62 | 113 + 16 ignored | `v1.3.0` | 2026-05-11 |
+| v2.0 | 17-20 | 12 | 175 + 18 ignored | `milestone-v2.0` | 2026-05-12 |
 
-**v2.0 design decisions (locked 2026-05-11 with operator; roadmap reflects):**
-1. **Paradigm**: Selfrouting primary, ML dormant. ML code retained in repo but removed from request path. `Routing.Mode = "selfrouting" | "ml"` config switch preserved (Phase 17 ships the gate; Phase 19 ships `MlDormantTests.fs` to prevent drift).
-2. **Router model**: 35B self-route (same 35B serves both routing classify + responses; KV cache shared; per selfrouting doc §3). NOT a separate 7B router server.
-3. **Heuristic scope**: Hard Rules only (keyword list — LLVM/MLIR/compiler/segfault/optimization/concurrency per doc §6,12). NOT full Phase 12 Heuristic.fs revival.
-4. **Architecture**: Hermes Agent (above) → smart-router (below). Smart-router gets session_id propagation from Hermes for sticky escalation. `~/hermes-agent` is the integration target. Hermes-side `X-Session-Id` propagation is future work (HMRS-FUTURE-01).
-5. **Cascade order (Phase 17 locks in code)**: Stage 0 Hard Rules → Stage 1 explicit model override → Stage 2 explicit task table → Stage 3 sticky session → Stage 4 self-classify (non-streaming only) → Stage 5 default 35B.
-6. **Streaming skip for self-classify (SR-06)**: explicit `if req.Stream then skip` matching Phase 14 quality-fallback streaming-skip pattern. Hard Rules + sticky still apply to streaming.
+**Test baseline:** 175 passed + 18 ignored + 0 failed (was 113+16 at v1.3 baseline; +62 tests across v2.0).
 
-**Reference docs for v2.0:**
-- `.planning/docs/35b-selfrouting.md` — primary design doc
-- `.planning/docs/35b-selfrouting-prompt.md` — router prompt design (template for `prompts/self-router-prompt.md`)
-- `.planning/docs/quality-check-improvement-options.md` — Tier 3-A (Phase 16 judge implemented) + Tier 4 (deferred = original Phase 17 ML QualityClassifier)
-- `.planning/research/SUMMARY.md` — v2.0 research synthesis (HIGH confidence; phase order locked by Domain.fs compile dependency)
-- Memory note `v2_selfrouting_pivot.md` — pivot rationale + locked decisions
-
-Progress: [█████████████████████████████████████████████] 60 of 60 v1.x plans complete. v2.0: 12 of 12 plans complete (Phases 17, 18, 19, 20 ALL COMPLETE). v2.0 milestone READY FOR RELEASE.
+**Architecture invariants preserved (all 20 phases):**
+- ARCH-01: `SmartRouter.Core` BCL-only (no Serilog / HttpClient / Microsoft.ML / ASP.NET Core)
+- ARCH-02: `task {}` only (no `async {}`)
+- DecisionLog `schema_version=1` (only additive enum values across v2.0: `hard_rule`, `sticky_to_122b`, `self_route`)
+- Per-task atomic commits with `{type}({phase}-{plan}): {task-name}` format
+- Test framework: Expecto with explicit `rootTests` list (no auto-discovery)
 
 ## Performance Metrics
 
-**Velocity (v1.x final):**
-- Total plans completed: 60 (16 phases shipped: 01 foundation → 16 122b-as-judge)
-- Average duration: ~7-13 min/plan (varies by phase complexity)
-- Total execution time: v1.3 milestone shipped over 4 days (2026-05-07 → 2026-05-11)
+**v2.0 final stats:**
+- 4 phases (17, 18, 19, 20) / 12 plans
+- 59 commits over ~20 hours (2026-05-11 14:04 → 2026-05-12 10:12)
+- 65 files changed (+14,440 / -140)
+- 175 tests passing (+62 across v2.0)
+- ~17,357 LOC F# (src + tests; +2,400 net)
+- Tag: `milestone-v2.0`
 
-**v1.x by Phase summary** (archived in .planning/milestones/v1.3-ROADMAP.md):
+**v2.0 by Phase summary** (archived in `.planning/milestones/v2.0-ROADMAP.md`):
+- Phase 17: Hard Rules + Routing.Mode switch (3 plans; +24 tests; HR-* + MODE-*)
+- Phase 18: Session Store + Sticky (3 plans; +13 tests; SES-*)
+- Phase 19: 35B Self-Classify Stage 4 (4 plans; +17 tests; SR-*)
+- Phase 20: Hermes Integration + Documentation (2 plans; +8 tests; HMRS-*)
+
+**v1.x by Phase summary** (archived in `.planning/milestones/v1.3-ROADMAP.md`):
 - Phases 01-03: foundation + streaming + concurrency gate (8 plans)
 - Phases 04-09: ML arc (24 plans — seam, logging, real ML, failure detection, retraining, canary)
 - Phases 10-12: production hardening (10 plans — health/fallback, deployment+docs, heuristic removal)
 - Phases 13-16: distillation arc (15 plans — service logging, quality fallback+trace, signal enrichment, judge)
-
-**v2.0 baseline (post-Phase-16):**
-- Tests: 113 passed + 16 ignored + 0 failed
-- ARCH-01 invariant preserved across 16 phases / 60 plans
-- 5 NuGet versioned releases (v1.0.0 → v1.3.0)
-
-**v2.0 progress (post-17-03, Phase 17 complete):**
-- Tests: 137 passed + 17 ignored + 0 failed (+8 ModeSwitchTests passing + 1 skip-guarded ml-mode test)
-- HardRules.fs shipped: Stage 0 in routeRequest, cascade order locked (17-01)
-- Routing.Mode config switch shipped: appsettings.json + CompositionRoot (17-02)
-- ModeSwitchTests (9 tests): DI-integration via minimal config, cascade ordering verified (17-03)
-- README §5.0/§7/§9.1 + CHANGELOG [Unreleased] + REQUIREMENTS HR-06/MODE-03 + ROADMAP SC-2/17-02 (17-03)
-- Phase 17 COMPLETE: all 10 requirements (MODE-01..04 + HR-01..06) satisfied
-
-**v2.0 progress (post-18-01):**
-- Tests: 137 passed + 17 ignored + 0 failed (baseline preserved; no behavior change, only type additions)
-- RouterRequest.SessionId : string field added (10th field; "" sentinel = stateless per SES-04)
-- SessionState BCL-only record added to Domain.fs (LastModel + LastAccessedAt + mutable LastAccessSeq)
-- RoutingReason.StickyEscalation 8th DU case added
-- DecisionLogger.formatReason 8-arm exhaustive match; StickyEscalation -> "sticky_to_122b"
-- 10 RouterRequest construction sites updated atomically (2 production + 8 test)
-- SES-01 satisfied; SES-03 shape satisfied; SES-06 DU+formatReason satisfied (Cli adapter implementation 18-02)
-
-**v2.0 progress (post-18-02):**
-- Tests: 137 passed + 17 ignored + 0 failed (baseline preserved; sticky behavior dormant without X-Session-Id)
-- SessionStore.fs: ConcurrentDictionary + 122B-wins merge (AddOrUpdate updateValueFactory) + LRU eviction stub + TTL-aware TryGet; BackgroundService ExecuteAsync stub (18-03 ships eviction loop)
-- CorrelationMiddleware: SessionIdKey + SessionIdHeader literals; X-Session-Id → ctx.Items[SessionIdKey]
-- ChatCompletions: mapWireToRequest(correlationId, sessionId, wire); handler extracts sessionId from ctx.Items; Point B writes in both streaming (normal exit) and non-streaming (post-finalDecision)
-- CompositionRoot: SessionStore triple-reg (concrete + ISessionStore) in BOTH configureRequestPipeline AND configureWithoutMl; Phase 17 stub → sticky-or-default closure consuming ISessionStore
-- appsettings.json: Routing.Session.{TtlMinutes=30, MaxEntries=10000}
-- SES-02/SES-03/SES-04/SES-05/SES-07/SES-09 satisfied; sticky cascade operational (SES-05 Stage 3)
-- SES-08 (TTL eviction integration tests) + SES-06 (README §5 sticky doc) deferred to 18-03 by design
-
-**v2.0 progress (post-18-03, Phase 18 COMPLETE):**
-- Tests: 150 passed + 17 ignored + 0 failed (+8 SessionStoreTests + 5 StickyEscalationTests)
-- SessionStore.ExecuteAsync: PeriodicTimer 5-min TTL eviction loop with OCE shutdown + log-and-continue
-- AddHostedService<SessionStore> registered in both configureRequestPipeline + configureWithoutMl (triple-reg complete)
-- SessionStoreTests.fs: empty-sessionId no-op, 122B-wins concurrent (Task.WhenAll), 122B-wins sequential, TTL eviction (TryUpdate mutation), LRU cap
-- StickyEscalationTests.fs (testSequenced): first-122B-then-sticky, stateless-no-header, quality-fallback-writes-session, Hard-Rules-beats-sticky-35B, sticky-persists
-- README §5.1 updated + §5.6 sticky session escalation + §7 Routing.Session table + §9.1 sticky_to_122b
-- CHANGELOG [Unreleased] Phase 18 Added + Notes blocks
-- Phase 18 COMPLETE: all 9 SES-* requirements satisfied; all 5 ROADMAP Success Criteria covered
-
-**v2.0 progress (post-19-01):**
-- Tests: 150 passed + 17 ignored + 0 failed (baseline preserved; adapter inert — no request path wiring yet)
-- RoutingReason.SelfRoute: 9th DU case added to Domain.fs (atomic pair with formatReason 9th arm)
-- formatReason: `| SelfRoute -> "self_route"` — schema_version=1 unchanged (additive enum value)
-- SelfRouter.fs: 339-line adapter — ISelfRouter (ClassifyAsync + PromptVersion) + ISelfRouterStats + LRU cache
-- Safety-biased parser: `hasUnsafe` checked BEFORE `hasSafe` (SAFE ⊂ UNSAFE — load-bearing order, PITFALL #1)
-- PromptVersion: SHA-256 hex8 prefix of prompt file at construction time (`"selfrouting-84e243ae"` for initial prompt)
-- JsonFSharpConverter in buildBody for anonymous record serialization (PITFALL #2 — preserved from JudgeClient pattern)
-- Cache key: single string (promptHash) vs JudgeClient tuple (no response to hash in self-classify)
-- prompts/self-router-prompt.md: SAFE/UNSAFE classifier prompt; retry/fix/continue workflows in UNSAFE section (PITFALL #6)
-- SmartRouter.Cli.fsproj: SelfRouter.fs registered after DecisionLogger.fs (compile order)
-- SR-01/SR-02/SR-03/SR-04/SR-07 satisfied; DI registration (SR-01 named client) + cascade wiring (SR-06) deferred to 19-02/19-03 by design
-
-**v2.0 progress (post-19-02):**
-- Tests: 150 passed + 17 ignored + 0 failed (baseline preserved; SelfRouter registered but not yet called)
-- Named "selfrouter" HttpClient registered: BaseAddress=Upstreams.Model35B, Timeout=5s, AddResilienceHandler 1 retry @ 200ms constant (SR-01)
-- SelfRouter triple-registration in "selfrouting" mode arm: concrete + ISelfRouter alias + ISelfRouterStats alias (same instance — shared LRU cache + counters)
-- ISelfRouterStats NoOp in "ml" mode arm: /stats returns selfrouter_* = 0, not 500 (PITFALL #7)
-- ISelfRouterStats NoOp in configureWithoutMl: --retrain offline DI graph integrity preserved
-- Stats.fs: 4 new StatsWire fields (selfrouter_cache_hits/_misses/_call_count/_skipped) + null-safe ISelfRouterStats resolve (SR-05)
-- appsettings.json: Routing.SelfRouter block added (Endpoint="", PromptPath, TimeoutSeconds=5, MaxCacheEntries=10000)
-- Stale CompositionRoot.fs comments refreshed: "Phase 19 will replace... closure" → "Phase 19 self-classify lives in ChatCompletions.fs"
-- Auto-fixed: JudgeOptions type annotation on normalized binding (SelfRouterOptions field-name collision with JudgeOptions)
-- SR-01 (named client), SR-04 (cache stats exposed), SR-05 (4 snake_case /stats fields) satisfied
-- SR-06 (cascade wiring in ChatCompletions.fs) deferred to 19-03 by design
-
-**v2.0 progress (post-19-03):**
-- Tests: 167 passed + 18 ignored + 0 failed (+17 new: SelfRouterTests 9 + SelfRoutingIntegrationTests 7 + MlDormantTests 1 skip-guarded)
-- ISelfRouter.ClassifyAsync wired into ChatCompletions.fs non-streaming branch: `let! decision = task { if decision.Reason = Default then ... }` after Phase 10 health rebind
-- SR-06 streaming-skip: explicit comment block in streaming branch; structural zero ClassifyAsync calls verified
-- RouteSafe → { Target=Qwen35B, Priority=Low, Reason=SelfRoute, ModelVersion=selfRouter.PromptVersion }
-- RouteUnsafe → { Target=Qwen122B, Priority=High, Reason=SelfRoute, ModelVersion=selfRouter.PromptVersion }
-- RouteSkipped/RouteFailed → fail-open (decision unchanged, Default=35B)
-- ISelfRouter null (Routing.Mode="ml") → GetService returns null; isNull (box selfRouter) guard fail-opens
-- SelfRouterTests.fs: 9 unit tests — parser safety bias (SAFE⊂UNSAFE), cache hit/miss, RouteFailed not cached, RouteSkipped, PromptVersion
-- SelfRoutingIntegrationTests.fs: 7 DI integration tests — SC-1/2/3/4 + fail-open + singleton identity
-- MlDormantTests.fs: 1 test (skip-guarded) — Routing.Mode="ml" DI boots cleanly post-Phase-19
-- SR-06, SR-08, SR-09 satisfied; ROADMAP SC-1/2/3/4/5 all testable from dotnet test
-
-**v2.0 progress (post-19-04, Phase 19 COMPLETE):**
-- Tests: 167 passed + 18 ignored + 0 failed (docs-only wave; baseline preserved)
-- README §5.7 NEW: Stage 4 self-classify mechanics (35B → SAFE/UNSAFE classify, streaming-skip, LRU cache, fail-open, operator tuning, rollback via Routing.Mode="ml")
-- README §5.1 updated: "Four-stage decision" → "Six-stage decision" (Phases 17-19 cascade); §5.6 stale "Phase 19 will insert" forward-reference replaced; §2 stale Phase 17 stub description updated
-- README §7: Routing.SelfRouter.{Endpoint, PromptPath, TimeoutSeconds=5, MaxCacheEntries=10000} config block added
-- README §8: Phase 19 selfrouter_* counter table (4 fields with semantics matching Stats.fs exactly)
-- README §9.1: routing_reason=self_route + routing_algorithm=selfrouting + model_version=selfrouting-{hex8} documented; schema_version=1 reaffirmed
-- CHANGELOG [Unreleased] Phase 19 Added + Notes blocks appended after Phase 18
-- All source-of-truth cross-checks passed: 4 stats field names, 4 config key names, 1 routing_reason enum value — all match source files
-- Phase 19 COMPLETE: all 9 SR-* requirements satisfied (SR-01..09); all 5 ROADMAP SCs verifiable by operators
-
-**v2.0 progress (post-20-01):**
-- Tests: 175 passed + 18 ignored + 0 failed (+8 HermesFingerprintTests)
-- SessionOptions: 3 fields (TtlMinutes, MaxEntries, FingerprintEnabled — CLIMutable bool; default false)
-- CorrelationMiddleware: fingerprintEnabled: bool first param; SHA-256(IP+|+UA)[0..15] fingerprint when enabled and header absent
-- Program.fs: startup-time config read; closes over fingerprintEnabled bool in app.Use lambda
-- appsettings.json: Routing.Session.FingerprintEnabled=false (opt-in)
-- HermesFingerprintTests.fs: 8 tests FP-1..FP-8 via DefaultHttpContext
-- scripts/smoke-hermes-session.sh: operator E2E sticky escalation smoke test (no Hermes Agent dep)
-- HMRS-02 core code shipped; HMRS-01..04 requirements closure + README §10 deferred to 20-02
-
-**v2.0 progress (post-20-02, Phase 20 COMPLETE — v2.0 READY FOR RELEASE):**
-- Tests: 175 passed + 18 ignored + 0 failed (docs-only plan; baseline preserved)
-- README §10 'Hermes / Graphify Integration' fully rewritten for v2.0 selfrouting paradigm (Hermes Agent v2.0 + X-Session-Id opt-in + fingerprint fallback + Graphify preserved)
-- README §7: new Routing.Session.FingerprintEnabled row (bool, default false; proxy warning + §10 cross-ref)
-- CHANGELOG: Phase 20 Added/Changed/Notes block appended; [Unreleased] promoted to [2.0.0] - 2026-05-12
-- REQUIREMENTS.md: HMRS-01..04 [x]; traceability Pending → Complete; footer Phase 20 closure
-- README sync rule audited: areas 9 (§7 config keys) and 10 (§10 Hermes/Graphify) updated; areas 1-8, 11-12 confirmed unchanged
-- Phase 20 COMPLETE: all 4 HMRS-* requirements satisfied (HMRS-01..04)
-- v2.0 milestone COMPLETE: 32/32 requirements across 4 phases; 7 future trackers retained for v2.x
-
-**v2.0 summary (all 4 phases complete — v2.0 READY FOR RELEASE):**
-- Phase 17: Hard Rules Layer + Routing.Mode switch (10 reqs; 3 plans; 8 tests added; v1.x ML dormant)
-- Phase 18: Session Store + Sticky Escalation (9 reqs; 3 plans; 13 tests added; X-Session-Id opt-in)
-- Phase 19: 35B Self-Classify Stage 4 (9 reqs; 4 plans; 17 tests added; streaming-skip; LRU cache; operators can tune via prompts/self-router-prompt.md)
-- Phase 20: Hermes Agent Integration + Documentation (4 reqs; 2 plans; fingerprint fallback shipped; README §10 rewritten; CHANGELOG [2.0.0]; HMRS-01..04 CLOSED)
-
-*Velocity metrics will be updated as v2.0 plans complete (anticipated 2-5 days for 12 plans based on v1.x cadence)*
+- Phase 17 (original): ML QualityClassifier — DEFERRED at v1.3 close per operator pivot to v2.0 selfrouting
 
 ## Accumulated Context
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table.
-v2.0 milestone-level decisions (locked 2026-05-11):
+Full decision logs are in PROJECT.md Key Decisions table. Milestone-level summaries:
 
-- **v2.0 paradigm pivot**: ML routing dormant, selfrouting primary. `.planning/docs/35b-selfrouting.md` is the authoritative design doc. ML code retained for future `Routing.Mode="ml"` re-activation; mirrors Phase 12 heuristic retirement pattern (code preserved, not in routing path).
-- **Phase order locked by Domain.fs compile dependency**: 17 → 18 → 19 → 20. SessionStore (Phase 18) must precede SelfRouter (Phase 19) because `RouterRequest.SessionId` field must exist before `makeSelfRoutingAlgorithm` closure can read it. Research-SUMMARY.md confirms this is non-negotiable (Architecture researcher HIGH confidence over Stack/Features researchers' SelfRouter-first proposal).
-- **Streaming branch intentionally skipped for self-classify**: Mirrors Phase 14 quality fallback streaming-skip (chunks already shipped; first-chunk latency budget cannot accommodate classify round-trip). Hard Rules (0ms keyword check) + sticky escalation still apply to streaming. Explicit `if req.Stream then skip SelfRouter` with code comment is required per SR-06.
-- **schema_version=1 unchanged**: All v2.0 additions are additive enum values on `routing_reason` (`hard_rule`, `sticky_to_122b`, `self_route`) — no field removals, no type changes. Same for DecisionLog and TraceLog.
-- **Hard Rules NOT operator-configurable**: Keyword list hardcoded in `HardRules.fs` (LLVM, MLIR, compiler, segfault, optimization, concurrency). Safety mechanism should not be misconfigurable. README §5.5 documents source-edit requirement (HR-02; resolved gap from Stack vs Architecture researcher conflict).
-- **Hermes-side X-Session-Id propagation is future work**: v2.0 ships smart-router-side machinery only. Hermes Agent PR tracked as HMRS-FUTURE-01/02. Fingerprint fallback (HMRS-02) is opt-in (`Routing.Session.FingerprintEnabled=false` default) for loopback single-client interim case.
+- **v1.3** (shipped 2026-05-11): Hexagonal F# Core BCL-only; `task {}` only; bge-m3 int8 multilingual ML; quality fallback + judge OPT-IN; heuristic retirement Phase 12.
+- **v2.0** (shipped 2026-05-12): Selfrouting primary (ML dormant); 35B self-route (NOT 7B separate); Hard Rules keyword-only (NOT full Heuristic.fs revival); Hermes ABOVE smart-router with session_id propagation downward; streaming-skip for self-classify (SR-06); Hard Rules wins over explicit override (HR-06).
 
-**20-01 execution decisions (2026-05-12):**
-- **FingerprintEnabled opt-in default false**: Operators not setting this key continue to get v1.x stateless behavior (empty string session ID). No silent behavior change on upgrade.
-- **Startup-time config read close-over**: `fingerprintEnabled` resolved once from `IConfiguration` before `app.Use(...)` lambda registration; closed over by the lambda. Per-request overhead is zero. Mirrors `routingMode` pattern in CompositionRoot.fs.
-- **SHA-256 per-request instance (not shared)**: `use sha = SHA256.Create()` inside `task {}`. SHA256 is not thread-safe to share across concurrent requests. The `use` binding disposes correctly after each request.
-- **Lowercase hex via `sprintf "%02x"`**: Consistent with canonical pattern in DecisionLogger.fs and SelfRouter.fs. `Convert.ToHexString` produces uppercase which would fail FP-3 lowercase assertion.
-- **Auto-fix: LoggingTests + SessionStoreTests compile errors**: CorrelationMiddleware signature change (new first param) and SessionOptions record extension (new field) caused compile errors in two test files. Fixed in same Task 1 commit per deviation Rule 1 (necessary for project to compile).
+Plan-level execution decisions archived per-phase in `.planning/milestones/v2.0-phases/*/`.
 
-**19-01 execution decisions (2026-05-12):**
-- **Safety-biased parser: UNSAFE before SAFE**: `"SAFE"` is a substring of `"UNSAFE"`. Checking `hasSafe` first would cause `"UNSAFE"` model responses to match SAFE and silently route to 35B (SC-2 failure). The `| true, _ -> RouteUnsafe` match arm MUST precede `| false, true -> RouteSafe`. This is the single most dangerous implementation error in Phase 19.
-- **max_tokens=8 (not 4)**: RESEARCH §9 PITFALL #5 recommends 8 over 4 to absorb whitespace/punctuation drift from mlx_lm.server while keeping classify fast.
-- **Single-string cache key**: `promptHash: string` vs JudgeClient's `(promptHash, responseHash)` tuple. Self-classify has no response to include in the cache key — the substitution is correct and intentional.
-- **PromptVersion at construction time**: `SHA256.ComputeHash(File.ReadAllBytes(promptPath))` in the class initializer. Captures the prompt state when the service started; operator runtime edits do not change the version until next restart.
-- **factory.CreateClient("selfrouter") only**: `IUpstreamClient` routes through `QueueDispatcher` holding the 122B `SemaphoreSlim(1)`. Using it for classify calls would make the classifier compete with real inference traffic.
-- **No open DecisionLogger in SelfRouter.fs**: The plan's skeleton comment said `open DecisionLogger // for computePromptHash`, but `computePromptHash` is called by the caller (ChatCompletions.fs in 19-03), not SelfRouter itself. SelfRouter receives `promptHash` as a parameter — same pattern as JudgeClient receives pre-computed hashes. No import needed.
+### Pending Todos (carry-over)
 
-**19-03 execution decisions (2026-05-12):**
-- **Self-classify call site in ChatCompletions.fs (not algorithm closure):** `RoutingAlgorithm` is synchronous (`RoutingConfig -> RouterRequest -> RoutingDecision`); calling async `ClassifyAsync` inside it would require `.GetAwaiter().GetResult()` (deadlock risk). Call site mirrors Phase 14 QualityFallback pattern — after `routeRequest` returns in the non-streaming branch.
-- **`decision.Reason = Default` gate:** Only Default-reason decisions proceed to self-classify. HardRule/StickyEscalation/ExplicitModelOverride/ExplicitTask/ML/FallbackTo* already have decided targets and short-circuit.
-- **GetService<ISelfRouter>() null-safe:** ISelfRouter not registered in ml-mode. `GetService` returns null; `isNull (box selfRouter)` guard fail-opens. Matches IJudgeClient pattern at line ~455.
-- **RouteSafe/RouteUnsafe set ModelVersion = selfRouter.PromptVersion:** Threads SHA-256 hex8 prompt hash into DecisionLog.model_version so operators can correlate routing decisions with prompt template versions (SC-1 requirement).
-- **FS0760 in test code:** `new StubHandler(...)` required (not `StubHandler(...)`) for types inheriting IDisposable under TreatWarningsAsErrors. Caught at build time.
-- **MlDormantTests uses minimal ml-config with Routing:ML section:** Unlike selfrouting-mode tests that omit Routing:ML, the ml-mode test needs the ML section to not throw in ensureEmbeddingFilesPresent. W4 skip guard prevents execution when ONNX absent.
+- **ModelsTests.fs migration to configureWithoutMl** (carry-over from v1.3; MODELS-01/02/03 currently error with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests). Non-blocking for next milestone.
+- **Remove configureServices backwards-compat alias** after ModelsTests migration. Non-blocking.
+- **Operator acceptance** of v2.0 SC-1/SC-2: run `./scripts/smoke-hermes-session.sh` against live mlx_lm.server rig to confirm X-Session-Id sticky-122B and fingerprint round-trip. Non-blocking for next milestone scoping.
 
-**19-02 execution decisions (2026-05-12):**
-- **Mode-gated DI block outside factory lambda**: `if routingMode = "selfrouting" then (AddHttpClient + AddSingleton x3) else (AddSingleton NoOp)` placed before `RoutingAlgorithmRegistration` factory. services.AddSingleton calls are IServiceCollection-level operations — they must not appear inside a factory lambda that constructs a single value. This is the key structural constraint for all mode-gated DI in this codebase.
-- **JudgeOptions/SelfRouterOptions field-name collision**: Both CLIMutable records share all 4 field names (Endpoint, PromptPath, TimeoutSeconds, MaxCacheEntries). After opening SmartRouter.Cli.Adapters.SelfRouter, F# disambiguates record literals by last-opened namespace → infers normalized as SelfRouterOptions instead of JudgeOptions. Fix: `: JudgeOptions` type annotation on `let normalized`. Required whenever two CLIMutable records share field names and both modules are opened.
-- **selfRouterOpts built at registration time**: Options resolution happens once outside the factory (and outside any per-request path). The SelfRouter constructor receives the already-normalized options struct, not raw IOptions<T>. Matches judge's `effectiveEndpoint` pattern.
-- **1-retry constant vs 2-retry exponential for selfrouter**: Classify is on the non-streaming hot path; fail-open quickly (RouteFailed → RouteSafe caller handling) rather than accumulate retry latency. Judge's exponential backoff suits a quality-gate call on borderline cases; classifier is best-effort.
+### Next Milestone Candidates
 
-**18-02 execution decisions (2026-05-11):**
-- **122B-wins merge uses AddOrUpdate updateValueFactory**: Concurrent 35B write must never overwrite 122B escalation. `if old.LastModel = Qwen122B || model = Qwen122B then Qwen122B else model` is the non-negotiable merge formula.
-- **Point B uses finalDecision.Target, not initialDecision.Target**: Quality fallback (Phase 14) and judge cascade (Phase 16) can escalate 35B→122B post-routing. Session must record what client actually received.
-- **new keyword required for IDisposable-inheriting F# class**: `SessionStore` inherits `BackgroundService` (IDisposable). F# compiler emits FS0760 (promoted to error by TreatWarningsAsErrors) without `new SessionStore(...)` syntax.
-- **ISessionStore hoisted above req.Stream branch**: Both streaming and non-streaming Point B writes need ISessionStore; resolving once above the branch avoids duplication.
-- **Streaming error paths skip session write**: OCE (client disconnected) + general exception arms must NOT write session — client may not have received complete response.
-- **configureWithoutMl gets same triple-reg**: HealthFallbackTests + QualityFallbackTests use configureWithoutMl; ISessionStore must be resolvable to avoid DI graph failures in backward-compat test paths.
+Not yet scoped. Candidate threads:
 
-**18-01 execution decisions (2026-05-11):**
-- **SessionId is `string` not `option`**: Empty string sentinel matches CorrelationId convention (Phase 9). `""` means stateless per SES-04 / 18-RESEARCH Pitfall 7; avoids Option wrapper allocation on every request.
-- **SessionState in Core (Domain.fs) not Cli**: Data shape is BCL-only. `ISessionStore` + `SessionStore` (Serilog/IHostedService) go in Cli adapter (18-02). ARCH-01 preserved.
-- **ChatCompletions mapWireToRequest keeps SessionId="" hardcoded**: sessionId parameter threading deferred to 18-02 which extends CorrelationMiddleware to extract X-Session-Id header.
-- **No catch-all arm on formatReason**: Exhaustive match enforced by FS0025/TreatWarningsAsErrors; Phase 19 SelfRoute DU case will force a 9th arm at compile time.
-- **Task 1 and Task 2 committed separately**: Task 1 leaves Cli in intentional broken state (FS0025 at formatReason); Task 2 resolves it. Atomic pair pattern established for DU case + formatReason arm additions.
+1. **System-prompt session_id extraction (Tier 1)** — `~/projs/smart-router-distillation/idea/hermes-session-without-modification.md` proposes parsing Hermes' `--pass-session-id` system-prompt line (`Session ID: <uuid>`) via regex. Zero Hermes code change; 1 operator flag. Would complement v2.0's HMRS-02 network-level fingerprint with a more accurate Tier 1 path.
+2. **Content-based fingerprint (Tier 3)** — Same doc points out network-level fingerprint (RemoteIp+UA, what v2.0 shipped) has NAT/loopback collision risk; system+first-user content fingerprint is more conversation-aligned and survives multi-turn / continuation requests.
+3. **HMRS-FUTURE-01** — Hermes Agent custom provider PR to send `X-Session-Id` header (Hermes-side wiring).
+4. **PROXY-01** — `X-Forwarded-For` parsing for reverse-proxy deployments.
+5. **MODE-FUTURE-01** — Hot-reload `Routing.Mode` without restart (FileSystemWatcher).
+6. **SPEC-01..03** — Speculative routing (35B drafts while router evaluates).
+7. **DRT-01** — Dedicated tiny router model (Qwen2.5-3B as separate inference server).
 
-**17-03 execution decisions (2026-05-11):**
-- **Minimal in-memory config (no Routing:ML section) for ModeSwitch DI tests**: Production appsettings.json includes Routing:ML section → mlOpts non-null → ensureEmbeddingFilesPresent throws FileNotFoundException (ONNX files absent). Solution: minimal in-memory dict omitting Routing:ML so mlOpts=null and ML bootstrap is skipped. ML-mode test skip-guarded with File.Exists(onnxEmbedPath) — W4 pattern.
-- **§2 Architecture updated (deviation Rule 2)**: §2 said "3 stages, pure → 1. model override → 2. task table → 3. ML". Updated to "4 stages" with Stage 0 Hard Rules and mode-dependent Stage 3. Plan only specified §5/§7/§9.1; §2 was stale and had to be fixed.
-
-**17-02 execution decisions (2026-05-11):**
-- **Direct config read chosen for Routing.Mode**: `config.["Routing:Mode"]` mirrors Phase 16 Judge pattern; avoids CLIMutable RoutingOptions extension + test fixture churn across MLRoutingTests/CanaryTests.
-- **Stub selfrouting algorithm for Phase 17**: Phase 17 placeholder returns Qwen35B/Default; Phase 19 replaces with real `makeSelfRoutingAlgorithm`. Operators wanting ML interim can set `Routing.Mode="ml"`.
-- **`Reason=Default` in stub**: `SelfRoute` DU case ships in Phase 19; `Default` is correct interim value in DecisionLog for selfrouting-mode non-matched prompts.
-- **ML adapter DI unchanged (MODE-03)**: RetrainingService accumulates hard cases in both modes; full ML DI gate would starve dataset and break re-activation capability.
-
-**17-01 execution decisions (2026-05-11):**
-- **Cascade Stage 0 locked in code**: `routeRequest` now 4-stage; Hard Rules fires before `tryModelOverride`. Any future stage insertion (18: sticky, 19: self-classify) must be Stage 3/4 respectively — Stage 0 is immutable.
-- **`HardRule` DU case has no payload**: Target=Qwen122B and Priority=High are invariant for keyword matches. No need for a keyword-name payload (not logged to DecisionLog at this resolution).
-- **No `open` needed in Routing.fs for HardRules**: `HardRules.applyHardRules` resolves via module name alone; both files are in `SmartRouter.Core` namespace scope.
-- **16 HardRulesTests all pure**: No `testSequenced` wrapper needed (no Console.SetOut, no temp dirs, no Kestrel).
-- **HR-06 wording fix deferred to 17-03**: REQUIREMENTS.md HR-06 says "explicit override bypasses Hard Rules" which is incorrect. The fix (Hard Rules wins per STATE.md decision 5) lands in Plan 17-03 Task 4. Tests in 17-01 already verify the correct behavior.
-
-(v1.x execution-level decisions — full plan-by-plan log — archived in `.planning/milestones/v1.3-ROADMAP.md` plan post-mortems.)
-
-### Pending Todos
-
-- v2.0 milestone COMPLETE. No remaining v2.0 plans.
-- ModelsTests.fs migration to configureWithoutMl (carry-over from v1.3; MODELS-01/02/03 currently erroring with IEmbedder — small mechanical fix, same option-b pattern as HealthFallbackTests)
-- Remove configureServices backwards-compat alias after ModelsTests migration
-- Operator acceptance check: run `./scripts/smoke-hermes-session.sh` against live router to verify sticky escalation E2E (SC-1 manual acceptance for v2.0 release)
+Next step: `/gsd:new-milestone` to scope and plan.
 
 ### Blockers/Concerns
 
-- None for v2.0 roadmap. All requirements mapped; all phases have observable success criteria; ARCH-01 preserved (HardRules.fs is the only new Core file; everything else in Cli adapters).
-- Phase 20 (Hermes Integration): Real Hermes Agent end-to-end smoke test requires Hermes-side PR (HMRS-FUTURE-01) which is NOT a v2.0 blocker. v2.0 ships smart-router-side fingerprint fallback for interim loopback case.
-- Carry-over from v1.3: ModelsTests.fs erroring (non-blocking for v2.0 phase planning; can be addressed alongside any v2.0 plan that touches the test fixture).
+- None blocking next milestone start.
+- Carry-over from v1.3: ModelsTests.fs IEmbedder errors (non-blocking; tracked above).
+- v2.0 SC-1/SC-2 live-rig acceptance: deferred to operator manual run; not a blocker for next milestone scoping.
 
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: Completed 20-02-PLAN.md — README §10 rewrite, CHANGELOG [2.0.0] promotion, HMRS-01..04 closure. 175 + 18 + 0. v2.0 milestone COMPLETE.
-Resume file: None. v2.0 is complete. Next: operator acceptance (`./scripts/smoke-hermes-session.sh`) or post-v2.0 planning.
+Stopped at: v2.0 milestone archived. ROADMAP + REQUIREMENTS + 4 phase dirs + research moved to `.planning/milestones/v2.0-*`. MILESTONES.md prepended with v2.0 entry; PROJECT.md evolved (v2.0 → Validated; Key Decisions outcomes ✓ Good); STATE.md reset.
+Resume file: None. Next action: `/gsd:new-milestone` after scope decision.

@@ -19,7 +19,7 @@ Both clients use the same OpenAI-compatible wire format.
 
 **v1.x (shipped):** Pipeline was `explicit-model-override → explicit-task → ML classifier (primary) → 35B-aggressive default`. ML classifier (bge-m3 int8 + ML.NET LR) with closed-loop retraining, canary deployment, quality fallback, 122B-as-judge. v1.3.0 final.
 
-**v2.0 pivot (operator 2026-05-11):** Selfrouting paradigm replaces ML in the routing path. New pipeline: `Hard Rules (keyword pre-routing) → 35B self-classify (SAFE/UNSAFE 1-token) → sticky session continuity → Qwen 35B/122B`. ML code retained in repo but routing-path dormant (mirrors Phase 12 heuristic retirement). Future `Routing.Mode = "ml" | "selfrouting"` config switch preserved as option.
+**v2.0 (shipped 2026-05-12):** Selfrouting paradigm replaced ML in the routing path. Pipeline now: `Hard Rules (Stage 0 keywords) → explicit model override → explicit task → sticky session (X-Session-Id or opt-in fingerprint) → 35B self-classify (SAFE/UNSAFE 1-token, non-streaming only) → default 35B`. ML code retained but routing-path dormant; `Routing.Mode = "ml" | "selfrouting"` config switch enables one-config rollback. Hermes Agent integrates above via `X-Session-Id` header propagation for debugging continuity (Hermes-side PR tracked as HMRS-FUTURE-01).
 
 ## Core Value
 
@@ -36,16 +36,19 @@ When tradeoffs arise:
   to make a Hermes call wait 200ms than to thrash 122B and starve a Graphify
   graph index.
 
-## Current Milestone: v2.0 Self-Routing + Session-Aware
+## Current Milestone: (next — TBD)
 
-**Goal:** Replace ML-driven routing decision path with selfrouting paradigm: keyword hard rules → 35B asks itself "SAFE for me?" → sticky session continuity. Hermes Agent integrates upward via session_id propagation for debugging-continuity. ML code retained in repo but dormant.
+**Status:** v2.0 Self-Routing + Session-Aware shipped 2026-05-12. Next milestone not yet scoped.
 
-**Target features:**
-- Hard Rules pre-routing layer (stage 0; keyword-driven immediate-122B for LLVM/MLIR/compiler/segfault/optimization/concurrency)
-- 35B self-classify routing (1-token SAFE/UNSAFE; cached by prompt_hash; max_tokens=4-8; temp=0)
-- Sticky session escalation (if previous request in session was 122B → stay on 122B; debugging continuity)
-- Hermes Agent integration (X-Session-Id header propagation; smoke test against `~/hermes-agent`)
-- (optional) Speculative routing — 35B drafts while router evaluates complexity
+**Candidate threads for next milestone:**
+- **Tier 1 session extraction** — `~/projs/smart-router-distillation/idea/hermes-session-without-modification.md` proposes parsing Hermes' `--pass-session-id` system-prompt line (zero Hermes code change, 1 operator flag). Would complement v2.0's HMRS-02 fingerprint without waiting on Hermes-side PR.
+- **Content fingerprint** — Same doc points out network-level fingerprint (RemoteIp+UA, what v2.0 shipped) has NAT/loopback collision risk; system+first-user content fingerprint is more conversation-aligned.
+- **HMRS-FUTURE-01** — Hermes Agent custom provider PR for X-Session-Id propagation.
+- **PROXY-01** — `X-Forwarded-For` parsing for reverse-proxy deployments.
+- **Speculative routing (SPEC-01..03)** — 35B drafts while router evaluates complexity.
+- **Dedicated tiny router model (DRT-01)** — Qwen2.5-3B as separate inference server.
+
+Next milestone will be initiated via `/gsd:new-milestone` after scope decision.
 
 ## Requirements
 
@@ -138,18 +141,36 @@ When tradeoffs arise:
 
 - ✓ 113 tests passing (62 plans worth of test coverage); routing pipeline + SSE streaming + concurrency gate + ML classifier + retraining + canary + health/fallback + deployment + quality fallback + trace + /stats wire — v1.3
 
+**v2.0 Selfrouting + Session-Aware (2026-05-12)**
+
+- ✓ `Routing.Mode = "selfrouting" | "ml"` config switch with fail-fast validation — v2.0 (MODE-01..04)
+- ✓ Hard Rules Stage 0 keyword pre-routing (LLVM/MLIR/compiler/segfault/optimization/concurrency → 122B; case-insensitive; wins over explicit override) — v2.0 (HR-01..06)
+- ✓ `RouterRequest.SessionId` Core field + `ISessionStore` adapter (ConcurrentDictionary + 122B-wins merge + LRU + PeriodicTimer TTL eviction) — v2.0 (SES-01..09)
+- ✓ Sticky escalation cascade (Stage 3, after Hard Rules + explicit overrides, before self-classify) — v2.0 (SES-05/06)
+- ✓ 35B self-classify routing (named "selfrouter" HttpClient + SAFE/UNSAFE 1-token + safety-biased parser + prompt-hash LRU cache + operator-tunable `prompts/self-router-prompt.md`) — v2.0 (SR-01..09)
+- ✓ Streaming branch intentionally skips self-classify (latency budget; Hard Rules + sticky still apply) — v2.0 (SR-06)
+- ✓ ML dormant integration test prevents silent drift (`MlDormantTests.fs`; skip-guarded by ONNX presence) — v2.0 (SR-09)
+- ✓ `X-Session-Id` header opt-in (CorrelationMiddleware) — v2.0 (HMRS-01)
+- ✓ Opt-in fingerprint fallback (`Routing.Session.FingerprintEnabled` default `false`; SHA-256(RemoteIp+UA)[0..15]) — v2.0 (HMRS-02)
+- ✓ README §10 Hermes Integration rewritten for v2.0 paradigm (with NOT-SAFE-BEHIND-REVERSE-PROXIES warning) + `scripts/smoke-hermes-session.sh` operator E2E driver — v2.0 (HMRS-03/04)
+- ✓ DecisionLog schema_version=1 preserved (additive `routing_reason` values: `hard_rule`, `sticky_to_122b`, `self_route`) — v2.0
+- ✓ ARCH-01 preserved across v2.0 (`HardRules.fs` only new Core file; all other adapters in Cli) — v2.0
+- ✓ 175 tests passing + 18 ignored (+62 new tests across Phases 17-20) — v2.0
+
 ### Active
 
-<!-- v2.0 milestone scope. Will be detailed by /gsd:new-milestone Phase 8 (requirements). -->
+<!-- Next milestone scope. Will be detailed by /gsd:new-milestone Phase 8 (requirements). -->
 
-(Will be populated by REQUIREMENTS.md after Phase 8 requirements gathering)
+No active requirements — v2.0 shipped, next milestone not yet scoped.
 
-High-level v2.0 capabilities (to be decomposed into requirements):
-- [ ] Hard Rules pre-routing (stage 0; before existing pipeline)
-- [ ] 35B self-classify routing with operator-tunable prompt
-- [ ] Sticky session escalation with session store
-- [ ] Hermes Agent integration via `X-Session-Id` header
-- [ ] ML code routing-path dormant (retained for future `Routing.Mode` switch)
+Candidate capabilities pending scope decision:
+- [ ] System-prompt session_id extraction (Hermes `--pass-session-id` Tier 1 — parse `Session ID: ...` line via regex)
+- [ ] Content-based fingerprint (system + first user hash; complements current network-level fingerprint)
+- [ ] Hermes Agent custom provider PR for X-Session-Id propagation (HMRS-FUTURE-01)
+- [ ] X-Forwarded-For parsing (PROXY-01)
+- [ ] Routing.Mode hot-reload (MODE-FUTURE-01)
+- [ ] Speculative routing (SPEC-01..03)
+- [ ] Dedicated tiny router model (DRT-01)
 
 ### Out of Scope
 
@@ -296,10 +317,15 @@ regression.
 | **ML routing folded into v1** (was originally Out of Scope / v2). NEW Phases 4-9 ship the ML arc; old Phases 4 and 6 deferred to Phases 10-11. Old Phase 5 dissolved (OBS-01/03 → NEW Phase 5; TEST-01/02 retroactively Complete via Phases 1-3 tests). | Operator decision 2026-05-08 to fold the ML revisit forward after Phase 3 completion. The 3-layer integration strategy (code separation: `Heuristic.fs` + `ML.fs`; config selection: `Routing.Algorithm`; CLI override) keeps the heuristic baseline as the permanent fallback. Source: `~/projs/smart-router-distillation/docs/handoff-to-smart-router.md`. | — Pending |
 | **Heuristic SOFT-PAUSED 2026-05-08** (was: "stays forever as first-class baseline") | Operator decision: ML is the primary path going forward (Phases 6-9). Heuristic code stays in the codebase (`src/SmartRouter.Core/Heuristic.fs`, `Routing.Algorithm` dispatch, `--routing-algorithm` CLI flag, `check-routing-isolation.sh`) as a **dormant emergency fallback** — usable when ML model file is missing/corrupt, for debugging ("how would heuristic decide this?"), or for rollback. NOT actively developed; no new heuristic features; no Phase 9 canary heuristic-vs-ML A/B (Phase 9 compares ML model versions to each other instead). Snapshot preserved at git branch `archive/heuristic-baseline` and tag `v0.5-heuristic-baseline` (commit `a4cfce1`). When Phase 6 ships real ML, `appsettings.json` `Routing.Algorithm` flips default to `"ml"`. | — Pending |
 | **Embedding model: bge-m3 int8 quantized from Phase 6** (skipping bge-small MVP and FP32-default both) | Operator's traffic mixes Korean+English; bge-m3 chosen for multilingual; int8 quantized from start. | ✓ Good (v1.0-1.3; ~50ms p95 in production) |
-| **v2.0 SELFROUTING PIVOT (operator 2026-05-11)**: Replace ML in routing path with `Hard Rules + 35B self-classify + sticky escalation`. ML code retained but routing-path dormant (mirrors Phase 12 heuristic retirement). Future `Routing.Mode = "ml" \| "selfrouting"` config switch preserved. | Per `.planning/docs/35b-selfrouting.md` §3,7: 35B self-route avoids separate inference server + KV cache pressure; SAFE-for-35B classification more stable than "simple"; same model serves routing + responses. Phase 17 ML QualityClassifier deferred. | — Pending |
-| **v2.0 router model = 35B self-route** (NOT 7B Qwen2.5-Coder-7B separate server) | Local Mac M4 128GB constraint; doc §3 — extra server adds memory/scheduling burden; same 35B serving both is cheaper. Future upgrade path to dedicated 7B router preserved (doc §19). | — Pending |
-| **v2.0 heuristic scope = Hard Rules ONLY** (NOT full Heuristic.fs revival) | Phase 12 heuristic was deleted; v2.0 brings back ONLY the keyword pre-routing layer (LLVM/MLIR/compiler/segfault/optimization/concurrency per doc §6,12). Prompt length / complexity score / message count etc. stay buried. | — Pending |
-| **v2.0 architecture context**: Hermes Agent sits ABOVE smart-router (upper layer); smart-router gets session_id propagation downward for sticky escalation. Integration target `~/hermes-agent`. | Doc §18 architecture diagram + selfrouting doc §16 sticky escalation requires session continuity from a layer that knows the session — Hermes is that layer for v2.0. | — Pending |
+| **v2.0 SELFROUTING PIVOT (operator 2026-05-11)**: Replace ML in routing path with `Hard Rules + 35B self-classify + sticky escalation`. ML code retained but routing-path dormant (mirrors Phase 12 heuristic retirement). Future `Routing.Mode = "ml" \| "selfrouting"` config switch preserved. | Per `.planning/docs/35b-selfrouting.md` §3,7: 35B self-route avoids separate inference server + KV cache pressure; SAFE-for-35B classification more stable than "simple"; same model serves routing + responses. Phase 17 ML QualityClassifier deferred. | ✓ Good (v2.0 shipped 2026-05-12; 32/32 reqs; 175 passing tests) |
+| **v2.0 router model = 35B self-route** (NOT 7B Qwen2.5-Coder-7B separate server) | Local Mac M4 128GB constraint; doc §3 — extra server adds memory/scheduling burden; same 35B serving both is cheaper. Future upgrade path to dedicated 7B router preserved (doc §19). | ✓ Good (v2.0; DRT-01 retained as future option) |
+| **v2.0 heuristic scope = Hard Rules ONLY** (NOT full Heuristic.fs revival) | Phase 12 heuristic was deleted; v2.0 brings back ONLY the keyword pre-routing layer (LLVM/MLIR/compiler/segfault/optimization/concurrency per doc §6,12). Prompt length / complexity score / message count etc. stay buried. | ✓ Good (v2.0; HR-01..06 satisfied; 16 HardRulesTests + 9 ModeSwitchTests) |
+| **v2.0 architecture context**: Hermes Agent sits ABOVE smart-router (upper layer); smart-router gets session_id propagation downward for sticky escalation. Integration target `~/hermes-agent`. | Doc §18 architecture diagram + selfrouting doc §16 sticky escalation requires session continuity from a layer that knows the session — Hermes is that layer for v2.0. | ✓ Good (v2.0; HMRS-01..04 shipped; HMRS-FUTURE-01 Hermes-side PR tracked) |
+| **v2.0 phase order locked by Domain.fs compile dependency** (operator/researcher 2026-05-11): Hard Rules (17) → Session Store (18) → SelfRouter (19) → Hermes Integration (20). | Architecture researcher HIGH confidence over Stack/Features researchers' SelfRouter-first proposal: `makeSelfRoutingAlgorithm` closure reads `req.SessionId` at sticky stage 4 before invoking ClassifyAsync — SessionStore must precede SelfRouter. | ✓ Good (v2.0; phases shipped in order; no rework) |
+| **v2.0 streaming-skip for self-classify (SR-06)** | Mirrors Phase 14 quality-fallback streaming-skip — first-chunk latency budget cannot accommodate classify round-trip. Hard Rules (0ms) + sticky still apply. | ✓ Good (v2.0; explicit `if req.Stream then skip` comment in ChatCompletions.fs; structural zero ClassifyAsync calls verified by tests) |
+| **v2.0 Hard Rules wins over explicit override (HR-06)** | Safety mechanism precedence — operator who wants Hard Rules disabled must source-edit + rebuild. README §5.5 documents source-edit requirement (HR-02). | ✓ Good (v2.0; corrected during 17-03 from misleading "bypasses" wording) |
+| **v2.0 ML adapter unconditional DI registration (MODE-03)** | RetrainingService accumulates hard cases in BOTH `"selfrouting"` and `"ml"` modes so ML re-activation does not require retraining from scratch. | ✓ Good (v2.0; `MlDormantTests.fs` skip-guarded test confirms ML path still wires) |
+| **v2.0 fingerprint fallback opt-in (HMRS-02)** | Network-level fingerprint (RemoteIp+UA) has NAT/loopback collision risk; default `false` preserves v1.x stateless behavior. README §10 carries explicit "NOT SAFE BEHIND REVERSE PROXIES" warning (PROXY-01 callout). | ✓ Good (v2.0; FP-1..FP-8 tests cover header-wins, fingerprint-on/off, determinism, sticky integration) |
 
 ---
-*Last updated: 2026-05-11 after v1.3 milestone ✅ SHIPPED and v2.0 operator pivot to selfrouting paradigm. v1.x ML routing arc complete; v2.0 selfrouting milestone starting. ML code retained but routing-path dormant; future Routing.Mode config switch preserves re-activation option.*
+*Last updated: 2026-05-12 after v2.0 milestone ✅ SHIPPED (Self-Routing + Session-Aware). 4 phases / 12 plans / 32 requirements satisfied / 175 tests passing. Next milestone TBD; candidates include system-prompt session extraction (Hermes `--pass-session-id` Tier 1), content fingerprint, HMRS-FUTURE-01 Hermes-side PR, PROXY-01, MODE-FUTURE-01 hot-reload, SPEC-01..03 speculative routing, DRT-01 dedicated router model.*
