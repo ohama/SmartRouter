@@ -311,11 +311,12 @@ let private startTestRouter (fakePort: int) (logDir: string) : Task<WebApplicati
         let app = testBuilder.Build()
 
         // Correlation middleware must run first in the pipeline (mirrors Program.fs).
-        // fingerprintEnabled=false in test fixture: exercises v1.x stateless path.
+        // Phase 22 (MIG-02): fingerprintEnabled parameter removed; v2.0 IP+UA fingerprint
+        // superseded by the three-tier session cascade in ChatCompletions.fs handler.
         app.Use(
             System.Func<HttpContext, RequestDelegate, System.Threading.Tasks.Task>(
                 fun ctx next ->
-                    SmartRouter.Cli.Adapters.CorrelationMiddleware.correlationMiddleware false ctx next))
+                    SmartRouter.Cli.Adapters.CorrelationMiddleware.correlationMiddleware ctx next))
         |> ignore
 
         SmartRouter.Cli.Endpoints.ChatCompletions.mapEndpoints app
