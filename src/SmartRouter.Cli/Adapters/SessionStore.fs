@@ -32,9 +32,8 @@ type ISessionStore =
 /// and the runtime silently keeps default values (0, false).
 [<CLIMutable>]
 type SessionOptions = {
-    mutable TtlMinutes         : int   // default 30 when <= 0
-    mutable MaxEntries         : int   // default 10000 when <= 0
-    mutable FingerprintEnabled : bool  // Phase 20 (HMRS-02): default false when JSON key absent
+    mutable TtlMinutes : int   // default 30 when <= 0
+    mutable MaxEntries : int   // default 10000 when <= 0
 }
 
 // ── SessionStore class ───────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ open SmartRouter.Cli.Adapters.SessionStore
 /// Helper: construct a SessionStore with low TTL + small LRU cap to make
 /// eviction visible inside a single test method execution.
 let private mkStore (ttlMinutes: int) (maxEntries: int) : SessionStore * ISessionStore =
-    let opts = { TtlMinutes = ttlMinutes; MaxEntries = maxEntries; FingerprintEnabled = false }
+    let opts = { TtlMinutes = ttlMinutes; MaxEntries = maxEntries }
     let store = new SessionStore(opts, NullLogger<SessionStore>.Instance)
     store, (store :> ISessionStore)
 
