@@ -446,6 +446,7 @@ Phase 18. Controls the in-memory session store used by sticky escalation (§5.6)
 |---|---|---|---|
 | `Routing.Session.TtlMinutes` | int | `30` | Session-entry sliding TTL in minutes. Entries idle longer than this value are removed by the `SessionTtlEvictionService` BackgroundService (5-minute sweep interval). `<= 0` resets to default 30. |
 | `Routing.Session.MaxEntries` | int | `10000` | Bound for the in-memory session store. LRU eviction (O(n) min-AccessSeq scan) fires at write time when the cap is exceeded. Restart clears the store. |
+| `Routing.Session.FingerprintEnabled` | bool | `false` | Opt-in fingerprint fallback session key derivation when no `X-Session-Id` header is present. When `true`, smart-router derives a session key from `SHA-256(RemoteIpAddress + "\|" + User-Agent)` truncated to 16 lowercase hex characters. **NOT safe behind reverse proxies** — `X-Forwarded-For` is not parsed; see §10 for caveats. Default `false` preserves v1.x stateless behavior. |
 
 ### Routing.SelfRouter
 
@@ -780,14 +781,73 @@ Set via `--log-level=LEVEL` (or `Serilog.MinimumLevel.Default`). Values: `verbos
 
 ## 10. Hermes / Graphify Integration
 
-### Hermes (latency-sensitive; no `task` field)
+### Hermes Agent (v2.0 session-aware selfrouting)
+
+In v2.0, smart-router replaced the v1.x ML routing classifier (stage 3) with a selfrouting
+cascade: Stage 0 keyword Hard Rules → Stage 1 explicit model override → Stage 2 task table →
+Stage 3 sticky session escalation → Stage 4 35B self-classify (non-streaming only) → Stage 5
+default 35B. Hermes Agent sends requests as before — no Hermes-side config change is required
+for the basic Hermes → smart-router → mlx_lm flow to keep working.
+
+#### Hermes config (unchanged from v1.x)
 
 ```jsonc
-// hermes config
+// hermes config — no change needed for v2.0
 { "openai": { "base_url": "http://localhost:4000/v1", "model": "auto" } }
 ```
 
-Every Hermes request passes stages 1–2 unmatched; stage 3 (ML classifier) decides. Streaming + mid-stream cancellation fully supported (router detects `OperationCanceledException`, disposes upstream cleanly, logs `routing_reason` ending in `;cancelled`).
+Streaming + mid-stream cancellation fully supported (router detects `OperationCanceledException`,
+disposes upstream cleanly, logs `routing_reason` ending in `;cancelled`).
+
+#### X-Session-Id header opt-in (session continuity)
+
+Smart-router reads an optional `X-Session-Id` HTTP header on every `/v1/chat/completions`
+request. When present, the value is propagated through the routing pipeline as the session key
+for the SessionStore (30-minute sliding TTL, ~10,000-entry LRU). The session key gates **sticky
+escalation**: once a request in a given session routes to Qwen 122B (for any reason — Hard Rule,
+explicit override, self-classify UNSAFE, quality fallback), subsequent requests with the same
+`X-Session-Id` automatically route to 122B with `routing_reason="sticky_to_122b"`. This prevents
+continuation prompts (`continue`, `fix this`, `what was the last thing you said`) from silently
+downgrading to a smaller model mid-conversation.
+
+Hermes-side `X-Session-Id` propagation (the Hermes Agent sending its `session.id` downward as
+an HTTP header) is **future work** tracked as HMRS-FUTURE-01 in `.planning/REQUIREMENTS.md`.
+v2.0 ships smart-router-side machinery only — clients that already send the header (custom Hermes
+builds, direct curl clients, downstream tooling) get sticky escalation today; clients that do not
+send the header get the v1.x stateless path.
+
+To verify end-to-end on a running router, use the bundled smoke test:
+`./scripts/smoke-hermes-session.sh` (assumes router running on `http://127.0.0.1:4000`; sends
+two `X-Session-Id`-tagged requests and asserts the second routes `sticky_to_122b`).
+
+#### Fingerprint fallback (opt-in; loopback single-client only)
+
+When `Routing.Session.FingerprintEnabled=true` (default `false`) and the `X-Session-Id` header
+is absent, smart-router derives a session key from
+`SHA-256(RemoteIpAddress + "|" + User-Agent)` truncated to the first 16 lowercase hex
+characters. This enables sticky-escalation continuity for the loopback single-client developer
+scenario where Hermes Agent has not yet shipped X-Session-Id propagation (HMRS-FUTURE-01) and
+the operator is testing locally with a single client process.
+
+> **WARNING — NOT SAFE BEHIND REVERSE PROXIES.**
+> Smart-router does NOT parse `X-Forwarded-For` (tracked as PROXY-01 for v2.x).
+> Behind nginx/Caddy/Traefik, `RemoteIpAddress` is the proxy's IP (identical
+> for all clients), so all clients share the same fingerprint and therefore
+> the same sticky bucket — silently broken sessions and hard-to-debug
+> mis-routing. Enable `FingerprintEnabled=true` ONLY in direct loopback
+> deployments (the macOS launchd local-rig case).
+
+Known nuances:
+- A null `RemoteIpAddress` (Kestrel cannot determine the remote address) falls back to the
+  sentinel string `"unknown"` for that component. The fingerprint is therefore non-empty even
+  in that edge case, but all "unknown-IP + same-UA" clients share a sticky bucket.
+- IPv4 (`127.0.0.1`) and IPv6 (`::1`) loopback addresses produce **different** fingerprints.
+  A client switching transports between requests will not share a sticky bucket. In practice
+  this rarely matters for the single-client loopback case but is worth noting for operators
+  debugging unexpected non-stickiness.
+
+Configuration: `Routing.Session.FingerprintEnabled` — bool, default `false`. See §7
+Configuration Reference.
 
 ### Graphify (concurrency-protected; sends `task`)
 
@@ -795,9 +855,13 @@ Every Hermes request passes stages 1–2 unmatched; stage 3 (ML classifier) deci
 { "model": "auto", "task": "graph_indexing", "messages": [...] }
 ```
 
-`task` routes through stage 2, bypassing the ML classifier. 122B is gated to 1 in-flight request via SemaphoreSlim — parallel Graphify pipelines queue.
+`task` routes through Stage 2 (task table), bypassing the ML classifier and self-classify
+stage. 122B is gated to 1 in-flight request via SemaphoreSlim — parallel Graphify pipelines
+queue. The Graphify routing path passes through the Stage 2 (explicit task) cascade stage
+exactly as in v1.x; the v2.0 paradigm shift does not affect task-table routing.
 
-**graph_indexing no-fallback rule:** if 122B unreachable, returns HTTP 503 (not 35B reroute) — rerouting would corrupt the graph index. Graphify should retry once `/health` shows 122B back up.
+**graph_indexing no-fallback rule:** if 122B unreachable, returns HTTP 503 (not 35B reroute) —
+rerouting would corrupt the graph index. Graphify should retry once `/health` shows 122B back up.
 
 ```json
 {
