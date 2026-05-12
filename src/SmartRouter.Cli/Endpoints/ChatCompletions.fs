@@ -28,6 +28,9 @@ open SmartRouter.Cli.Adapters.BorderlineClassifier   // Phase 16: classifyBorder
 open SmartRouter.Cli.Adapters.JudgeClient            // Phase 16: IJudgeClient + JudgeVerdict
 open SmartRouter.Cli.Adapters.SessionStore           // Phase 18: ISessionStore
 open SmartRouter.Cli.Adapters.SelfRouter             // Phase 19: ISelfRouter + SelfRouteVerdict
+open SmartRouter.Cli.Adapters.HermesSessionExtract   // Phase 22: Tier 2 sysprompt parse
+open SmartRouter.Cli.Adapters.ContentFingerprint     // Phase 22: Tier 3 content hash
+open SmartRouter.Cli.Adapters.SessionCascadeStats    // Phase 22: OBS-01 counter port
 
 // ── Phase 14 — string truncation for trace excerpts ──────────────────────────
 
@@ -171,6 +174,38 @@ let private metricCohort (decision: RoutingDecision) (reason: string) : bool * b
     let isFallback  = decision.IsFallback || suffixFallback
     isCanary, isFallback
 
+// ── Phase 22 (TIER-01..03): three-tier session-key cascade ───────────────────
+//
+// Pure helper invoked from the request handler AFTER mapWireToRequest constructs
+// the RouterRequest and BEFORE routeRequest is called. Resolves the session key
+// from three sources in priority order:
+//
+//   Tier 1: X-Session-Id header (already extracted by CorrelationMiddleware into
+//           req.SessionId; non-empty value short-circuits)
+//   Tier 2: HermesSessionExtract.extractFromSystemPrompt — reads `Session ID: <id>`
+//           line from the first System message (Hermes `--pass-session-id` emission)
+//   Tier 3: ContentFingerprint.compute — SHA-256(system + "|||" + firstUser)[..15]
+//           lowercase hex; always returns a 16-char string (no None case)
+//
+// Returns (resolvedSessionId, source) where source is "header", "sysprompt", or
+// "content" — used by the caller to increment exactly one of three counters via
+// ISessionCascadeStats (OBS-01).
+//
+// Pure: no I/O, no DI, no mutation. Unit-testable without Kestrel by Plan 22-03's
+// SessionKeyCascadeTests.fs.
+//
+// CorrelationMiddleware already coerces whitespace-only X-Session-Id headers to
+// "" (CorrelationMiddleware.fs lines 53-56 — `String.IsNullOrWhiteSpace` guard),
+// so `String.IsNullOrEmpty(req.SessionId)` here correctly catches both absent
+// and whitespace-only headers (TIER-02 fall-through).
+let resolveSessionCascade (req: RouterRequest) : string * string =
+    if not (System.String.IsNullOrEmpty(req.SessionId)) then
+        req.SessionId, "header"
+    else
+        match SmartRouter.Cli.Adapters.HermesSessionExtract.extractFromSystemPrompt req with
+        | Some sid -> sid, "sysprompt"
+        | None     -> SmartRouter.Cli.Adapters.ContentFingerprint.compute req, "content"
+
 // ── Handler ──────────────────────────────────────────────────────────────────
 
 /// POST /v1/chat/completions handler.
@@ -246,6 +281,25 @@ let handler
         else
 
         let req = mapWireToRequest correlationId sessionId wireBody
+
+        // ── Phase 22 (TIER-01..03 + OBS-01): three-tier session-key cascade ─────
+        // Resolves req.SessionId from header → sysprompt → content fingerprint.
+        // First non-empty wins (resolveSessionCascade helper). Increments the
+        // appropriate /stats counter via ISessionCascadeStats. Shadows req so the
+        // routing algorithm, sticky lookup, and Point B sticky write all see the
+        // resolved session key (TIER-05d sticky-continuity through Tier 2/3).
+        let resolvedSessionId, extractionSource = resolveSessionCascade req
+        let cascadeStats =
+            ctx.RequestServices.GetRequiredService<ISessionCascadeStats>()
+        match extractionSource with
+        | "header"    -> cascadeStats.RecordHeader()
+        | "sysprompt" -> cascadeStats.RecordSysprompt()
+        | _           -> cascadeStats.RecordContent()
+        // Shadow req so downstream code (routeRequest, sticky Update guards at
+        // lines ~418 and ~686) sees the resolved (non-empty) session key.
+        let req = { req with SessionId = resolvedSessionId }
+        // Update ctx.Items so any downstream middleware/observers see the resolved key.
+        ctx.Items.[SessionIdKey] <- box resolvedSessionId
 
         // 2. Pure routing — config-driven. The RoutingConfig singleton was built from
         //    appsettings.json at startup; editing JSON + restart changes this behavior (ROUT-05).
