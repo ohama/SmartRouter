@@ -13,6 +13,7 @@ open SmartRouter.Cli.Adapters.Json
 open SmartRouter.Cli.Adapters.CanaryState
 open SmartRouter.Cli.Adapters.JudgeClient    // Phase 16: IJudgeStats
 open SmartRouter.Cli.Adapters.SelfRouter    // Phase 19: ISelfRouterStats
+open SmartRouter.Cli.Adapters.SessionCascadeStats   // Phase 22: ISessionCascadeStats
 
 /// Wire shape for GET /stats. snake_case to match OpenAI conventions.
 /// Built fresh from a StatsSnapshot on every request — no caching.
@@ -46,7 +47,10 @@ type private StatsWire =
       selfrouter_cache_hits              : int64    // NEW Phase 19 SR-05
       selfrouter_cache_misses            : int64    // NEW Phase 19 SR-05
       selfrouter_call_count              : int64    // NEW Phase 19 SR-05
-      selfrouter_skipped                 : int64 }  // NEW Phase 19 SR-05
+      selfrouter_skipped                 : int64    // NEW Phase 19 SR-05
+      session_extraction_source_header    : int64   // NEW Phase 22 OBS-01
+      session_extraction_source_sysprompt : int64   // NEW Phase 22 OBS-01
+      session_extraction_source_content   : int64 } // NEW Phase 22 OBS-01
 
 let private snapshotToWireFields (s: StatsSnapshot) : StatsWire =
     { timestamp                          = s.Timestamp.ToString("o")
@@ -74,7 +78,10 @@ let private snapshotToWireFields (s: StatsSnapshot) : StatsWire =
       selfrouter_cache_hits              = 0L      // overridden in mapEndpoints after ISelfRouterStats resolve
       selfrouter_cache_misses            = 0L      // overridden in mapEndpoints
       selfrouter_call_count              = 0L      // overridden in mapEndpoints
-      selfrouter_skipped                 = 0L }    // overridden in mapEndpoints
+      selfrouter_skipped                 = 0L      // overridden in mapEndpoints
+      session_extraction_source_header    = 0L     // overridden in mapEndpoints after ISessionCascadeStats resolve
+      session_extraction_source_sysprompt = 0L     // overridden in mapEndpoints
+      session_extraction_source_content   = 0L }   // overridden in mapEndpoints
 
 /// Register GET /stats. Resolves IStatsProvider, IModelVersionProvider, and
 /// ICanaryState from DI on each request and serializes a single self-contained
@@ -109,6 +116,14 @@ let mapEndpoints (app: WebApplication) =
             let struct (srHits, srMisses, srCalls, srSkipped) =
                 if isNull (box selfRouterStats) then struct (0L, 0L, 0L, 0L)
                 else selfRouterStats.GetSelfRouterStats()
+            // Phase 22 (OBS-01) — session cascade stats: null-safe resolve mirrors the
+            // selfRouterStats pattern above. Both configureRequestPipeline AND
+            // configureWithoutMl register ISessionCascadeStats, so this guard is
+            // defense-in-depth (matches the existing selfRouterStats/judgeStats idiom).
+            let cascadeStats = ctx.RequestServices.GetService<ISessionCascadeStats>()
+            let struct (scHeader, scSysprompt, scContent) =
+                if isNull (box cascadeStats) then struct (0L, 0L, 0L)
+                else cascadeStats.GetStats()
             let wire =
                 { baseFields with
                     baseline_model_version  = versionP.CurrentVersion
@@ -121,7 +136,10 @@ let mapEndpoints (app: WebApplication) =
                     selfrouter_cache_hits   = srHits       // NEW Phase 19
                     selfrouter_cache_misses = srMisses     // NEW Phase 19
                     selfrouter_call_count   = srCalls      // NEW Phase 19
-                    selfrouter_skipped      = srSkipped }  // NEW Phase 19
+                    selfrouter_skipped      = srSkipped    // NEW Phase 19
+                    session_extraction_source_header    = scHeader     // NEW Phase 22
+                    session_extraction_source_sysprompt = scSysprompt  // NEW Phase 22
+                    session_extraction_source_content   = scContent }  // NEW Phase 22
             logger.LogDebug(
                 "/stats hit; queue_depth_high={H} active_122b={A} model_version={V} canary_active={C}",
                 wire.queue_depth_122b_high, wire.active_122b, wire.baseline_model_version, wire.canary_active)
