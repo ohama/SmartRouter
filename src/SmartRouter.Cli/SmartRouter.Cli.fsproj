@@ -28,6 +28,8 @@
     <!-- Phase 21: HSP + CFP extraction primitives (Cli adapter, BCL-only, no DI wiring yet) -->
     <Compile Include="Adapters/HermesSessionExtract.fs" />
     <Compile Include="Adapters/ContentFingerprint.fs" />
+    <!-- Phase 25: TCP port-conflict probe (PROBE-01) — BCL-only, synchronous -->
+    <Compile Include="Adapters/PortProbe.fs" />
     <!-- Phase 22: 3-tier session cascade observability (OBS-01) -->
     <Compile Include="Adapters/SessionCascadeStats.fs" />
     <Compile Include="Adapters/DecisionLogger.fs" />
