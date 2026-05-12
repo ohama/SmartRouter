@@ -245,4 +245,37 @@ let tests : Test =
             Expect.equal h 1L "RecordHeader called 1x -> headerCount = 1"
             Expect.equal s 2L "RecordSysprompt called 2x -> syspromptCount = 2"
             Expect.equal c 0L "RecordContent called 0x -> contentCount = 0"
+
+        // TC-7 — TIER-04: ISessionCascadeStats resolves in ml-mode DI provider.
+        // Closes the TD-1 gap: replaces structural proof (registration code present
+        // in configureRequestPipeline lines 447-456) with an executable assertion.
+        //
+        // Config: minimalConfigPairs with Routing:Mode overridden to "ml".
+        // No Routing:ML section → mlOpts = null at CompositionRoot line 342 →
+        // ML bootstrap block skipped entirely → no ONNX files needed.
+        //
+        // ISessionCascadeStats is registered unconditionally at lines 447-456,
+        // BEFORE the mode-switch block (line 394+). The same SessionCascadeStats
+        // concrete class is used in both "selfrouting" and "ml" modes (no NoOp
+        // variant — TIER-04 requires cascade to apply in both modes per Plan 22-01
+        // decision). Omitting Routing:ML avoids ensureEmbeddingFilesPresent which
+        // would fail in CI/clean environments without ONNX files on disk. This is
+        // the same technique used by ModeSwitchTests.fs lines 7-9.
+        testCase "TC-7: ISessionCascadeStats resolves non-null in Routing.Mode=\"ml\" DI provider" <| fun () ->
+            let mlModePairs =
+                minimalConfigPairs
+                |> List.map (fun kv ->
+                    if kv.Key = "Routing:Mode"
+                    then System.Collections.Generic.KeyValuePair("Routing:Mode", "ml")
+                    else kv)
+            let config =
+                ConfigurationBuilder()
+                    .AddInMemoryCollection(mlModePairs :> IEnumerable<KeyValuePair<string, string>>)
+                    .Build() :> IConfiguration
+            let services = ServiceCollection()
+            SmartRouter.Cli.CompositionRoot.configureRequestPipeline services config |> ignore
+            use sp = services.BuildServiceProvider()
+            let stats = sp.GetRequiredService<ISessionCascadeStats>()
+            Expect.isNotNull (box stats)
+                "ISessionCascadeStats must resolve non-null in Routing.Mode=ml provider (TIER-04)"
     ]
