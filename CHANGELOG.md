@@ -5,6 +5,110 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-05-12
+
+Phase 22 — Hermes-less Session Tiering. Replaces the v2.0 IP+UA network
+fingerprint with a multi-tier session extraction: explicit `X-Session-Id`
+header -> Hermes system-prompt parse -> content fingerprint.
+
+### Removed
+
+- **`Routing.Session.FingerprintEnabled` config key** (`appsettings.json`).
+  Opt-in IP+UA fingerprint introduced in Phase 20 (v2.0) is superseded by the
+  system-prompt and content-fingerprint tiers. **Breaking change** for any
+  operator who had `FingerprintEnabled=true` — the key is silently ignored
+  at startup in v2.1 (CLIMutable binding tolerates extra JSON keys). Update
+  `appsettings.json` by removing the key for hygiene; the system continues
+  to boot if you don't. If `--pass-session-id` is not available on your
+  Hermes version, content fingerprint (Tier 3) provides equivalent sticky-
+  bucket continuity without IP address coupling.
+- **IP+UA network fingerprint** (`SHA-256(RemoteIpAddress + "|" + User-Agent)`
+  block in `CorrelationMiddleware`). Deleted with `FingerprintEnabled` — no
+  equivalent behavior in v2.1 (superseded by Tier 2/3).
+- **`PROXY-01` reverse-proxy warning** (README §10). Moot — network fingerprint
+  code that required `X-Forwarded-For` parsing is gone. The README §10
+  PROXY-01 callout removal is part of Phase 23 (DOC-01).
+- **`HermesFingerprintTests.fs`** (FP-01..FP-08, 8 tests, 130 lines). Replaced
+  by `HermesSessionExtractTests.fs` (Plan 21-01) + `ContentFingerprintTests.fs`
+  (Plan 21-02) + `SessionKeyCascadeTests.fs` (Plan 22-03).
+
+### Added
+
+- **Hermes system-prompt session parse (Tier 2).**
+  `SmartRouter.Cli.Adapters.HermesSessionExtract.extractFromSystemPrompt` reads
+  a `Session ID: <id>` line from the first `System` message when Hermes is
+  started with `--pass-session-id`. Pre-compiled
+  `Regex("^Session ID:[ \t]*(\S+)", Multiline)` — no per-request allocation.
+  Falls through when line absent (graceful for operators who have not enabled
+  `--pass-session-id`).
+- **Content fingerprint session key (Tier 3).**
+  `SmartRouter.Cli.Adapters.ContentFingerprint.compute` derives a 16-character
+  lowercase hex session key from `SHA-256(system_msg + "|||" + first_user_msg)
+  [0..15]`. Deterministic and collision-resistant — the same conversation start
+  always maps to the same session bucket. Inputs truncated to 4000 characters
+  before hashing.
+- **Three-tier cascade in `ChatCompletions.fs` request handler.** Session key
+  resolution priority: `X-Session-Id` header (Tier 1, populated by
+  `CorrelationMiddleware`) -> Tier 2 system-prompt parse -> Tier 3 content
+  fingerprint. First non-empty wins; `ctx.Items[SessionIdKey]` and
+  `req.SessionId` carry the resolved key into the routing algorithm and the
+  Phase 18 sticky `SessionStore.Update` writes. Sticky escalation
+  (`routing_reason="sticky_to_122b"`) works across all three tier paths.
+- **`session_extraction_source_header`, `session_extraction_source_sysprompt`,
+  `session_extraction_source_content`** — three new `int64` fields on
+  `GET /stats`. Each `Interlocked.Increment`s once per request based on which
+  tier resolved the session key. Owned by the new
+  `SmartRouter.Cli.Adapters.SessionCascadeStats` singleton (registered in both
+  `configureRequestPipeline` AND `configureWithoutMl`). Null-safe resolution
+  in `Stats.fs` mirrors the Phase 19 `selfRouterStats` pattern.
+- **`archive/v2.0-network-fingerprint` git branch + `v2.0-network-fingerprint`
+  annotated git tag.** Preserves the pre-v2.1 commit (last commit before
+  Plan 22-02 deletions) for archaeological reference. Mirrors the v1.x
+  `archive/heuristic-baseline` + `v0.5-heuristic-baseline` dual-preservation
+  pattern.
+
+### Changed
+
+- **`CorrelationMiddleware.correlationMiddleware` signature.**
+  `fingerprintEnabled: bool` first parameter **removed**. Callers
+  (`Program.fs:280` and `LoggingTests.fs:318`) drop the argument.
+  `Program.fs` startup-time `app.Configuration.["Routing:Session:FingerprintEnabled"]`
+  read also deleted.
+- **`SessionOptions` record.** `FingerprintEnabled : bool` field removed; record
+  now has only `TtlMinutes` and `MaxEntries`. CLIMutable binding tolerates
+  operators' legacy JSON keys.
+- **Session key resolution moved from header-only (Tier 1) to 3-tier cascade.**
+  Requests without `X-Session-Id` header now always receive a non-empty session
+  key (Tier 2 or Tier 3), enabling sticky escalation for Hermes operators who
+  have not yet enabled `--pass-session-id`. Per-request cost: ~1-2 us for
+  Tier 3's SHA-256 of <=8KB of conversation prefix (acceptable; Phase 21
+  performance review).
+
+### Notes
+
+- DecisionLog `schema_version=1` unchanged. Session key resolution happens
+  upstream of the routing decision. No new `routing_reason` values. The
+  resolved key flows through the existing `SES-04` channel into the existing
+  `session_id` DecisionLog field (which is not currently emitted — tracked as
+  future schema-version work).
+- Both `Routing.Mode = "selfrouting"` and `"ml"` use the new 3-tier cascade —
+  enforced by unconditional `ISessionCascadeStats` DI registration in both
+  `configureRequestPipeline` AND `configureWithoutMl` (TIER-04 invariant).
+- Operators with `Routing.Session.FingerprintEnabled=true` in their legacy
+  `appsettings.json` will see the key silently ignored at startup (CLIMutable
+  binding does not throw on unknown JSON keys). No graceful-ignore handler
+  required; ASP.NET Core configuration binding tolerance is the established
+  behavior.
+- README §7 row for `Routing.Session.FingerprintEnabled` is removed in this
+  release. README §8 (new `/stats` counter rows) and §10 (Hermes Integration
+  rewrite for v2.1 `--pass-session-id` operator guide; PROXY-01 callout
+  removal) are documented in Phase 23 (DOC-01..04).
+- Test count: 188 (v2.0 + Phase 21) -> 180 (Phase 22 Plan 22-02 deletes 8 FP
+  tests) -> 186 (Phase 22 Plan 22-03 adds 6 `SessionKeyCascadeTests`). Final:
+  186 passed + 18 ignored + 0 failed.
+
+---
+
 ## [2.0.0] - 2026-05-12
 
 Phase 17 — Hard Rules layer + Routing.Mode switch. v2.0 paradigm pivot:

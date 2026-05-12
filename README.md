@@ -446,7 +446,6 @@ Phase 18. Controls the in-memory session store used by sticky escalation (§5.6)
 |---|---|---|---|
 | `Routing.Session.TtlMinutes` | int | `30` | Session-entry sliding TTL in minutes. Entries idle longer than this value are removed by the `SessionTtlEvictionService` BackgroundService (5-minute sweep interval). `<= 0` resets to default 30. |
 | `Routing.Session.MaxEntries` | int | `10000` | Bound for the in-memory session store. LRU eviction (O(n) min-AccessSeq scan) fires at write time when the cap is exceeded. Restart clears the store. |
-| `Routing.Session.FingerprintEnabled` | bool | `false` | Opt-in fingerprint fallback session key derivation when no `X-Session-Id` header is present. When `true`, smart-router derives a session key from `SHA-256(RemoteIpAddress + "\|" + User-Agent)` truncated to 16 lowercase hex characters. **NOT safe behind reverse proxies** — `X-Forwarded-For` is not parsed; see §10 for caveats. Default `false` preserves v1.x stateless behavior. |
 
 ### Routing.SelfRouter
 
