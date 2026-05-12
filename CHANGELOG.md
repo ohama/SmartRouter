@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.0.0] - 2026-05-12
 
 Phase 17 — Hard Rules layer + Routing.Mode switch. v2.0 paradigm pivot:
 the routing primary path becomes keyword Hard Rules → (Phase 18 sticky) →
@@ -123,6 +123,43 @@ re-activatable with a one-line `appsettings.json` edit + restart.
 - Fail-open: any classify failure (HTTP timeout, template missing, ambiguous response) falls
   through to Stage 5 default (35B). No request is dropped; `selfrouter_skipped` or
   `selfrouter_call_count` movements in `/stats` signal failures.
+
+---
+
+### Added (Phase 20 — Hermes Integration + Documentation)
+
+- **Fingerprint fallback session key (opt-in).** When `Routing.Session.FingerprintEnabled=true`
+  (default `false`) and no `X-Session-Id` header is present, `CorrelationMiddleware` derives a
+  session key from `SHA-256(RemoteIpAddress + "|" + User-Agent)` truncated to 16 lowercase hex
+  characters. Enables sticky escalation continuity for the loopback single-client development
+  scenario (Hermes Agent on the same host before it ships X-Session-Id propagation). See
+  README §10. **Not safe behind reverse proxies** — `X-Forwarded-For` is not parsed; tracked
+  as PROXY-01 for v2.x work.
+- **`Routing.Session.FingerprintEnabled` config key** (`appsettings.json`). Boolean, default
+  `false`. Opt-in only — preserves v1.x stateless behavior unless explicitly enabled. See
+  README §7.
+- **`scripts/smoke-hermes-session.sh`.** Operator-runnable smoke test verifying X-Session-Id
+  session propagation end-to-end with curl + DecisionLog grep assertion. No Hermes Agent
+  dependency — curl drives both requests directly.
+- **`HermesFingerprintTests.fs`** integration tests covering fingerprint-enabled and
+  fingerprint-disabled paths (8 test cases FP-1..FP-8 using `DefaultHttpContext`).
+
+### Changed (Phase 20)
+
+- **README §10 "Hermes Integration" fully rewritten for v2.0.** Replaces the v1.x ML routing
+  description (stage 3 ML classifier) with the v2.0 selfrouting paradigm (keyword Hard Rules +
+  35B self-classify + sticky session). Documents X-Session-Id opt-in, fingerprint fallback
+  caveats, and Hermes-side propagation as future v2.x work (HMRS-FUTURE-01).
+
+### Notes (Phase 20)
+
+- `schema_version=1` unchanged. No new DecisionLog fields — fingerprint-derived session IDs
+  participate in the existing `routing_reason="sticky_to_122b"` flow.
+- Hermes Agent code is NOT modified in v2.0. Smart-router ships the session-aware
+  infrastructure; Hermes propagating `X-Session-Id` is tracked as HMRS-FUTURE-01 (post-v2.0).
+- REQUIREMENTS.md HMRS-FUTURE-01, HMRS-FUTURE-02, PROXY-01 retained as v2.x trackers
+  (no change to those entries).
+- Test baseline: 175 passed / 18 ignored / 0 failed (was 167 / 18 / 0 in Phase 19).
 
 ## [1.3.0] - 2026-05-11
 
