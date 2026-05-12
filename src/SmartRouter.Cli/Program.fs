@@ -267,10 +267,17 @@ let main args =
             // Ensure logs directory exists at startup so DecisionLogWriter never races on first write
             System.IO.Directory.CreateDirectory("logs/decisions") |> ignore
 
+            // Phase 20 (HMRS-02): read FingerprintEnabled once at startup (NOT inside the lambda —
+            // mirrors routingMode resolution pattern in CompositionRoot.fs; closed over by the
+            // registration lambda so per-request cost is zero).
+            let fingerprintEnabled =
+                let raw = app.Configuration.["Routing:Session:FingerprintEnabled"]
+                not (isNull raw) && raw.Trim().ToLowerInvariant() = "true"
+
             // Correlation ID middleware — runs FIRST in the pipeline so every downstream
             // log line and the JSONL DecisionLog entry carry the same correlation_id.
             app.Use(System.Func<HttpContext, RequestDelegate, System.Threading.Tasks.Task>(fun ctx next ->
-                CorrelationMiddleware.correlationMiddleware ctx next)) |> ignore
+                CorrelationMiddleware.correlationMiddleware fingerprintEnabled ctx next)) |> ignore
 
             // Serilog request logging middleware
             app.UseSerilogRequestLogging() |> ignore
