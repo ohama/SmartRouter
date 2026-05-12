@@ -40,6 +40,7 @@ let rootTests : Test list =
         SmartRouter.Tests.SelfRouterTests.selfRouterTests             // Phase 19 (Plan 19-03)
         SmartRouter.Tests.SelfRoutingIntegrationTests.selfRoutingIntegrationTests  // Phase 19 (Plan 19-03)
         SmartRouter.Tests.MlDormantTests.mlDormantTests                           // Phase 19 (Plan 19-03 SR-09)
+        SmartRouter.Tests.HermesFingerprintTests.tests                            // Phase 20 (Plan 20-01)
     ]
 
 [<EntryPoint>]
