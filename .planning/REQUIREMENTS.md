@@ -24,29 +24,29 @@
 
 ### Multi-tier Cascade in CorrelationMiddleware (TIER-*)
 
-- [ ] **TIER-01**: `CorrelationMiddleware` resolves session key in priority order: (1) explicit `X-Session-Id` HTTP header (Tier 1); (2) `HermesSessionExtract.extractFromSystemPrompt` (Tier 2); (3) `ContentFingerprint.compute` (Tier 3). First non-empty value wins; `ctx.Items[SessionIdKey]` stores the resolved key
-- [ ] **TIER-02**: `X-Session-Id: ` (empty value) or `X-Session-Id:    ` (whitespace-only value) is treated as absent header → cascade falls through to Tier 2; matches v2.0 SES-04 null-safe behavior
-- [ ] **TIER-03**: Tier 2 and Tier 3 are evaluated AFTER `mapWireToRequest` has constructed the `RouterRequest` (need access to `req.Messages`); the resolution happens in `ChatCompletions.fs` request-handler scope OR in a new helper invoked between message parsing and routing — exact location decided during planning (existing `CorrelationMiddleware` runs before body is parsed, so it cannot do Tier 2/3 by itself)
-- [ ] **TIER-04**: Cascade applies in BOTH `Routing.Mode = "selfrouting"` AND `Routing.Mode = "ml"` (matches v2.0 Hard Rules + sticky cascade pattern); ML mode also benefits from improved session continuity
-- [ ] **TIER-05**: Integration tests verify: (a) header-wins (header + matching system-prompt line → header value used); (b) sysprompt-fallback (no header + Session ID line present → parsed value used); (c) content-fingerprint-fallback (no header + no Session ID line → SHA-256 hash used); (d) sticky escalation (Phase 18 SES-05) continues working across all three tier paths; (e) determinism (same conversation request twice → same resolved session key)
+- [x] **TIER-01**: `CorrelationMiddleware` resolves session key in priority order: (1) explicit `X-Session-Id` HTTP header (Tier 1); (2) `HermesSessionExtract.extractFromSystemPrompt` (Tier 2); (3) `ContentFingerprint.compute` (Tier 3). First non-empty value wins; `ctx.Items[SessionIdKey]` stores the resolved key
+- [x] **TIER-02**: `X-Session-Id: ` (empty value) or `X-Session-Id:    ` (whitespace-only value) is treated as absent header → cascade falls through to Tier 2; matches v2.0 SES-04 null-safe behavior
+- [x] **TIER-03**: Tier 2 and Tier 3 are evaluated AFTER `mapWireToRequest` has constructed the `RouterRequest` (need access to `req.Messages`); the resolution happens in `ChatCompletions.fs` request-handler scope OR in a new helper invoked between message parsing and routing — exact location decided during planning (existing `CorrelationMiddleware` runs before body is parsed, so it cannot do Tier 2/3 by itself)
+- [x] **TIER-04**: Cascade applies in BOTH `Routing.Mode = "selfrouting"` AND `Routing.Mode = "ml"` (matches v2.0 Hard Rules + sticky cascade pattern); ML mode also benefits from improved session continuity
+- [x] **TIER-05**: Integration tests verify: (a) header-wins (header + matching system-prompt line → header value used); (b) sysprompt-fallback (no header + Session ID line present → parsed value used); (c) content-fingerprint-fallback (no header + no Session ID line → SHA-256 hash used); (d) sticky escalation (Phase 18 SES-05) continues working across all three tier paths; (e) determinism (same conversation request twice → same resolved session key)
 
 ### Observability (OBS-*)
 
-- [ ] **OBS-01**: `/stats` JSON exposes three new flat snake_case Int64 fields: `session_extraction_source_header`, `session_extraction_source_sysprompt`, `session_extraction_source_content`. Each `Interlocked.Increment` once per request based on which tier resolved the session key. Fields exposed via `IStatsProvider` extension and `StatsWire` (mirrors Phase 19 SR-05 `selfrouter_*` pattern)
+- [x] **OBS-01**: `/stats` JSON exposes three new flat snake_case Int64 fields: `session_extraction_source_header`, `session_extraction_source_sysprompt`, `session_extraction_source_content`. Each `Interlocked.Increment` once per request based on which tier resolved the session key. Fields exposed via `IStatsProvider` extension and `StatsWire` (mirrors Phase 19 SR-05 `selfrouter_*` pattern)
 
 ### v2.0 HMRS-02 Migration (MIG-*)
 
-- [ ] **MIG-01**: `Routing.Session.FingerprintEnabled` config key DELETED from `appsettings.json` and from `SessionOptions` record in `SessionStore.fs`; CLIMutable field removed; no fallback default — this is a breaking change for any operator who had `FingerprintEnabled=true` (likely zero users in production)
-- [ ] **MIG-02**: SHA-256(RemoteIp + "|" + User-Agent) block in `CorrelationMiddleware.fs` DELETED; the `fingerprintEnabled: bool` first parameter REMOVED from middleware signature; `Program.fs` startup-time config read for FingerprintEnabled DELETED
-- [ ] **MIG-03**: `tests/SmartRouter.Tests/HermesFingerprintTests.fs` (FP-01..FP-08; 8 tests; 130 lines) DELETED entirely; replaced by new HSP-04 + CFP-04 + TIER-05 tests; `SmartRouter.Tests.fsproj` Compile entry removed; `RouterTests.fs` rootTests entry removed
-- [ ] **MIG-04**: `scripts/smoke-hermes-session.sh` updated: drop any references to `FingerprintEnabled` config flag; verify cascade test cases (X-Session-Id explicit + sysprompt parse + content fingerprint) instead of header-vs-fingerprint comparison; remains operator-runnable, exits 0/1, no Hermes Agent dependency
-- [ ] **MIG-05**: `CHANGELOG.md` `[2.1.0]` block has: `### Removed` (FingerprintEnabled config, IP+UA fingerprint, PROXY-01 warning); `### Added` (sysprompt parse adapter HermesSessionExtract, content fingerprint helper ContentFingerprint, multi-tier cascade in CorrelationMiddleware, `session_extraction_source_*` /stats counters); `### Changed` (CorrelationMiddleware signature; session resolution moved from header-only to 3-tier cascade); `### Notes` (breaking change for FingerprintEnabled users)
-- [ ] **MIG-06**: `archive/v2.0-network-fingerprint` git tag (or branch) preserves the pre-v2.1 commit so the network fingerprint code remains reachable for archaeological reference — matches the project pattern of `archive/heuristic-baseline` tag from v1.0
+- [x] **MIG-01**: `Routing.Session.FingerprintEnabled` config key DELETED from `appsettings.json` and from `SessionOptions` record in `SessionStore.fs`; CLIMutable field removed; no fallback default — this is a breaking change for any operator who had `FingerprintEnabled=true` (likely zero users in production)
+- [x] **MIG-02**: SHA-256(RemoteIp + "|" + User-Agent) block in `CorrelationMiddleware.fs` DELETED; the `fingerprintEnabled: bool` first parameter REMOVED from middleware signature; `Program.fs` startup-time config read for FingerprintEnabled DELETED
+- [x] **MIG-03**: `tests/SmartRouter.Tests/HermesFingerprintTests.fs` (FP-01..FP-08; 8 tests; 130 lines) DELETED entirely; replaced by new HSP-04 + CFP-04 + TIER-05 tests; `SmartRouter.Tests.fsproj` Compile entry removed; `RouterTests.fs` rootTests entry removed
+- [x] **MIG-04**: `scripts/smoke-hermes-session.sh` updated: drop any references to `FingerprintEnabled` config flag; verify cascade test cases (X-Session-Id explicit + sysprompt parse + content fingerprint) instead of header-vs-fingerprint comparison; remains operator-runnable, exits 0/1, no Hermes Agent dependency
+- [x] **MIG-05**: `CHANGELOG.md` `[2.1.0]` block has: `### Removed` (FingerprintEnabled config, IP+UA fingerprint, PROXY-01 warning); `### Added` (sysprompt parse adapter HermesSessionExtract, content fingerprint helper ContentFingerprint, multi-tier cascade in CorrelationMiddleware, `session_extraction_source_*` /stats counters); `### Changed` (CorrelationMiddleware signature; session resolution moved from header-only to 3-tier cascade); `### Notes` (breaking change for FingerprintEnabled users)
+- [x] **MIG-06**: `archive/v2.0-network-fingerprint` git tag (or branch) preserves the pre-v2.1 commit so the network fingerprint code remains reachable for archaeological reference — matches the project pattern of `archive/heuristic-baseline` tag from v1.0
 
 ### Documentation (DOC-*)
 
 - [ ] **DOC-01**: README §10 "Hermes / Graphify Integration" rewritten for v2.1 — describes the new 3-tier cascade (header → sysprompt → content); explains `Session ID:` line emission from Hermes `--pass-session-id`; operator opt-in guide covering all four enablement options from the source doc (CLI arg, shell alias `hermes-router='hermes --pass-session-id ...'`, env var `HERMES_TUI_PASS_SESSION_ID=1`, wrapper script). NOT SAFE BEHIND REVERSE PROXIES warning + PROXY-01 callout REMOVED (no longer applies)
-- [ ] **DOC-02**: README §7 Configuration Reference — `Routing.Session.FingerprintEnabled` row REMOVED; existing `Routing.Session.TtlMinutes` and `Routing.Session.MaxEntries` rows preserved unchanged
+- [x] **DOC-02**: README §7 Configuration Reference — `Routing.Session.FingerprintEnabled` row REMOVED; existing `Routing.Session.TtlMinutes` and `Routing.Session.MaxEntries` rows preserved unchanged (completed early in Plan 22-03 commit `938c8ac` per CLAUDE.md README-sync rule alongside MIG-01)
 - [ ] **DOC-03**: README §8 `/stats` field reference — `session_extraction_source_header`, `_sysprompt`, `_content` three rows added with semantic explanations matching `IStatsProvider` field meanings
 - [ ] **DOC-04**: README §9 DecisionLog reference — no schema changes for v2.1 (resolved session_id is propagated via existing SES-04 channel; no new routing_reason values); section confirmed still correct as written
 
@@ -109,20 +109,20 @@ Assigned by roadmapper 2026-05-12.
 | CFP-02 | Phase 21 | Complete |
 | CFP-03 | Phase 21 | Complete |
 | CFP-04 | Phase 21 | Complete |
-| TIER-01 | Phase 22 | Pending |
-| TIER-02 | Phase 22 | Pending |
-| TIER-03 | Phase 22 | Pending |
-| TIER-04 | Phase 22 | Pending |
-| TIER-05 | Phase 22 | Pending |
-| OBS-01 | Phase 22 | Pending |
-| MIG-01 | Phase 22 | Pending |
-| MIG-02 | Phase 22 | Pending |
-| MIG-03 | Phase 22 | Pending |
-| MIG-04 | Phase 22 | Pending |
-| MIG-05 | Phase 22 | Pending |
-| MIG-06 | Phase 22 | Pending |
+| TIER-01 | Phase 22 | Complete |
+| TIER-02 | Phase 22 | Complete |
+| TIER-03 | Phase 22 | Complete |
+| TIER-04 | Phase 22 | Complete |
+| TIER-05 | Phase 22 | Complete |
+| OBS-01 | Phase 22 | Complete |
+| MIG-01 | Phase 22 | Complete |
+| MIG-02 | Phase 22 | Complete |
+| MIG-03 | Phase 22 | Complete |
+| MIG-04 | Phase 22 | Complete |
+| MIG-05 | Phase 22 | Complete |
+| MIG-06 | Phase 22 | Complete |
 | DOC-01 | Phase 23 | Pending |
-| DOC-02 | Phase 23 | Pending |
+| DOC-02 | Phase 23 → Phase 22 (early) | Complete |
 | DOC-03 | Phase 23 | Pending |
 | DOC-04 | Phase 23 | Pending |
 
