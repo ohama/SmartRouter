@@ -656,7 +656,7 @@ One row per request. Daily rotation by filename. Auto-pruned after `DecisionLog.
 
 | Field | Meaning |
 |---|---|
-| `schema_version` | Currently `1`. All v2.0 additions (Phase 17–19) are additive enum values on existing string fields — no field removals, no type changes. Readers ignoring unknown `routing_reason`/`routing_algorithm` values stay forward-compatible. |
+| `schema_version` | Currently `1`. All v2.0–v2.1 additions (Phase 17–22) are additive enum values on existing string fields — no field removals, no type changes. Readers ignoring unknown `routing_reason`/`routing_algorithm` values stay forward-compatible. |
 | `correlation_id` | UUID; sticky for canary bucketing; joinable with operational log + trace log |
 | `target` | `Qwen35B` or `Qwen122B` — model that actually served |
 | `routing_reason` | `explicit_model:{alias}`, `explicit_task:{task}`, `default`, `ml`, `fallback_to_35b` (122B unreachable), `fallback_to_122b` (35B response quality-bad), `hard_rule` (Phase 17: keyword-driven Stage 0 → 122B), `sticky_to_122b` (Phase 18: session previously routed to 122B → continuation also routes to 122B), `self_route` (Phase 19: Stage 4 35B self-classify produced a verdict — SAFE → routed to 35B; UNSAFE → routed to 122B; distinguish by inspecting `target` in the same row), or compounds (`ml;upstream_error`, `ml;cancelled`, `ml;stream_error`). `schema_version=1` unchanged — all v2.0 values are additive enum values. |
