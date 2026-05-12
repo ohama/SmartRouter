@@ -12,17 +12,17 @@ See: .planning/MILESTONES.md (v1.3 + v2.0 entries; reverse chronological)
 ## Current Position
 
 Milestone: v2.1 Hermes-less Session Tiering — STARTED 2026-05-12
-Phase: Phase 22 — Cascade Rewire + Migration + OBS (IN PROGRESS)
-Plan: 22-02 complete (2/3 plans in Phase 22)
-Status: Plan 22-02 complete. Next action: execute Plan 22-03 (tests + CHANGELOG + README §7).
-Last activity: 2026-05-12 — Plan 22-02 executed (4 tasks, 4 commits: cfa5c91, c966d70, 0af61b6, 9806ebd). HMRS-02 IP+UA fingerprint fully deleted. 180 passing tests (188 − 8 FP-* tests).
+Phase: Phase 23 — Documentation (NEXT)
+Plan: 22-03 complete (3/3 plans in Phase 22) — Phase 22 COMPLETE
+Status: Phase 22 fully complete. Next action: execute Phase 23 Plan 23-01 (README §10 rewrite + §8 counter rows + §9.1 review).
+Last activity: 2026-05-12 — Plan 22-03 executed (4 tasks, 4 commits: b8d1796, 1842491, 938c8ac, docs). 6 new SessionKeyCascadeTests. 186 passing tests + 18 ignored + 0 failed. Phase 22 closed.
 
 **v2.1 phase summary:**
 
 | Phase | Goal | Requirements | Plans | Status |
 |-------|------|--------------|-------|--------|
 | 21 — HSP + CFP Primitives | New BCL-only extraction adapters with unit tests | HSP-01..04, CFP-01..04 (8) | 2 | COMPLETE (21-01 ✓, 21-02 ✓) |
-| 22 — Cascade Rewire + Migration + OBS | CorrelationMiddleware 3-tier cascade; HMRS-02 deleted; stats counters; smoke script updated | TIER-01..05, OBS-01, MIG-01..06 (12) | 3 | In progress (22-01 ✓, 22-02 ✓) |
+| 22 — Cascade Rewire + Migration + OBS | CorrelationMiddleware 3-tier cascade; HMRS-02 deleted; stats counters; smoke script updated | TIER-01..05, OBS-01, MIG-01..06 (12) | 3 | COMPLETE (22-01 ✓, 22-02 ✓, 22-03 ✓) |
 | 23 — Documentation | README §10 rewrite; §7 row removal; §8 counter rows; §9.1 review | DOC-01..04 (4) | 1 | Not started |
 
 **Cumulative project state (post-v2.0):**
@@ -32,7 +32,7 @@ Last activity: 2026-05-12 — Plan 22-02 executed (4 tasks, 4 commits: cfa5c91, 
 | v1.0–v1.3 | 1-16 | 62 | 113 + 16 ignored | `v1.3.0` | 2026-05-11 |
 | v2.0 | 17-20 | 12 | 175 + 18 ignored | `milestone-v2.0` | 2026-05-12 |
 
-**Test baseline:** 180 passed + 18 ignored + 0 failed (188 − 8 FP-* tests deleted in Plan 22-02; new SessionKeyCascadeTests land in 22-03).
+**Test baseline:** 186 passed + 18 ignored + 0 failed (180 from Plan 22-02 + 6 new SessionKeyCascadeTests added in Plan 22-03).
 
 **Architecture invariants preserved (all 20 phases):**
 - ARCH-01: `SmartRouter.Core` BCL-only (no Serilog / HttpClient / Microsoft.ML / ASP.NET Core)
@@ -77,6 +77,7 @@ Full decision logs are in PROJECT.md Key Decisions table. Milestone-level summar
 - **Plan 21-02** (2026-05-12): `compute : RouterRequest -> string` (no option wrapper — empty Messages yields hash of "|||"); per-call `use sha = SHA256.Create()` for thread-safety; `Array.map (sprintf "%02x")` for lowercase hex (NOT `Convert.ToHexString` which is uppercase). Case (b) uniqueness split into 2 testCases yielding 7 new tests (188 total, not 187 as predicted).
 - **Plan 22-01** (2026-05-12): `resolveSessionCascade` must be placed BEFORE `let handler` (not before `let mapEndpoints`) — F# forward-reference. `open SmartRouter.Cli.Adapters.HermesSessionExtract` brings `extractFromSystemPrompt` into direct scope but NOT the module name as qualifier; used fully-qualified `SmartRouter.Cli.Adapters.HermesSessionExtract.extractFromSystemPrompt` to avoid ambiguity. Unconditional DI registration for ISessionCascadeStats in both pipelines (no NoOp pattern needed). StatsWire fields appended at end for stable JSON ordering.
 - **Plan 22-02** (2026-05-12): Commit order reversed from requirement numbering (MIG-06 → MIG-03 → MIG-02 → MIG-01) so every intermediate state builds. MIG-03 before MIG-01 because HermesFingerprintTests.fs used SessionOptions.FingerprintEnabled — deleting field first breaks test compile. MIG-02 batches CorrelationMiddleware + Program.fs + LoggingTests in ONE commit (signature change breaks both callers). Annotated tag chosen for v2.0-network-fingerprint (not lightweight) per v2.0 milestone formality. Operator appsettings.json retaining stale FingerprintEnabled key is safe (CLIMutable silently ignores unknown keys).
+- **Plan 22-03** (2026-05-12): 6 test cases (TC-1..TC-6), not 8 as RESEARCH §10 projected — TC-7 (ml-mode-dormant) skipped (cascade is mode-independent at helper level); TC-8 merged into TC-6. CHANGELOG sub-section order: ### Removed first (matches v2.1 narrative). README §7 row removal bundled with CHANGELOG commit (Task 3). minimalConfigPairs uses full StickyEscalationTests.fs list (proven with configureRequestPipeline).
 
 Plan-level execution decisions archived per-phase in `.planning/milestones/v2.0-phases/*/`.
 
@@ -107,12 +108,13 @@ Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modif
 
 ### Blockers/Concerns
 
-- None blocking Phase 21 start.
+- None blocking Phase 23 start.
 - Carry-over from v1.3: ModelsTests.fs IEmbedder errors (non-blocking; tracked above).
 - v2.0 SC-1/SC-2 live-rig acceptance: deferred to operator manual run; not a blocker for v2.1.
+- README §10 still references FingerprintEnabled (§10 lines 824, 836, 848) — intentional; §10 rewrite is Phase 23 Plan 23-01 (DOC-01).
 
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: Plan 22-02 complete (4/4 tasks, 4 commits: cfa5c91, c966d70, 0af61b6, 9806ebd). HMRS-02 IP+UA fingerprint fully deleted. 180 + 18 ignored + 0 failed. Archive tag v2.0-network-fingerprint + branch archive/v2.0-network-fingerprint created.
-Resume file: None. Next action: execute Plan 22-03 (SessionKeyCascadeTests + CHANGELOG + README §7 row removal).
+Stopped at: Plan 22-03 complete (4/4 tasks, 4 commits: b8d1796, 1842491, 938c8ac, docs). Phase 22 COMPLETE. 186 + 18 ignored + 0 failed. SessionKeyCascadeTests (6 tests, TC-1..TC-6), CHANGELOG [2.1.0], README §7 row removed.
+Resume file: None. Next action: execute Phase 23 Plan 23-01 (README §10 rewrite + §8 /stats counter rows + §9.1 review).
