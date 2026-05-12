@@ -5,6 +5,85 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-05-13
+
+v2.2 milestone — Operator Fail-Fast on Port Conflict. Single-phase minimal
+milestone scoped from operator pain captured during v2.1 archive: smart-router
+previously failed ungracefully with a raw `SocketException` /
+`AddressAlreadyInUse` stacktrace when `:4000` was already bound at startup,
+trapping operators in launchd KeepAlive retry loops and risking silent
+misrouting when a different process answered Hermes Agent on `:4000`. v2.2
+adds a deterministic startup probe that intercepts the conflict before Kestrel
+binds and emits a 4-line actionable error to stderr.
+
+### Added
+
+- **`SmartRouter.Cli.Adapters.PortProbe.tryBind : int -> IPAddress -> Result<unit, PortConflictError>`**.
+  Synchronous BCL helper (`new TcpListener(addr, port)` → `Start()` →
+  immediate `Stop()` → `Ok ()`) that returns `Error { Port; Address; Reason }`
+  when the OS rejects the bind. Catches all `SocketException` cases (not just
+  `AddressAlreadyInUse`) so any bind-rejection — permission denied, address
+  not available — produces a clean operator-facing message instead of a
+  stacktrace. Lives in `src/SmartRouter.Cli/Adapters/PortProbe.fs` (ARCH-01:
+  `System.Net.Sockets` is BCL but the adapter placement is the invariant —
+  `SmartRouter.Core` untouched).
+- **Startup port-conflict detection** in `src/SmartRouter.Cli/Program.fs`
+  (line 287, between `WebApplication.CreateBuilder` and `builder.Build()`).
+  Resolves the listen port from the merged `Kestrel:Endpoints:Http:Url`
+  configuration so the existing `--port` CLI override automatically composes,
+  gates on `IPAddress.Loopback` only (non-loopback URLs are skipped with
+  `Log.Debug`; smart-router is loopback-only by constraint), and runs the
+  probe BEFORE Kestrel attempts its own bind. The probe is wired into the
+  main Kestrel branch only — `--retrain` and other no-port-bind branches are
+  unaffected.
+- **4-line operator-facing stderr error block** on conflict, via `eprintfn`
+  (OBS-04 stream separation — `Console.Error` not Serilog, so the message
+  appears even if Serilog has not initialized or has a misconfigured sink),
+  followed by `Environment.Exit(1)`. The block names the actual conflicting
+  port, suggests `lsof -iTCP:{port} -sTCP:LISTEN -n -P` for investigation,
+  and `launchctl unload ~/Library/LaunchAgents/com.ohama.smartrouter.plist`
+  for stuck launchd instances. Exits within ~500ms — well before Kestrel
+  would otherwise throw `AddressAlreadyInUse` with a 30-line stacktrace.
+- **`tests/SmartRouter.Tests/PortProbeTests.fs`** — 4 Expecto testCases
+  covering (a) `tryBind` `Ok` on free port; (b) `tryBind` `Error` when a
+  test pre-stages a `TcpListener` on the same port; (c) the `Error` record's
+  `Port` field matches the probed port; (d) probe completes in <100ms.
+  Wired into both `tests/SmartRouter.Tests/SmartRouter.Tests.fsproj` `<Compile>`
+  entries and `tests/SmartRouter.Tests/RouterTests.fs` `rootTests` list per
+  ARCH testing invariant (explicit registration; never auto-discovery).
+- **README §13 Troubleshooting recipe** — new "Port 4000 is already in use"
+  entry as the first sub-section of §13. Operators grepping either the
+  runtime error string or the symptom phrase both find the recipe. Diagnosis
+  + resolution commands match the runtime stderr block verbatim.
+
+### Changed
+
+- **Test baseline:** 187 passed → 191 passed (+4 PROBE-04 testCases).
+  Total: 191 passed + 18 ignored + 0 failed.
+- **Architecture invariants line in STATE.md** updated from "preserved across
+  all 24 phases" to "preserved across all 25 phases". ARCH-01 (Core BCL-only),
+  ARCH-02 (`task {}` only), DecisionLog `schema_version=1`, per-task atomic
+  commits, and Expecto explicit `rootTests` all intact across the v2.2 work.
+
+### Notes
+
+- **No behavior change on healthy startup.** When `:4000` is free, the probe
+  is invisible: it binds and releases in <10ms before control passes to
+  Kestrel, which then binds the same port as before. Existing operator
+  workflows, `dotnet run`, launchd plist, and `~/llm-system/services/`
+  deployment patterns are unchanged.
+- **One auto-fix during execution:** F# compiler required
+  `new TcpListener(addr, port)` (FS0760 warning-as-error for IDisposable
+  construction without `new`). Fixed pre-commit; no behavior change.
+- **TD-5 (`PITFALL-10` timing race in `QueueTests.fs`) did not manifest**
+  during Phase 25 verifier or final post-completion test runs. The pre-existing
+  flake remains tracked but was quiet this session. Production logic in
+  `QueueDispatcher` is unchanged; v2.2 did not touch concurrency code.
+- **Carry-over deferred items** (unchanged from v2.1): TD-2 (`ModelsTests.fs`
+  IEmbedder), TD-3 (`configureServices` alias removal, blocked on TD-2),
+  TD-4 (operator live-rig smoke run). HMRS-FUTURE-01, MODE-FUTURE-01,
+  SPEC-01..03, DRT-01, DB-01/02 also remain deferred.
+
 ## [2.1.1] - 2026-05-12
 
 Phase 23 documentation pass + Phase 24 TIER-04 gap closure. Closes the v2.1
