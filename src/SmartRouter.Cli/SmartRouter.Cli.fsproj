@@ -27,6 +27,7 @@
     <Compile Include="Adapters/SessionStore.fs" />
     <!-- Phase 21: HSP + CFP extraction primitives (Cli adapter, BCL-only, no DI wiring yet) -->
     <Compile Include="Adapters/HermesSessionExtract.fs" />
+    <Compile Include="Adapters/ContentFingerprint.fs" />
     <Compile Include="Adapters/DecisionLogger.fs" />
     <Compile Include="Adapters/SelfRouter.fs" />          <!-- Phase 19: self-classify port + LRU cache + ISelfRouterStats -->
     <Compile Include="Adapters/DecisionLogWriter.fs" />
