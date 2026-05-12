@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/smoke-hermes-session.sh — verify X-Session-Id session propagation end-to-end.
+# scripts/smoke-hermes-session.sh — verify X-Session-Id sticky escalation end-to-end (Tier 1).
 #
 # Assumes smart-router is ALREADY RUNNING on http://127.0.0.1:4000.
 # Does NOT start or stop the router.
@@ -21,9 +21,12 @@
 # - Must run from the router's working directory (relative path to logs/decisions/).
 # - Brief sleep after each request lets the channel-buffered DecisionLogWriter flush.
 # - Does NOT require Hermes Agent — curl drives both requests directly.
-# - For the fingerprint fallback path (Routing.Session.FingerprintEnabled=true), this
-#   script tests the explicit X-Session-Id path. The fingerprint path is covered by the
-#   unit tests in tests/SmartRouter.Tests/HermesFingerprintTests.fs (FP-3..FP-8).
+# - Tier 1 (X-Session-Id header) is exercised here. Tier 2 (Hermes Session ID line
+#   in the system prompt; --pass-session-id) and Tier 3 (content fingerprint) are
+#   covered by unit tests in tests/SmartRouter.Tests/SessionKeyCascadeTests.fs
+#   (TC-1..TC-6, Phase 22 Plan 22-03). The smoke script proves end-to-end sticky
+#   continuity at the operator level for Tier 1; Tier 2/3 are deterministic
+#   transformations covered at the test layer.
 
 set -euo pipefail
 
