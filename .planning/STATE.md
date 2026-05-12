@@ -7,15 +7,15 @@ See: .planning/MILESTONES.md (v1.3 + v2.0 + v2.1 entries; reverse chronological)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.2 Operator Fail-Fast on Port Conflict — minimal single-phase milestone (Phase 25). Phase 25 not yet planned; run `/gsd:plan-phase 25` (or `/gsd:discuss-phase 25` first).
+**Current focus:** v2.2 Operator Fail-Fast on Port Conflict — Phase 25 complete. Milestone ready to tag.
 
 ## Current Position
 
-Milestone: v2.2 Operator Fail-Fast on Port Conflict — In progress (defining requirements complete; roadmap created)
-Phase: Phase 25 — Port-conflict fail-fast at startup — NEXT
-Plan: Not started (Phase 25 single plan, 25-01-PLAN.md TBD)
-Status: Milestone scoped 2026-05-12. 5 requirements (PROBE-01..05) mapped to Phase 25. Research skipped per `/gsd:new-milestone` Phase 7 (.NET TCP probe is standard; scope is mechanical). Next action: `/gsd:plan-phase 25` (or `/gsd:discuss-phase 25` first for additional context clarification).
-Last activity: 2026-05-12 — `/gsd:new-milestone` ran. v2.2 scoped as minimal single-phase milestone from todo `2026-05-12-fail-fast-on-port-conflict-at-startup.md`. PROJECT.md updated, REQUIREMENTS.md + ROADMAP.md created.
+Milestone: v2.2 Operator Fail-Fast on Port Conflict — Phase 25 complete
+Phase: Phase 25 — Port-conflict fail-fast at startup — COMPLETE
+Plan: 25-01 complete (1/1 plans complete)
+Status: All 5 PROBE requirements shipped. Test baseline 187 → 191. README §13 updated. v2.2 ready to tag.
+Last activity: 2026-05-12 — Completed 25-01-PLAN.md (4 tasks: PortProbe adapter, tests, Program.fs wire, README recipe)
 
 ## Cumulative Project State
 
@@ -24,9 +24,9 @@ Last activity: 2026-05-12 — `/gsd:new-milestone` ran. v2.2 scoped as minimal s
 | v1.0–v1.3 | 1-16 | 62 | 113 + 16 ignored | `v1.3.0` / `milestone-v1.3` | 2026-05-11 |
 | v2.0 | 17-20 | 12 | 175 + 18 ignored | `milestone-v2.0` | 2026-05-12 |
 | v2.1 | 21-24 | 7 (2+3+1+1) | 187 + 18 ignored | `v2.1.0` / `milestone-v2.1` | 2026-05-12 |
-| v2.2 | 25 | 0/1 | TBD | — | In progress |
+| v2.2 | 25 | 1/1 | 191 + 18 ignored | — | Ready to tag |
 
-**Test baseline:** 187 passed + 18 ignored + 0 failed (as of v2.1 close).
+**Test baseline:** 191 passed + 18 ignored + 0 failed (as of Phase 25 / v2.2; +4 PROBE-04 tests).
 
 ## Architecture Invariants (preserved across all 24 phases)
 
@@ -66,5 +66,5 @@ Last activity: 2026-05-12 — `/gsd:new-milestone` ran. v2.2 scoped as minimal s
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: v2.1 milestone archived. ROADMAP.md + REQUIREMENTS.md deleted (fresh for next milestone). All phases 21-24 moved to `.planning/milestones/v2.1-phases/`. Audit moved to `.planning/milestones/v2.1-MILESTONE-AUDIT.md`. MILESTONES.md + PROJECT.md updated. `milestone-v2.1` tag created.
-Resume file: None. Next action: `/gsd:new-milestone` to scope and define the next version.
+Stopped at: Completed 25-01-PLAN.md. Phase 25 all plans done. v2.2 ready to tag.
+Resume file: None. Next action: tag v2.2.0 and archive Phase 25 artifacts.
