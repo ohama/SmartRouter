@@ -575,7 +575,10 @@ Deduplicated; first-seen wins on duplicate `id`. If both upstreams down: `200 + 
   "quality_check_hits_finish_reason": 4,
   "quality_check_hits_length": 12,
   "quality_check_hits_entropy": 1,
-  "quality_check_hits_keyword": 7
+  "quality_check_hits_keyword": 7,
+  "session_extraction_source_header": 12,
+  "session_extraction_source_sysprompt": 85,
+  "session_extraction_source_content": 203
 }
 ```
 
@@ -617,6 +620,24 @@ curl -s http://127.0.0.1:4000/stats | \
 # Observe self-classify cache effectiveness
 curl -s http://127.0.0.1:4000/stats | \
   jq '{selfrouter_cache_hits, selfrouter_cache_misses, selfrouter_call_count, selfrouter_skipped}'
+```
+
+**Phase 22 — session cascade counters** (all `int64`, process-lifetime; exactly one counter
+increments per request regardless of `Routing.Mode`):
+
+| Field | Description |
+|---|---|
+| `session_extraction_source_header` | Requests where `X-Session-Id` HTTP header was present and non-empty (Tier 1). Set by direct-injection clients (curl, Graphify, custom tooling) — NOT by stock Hermes `--pass-session-id` (which fires Tier 2). |
+| `session_extraction_source_sysprompt` | Requests where header was absent but a `Session ID: <id>` line was found in the first system message (Tier 2). Indicates Hermes `--pass-session-id` is active. |
+| `session_extraction_source_content` | Requests that fell through to SHA-256 content fingerprint — `SHA-256(system + "|||" + firstUser)[..15]` (Tier 3). Indicates Hermes is running without `--pass-session-id`. |
+
+```bash
+# Monitor session cascade tier distribution (Phase 22)
+curl -s http://localhost:4000/stats | jq '{
+  header: .session_extraction_source_header,
+  sysprompt: .session_extraction_source_sysprompt,
+  content: .session_extraction_source_content
+}'
 ```
 
 ### GET /canary
