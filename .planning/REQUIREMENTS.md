@@ -79,11 +79,11 @@ Assigned by roadmapper 2026-05-12.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PROBE-01 | Phase 25 | Pending |
-| PROBE-02 | Phase 25 | Pending |
-| PROBE-03 | Phase 25 | Pending |
-| PROBE-04 | Phase 25 | Pending |
-| PROBE-05 | Phase 25 | Pending |
+| PROBE-01 | Phase 25 | Complete |
+| PROBE-02 | Phase 25 | Complete |
+| PROBE-03 | Phase 25 | Complete |
+| PROBE-04 | Phase 25 | Complete |
+| PROBE-05 | Phase 25 | Complete |
 
 **Coverage:**
 - v2.2 requirements: 5 total (5 PROBE)

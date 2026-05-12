@@ -22,7 +22,7 @@ Other deferred items (TD-2/3/4/5, HMRS-FUTURE-01, MODE-FUTURE-01, SPEC-01..03, D
 - Decimal phases (25.1, 25.2): Urgent insertions — none used yet
 - v2.2 continues numbering from v2.1's end at Phase 24
 
-- [ ] **Phase 25: Port-conflict fail-fast at startup** — New `SmartRouter.Cli.Adapters.PortProbe.tryBind` (TcpListener.Start probe → Result<unit, PortConflictError>) wired into `Program.fs` before `app.Run()`; loopback-only; on Error emits actionable stderr message (port + lsof + launchctl unload) and Environment.Exit(1) BEFORE Kestrel attempts bind. PortProbeTests.fs Expecto module covers Ok / port-already-in-use / Error.Port field / <100ms. README §13 gets new "Port 4000 already in use" recipe (CLAUDE.md README-sync §13 trigger).
+- [x] **Phase 25: Port-conflict fail-fast at startup** ✓ — `SmartRouter.Cli.Adapters.PortProbe.tryBind` (36 lines; synchronous BCL `TcpListener` + `SocketException` catch → `Result<unit, PortConflictError>`) wired at `Program.fs:287` (between `WebApplication.CreateBuilder` line 235 and `builder.Build()` line 307; outside `--retrain` branch at line 233); 4× `eprintfn` + `Environment.Exit(1)` on Error (OBS-04 stream separation: no Serilog on that path); reads merged `Kestrel:Endpoints:Http:Url` so existing `--port` CLI override works automatically; loopback-only via `isLoopbackHost` (non-loopback URLs skip with `Log.Debug`). 4 PROBE-04 testCases in new `PortProbeTests.fs` (free-port Ok, in-use Error, Error.Port match, <100ms timing) wired into both fsproj and `RouterTests.fs:46 rootTests`. README §13 Troubleshooting recipe inserted at lines 1001/1006 (verbatim error string + lsof + launchctl unload). 1 plan / 4 task commits + 1 metadata commit (0a6a212, 699e3ba, 3b1a4d9, b3f2ed9, 51118ab). Test baseline 187 → 191 passed. Runtime smoke verified: staged TcpListener on :18888, `dotnet run -- --port 18888` produced exact 4-line block + exit 1 with no Kestrel output. All 8 must-haves verified by gsd-verifier. One auto-fixed deviation: `new TcpListener(addr, port)` syntax required (F# FS0760 warning-as-error).
 
 ## Phase Details
 
@@ -49,7 +49,7 @@ Other deferred items (TD-2/3/4/5, HMRS-FUTURE-01, MODE-FUTURE-01, SPEC-01..03, D
 **Plans**: 1 plan (estimated)
 
 Plans:
-- [ ] 25-01-PLAN.md — PortProbe adapter + Program.fs wire + PortProbeTests + README §13 (PROBE-01..05)
+- [x] 25-01-PLAN.md — PortProbe adapter + Program.fs wire + PortProbeTests + README §13 (PROBE-01..05) ✓ 2026-05-12
 
 ---
 
@@ -57,7 +57,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 25. Port-conflict fail-fast at startup | v2.2 | 0/1 | Not Started | — |
+| 25. Port-conflict fail-fast at startup | v2.2 | 1/1 | ✓ Complete | 2026-05-12 |
 
 ## Coverage
 

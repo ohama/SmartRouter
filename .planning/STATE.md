@@ -28,7 +28,7 @@ Last activity: 2026-05-12 — Completed 25-01-PLAN.md (4 tasks: PortProbe adapte
 
 **Test baseline:** 191 passed + 18 ignored + 0 failed (as of Phase 25 / v2.2; +4 PROBE-04 tests).
 
-## Architecture Invariants (preserved across all 24 phases)
+## Architecture Invariants (preserved across all 25 phases)
 
 - **ARCH-01:** `SmartRouter.Core` BCL-only (no Serilog / HttpClient / Microsoft.ML / ASP.NET Core)
 - **ARCH-02:** `task {}` only (no `async {}`)
