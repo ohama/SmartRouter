@@ -7,15 +7,15 @@ See: .planning/MILESTONES.md (v1.3 + v2.0 entries; reverse chronological)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.1 Hermes-less Session Tiering — ROADMAP created 2026-05-12.
+**Current focus:** v2.1 Hermes-less Session Tiering — COMPLETE 2026-05-12.
 
 ## Current Position
 
-Milestone: v2.1 Hermes-less Session Tiering — STARTED 2026-05-12
-Phase: Phase 23 — Documentation (NEXT)
-Plan: 22-03 complete (3/3 plans in Phase 22) — Phase 22 COMPLETE
-Status: Phase 22 fully complete. Next action: execute Phase 23 Plan 23-01 (README §10 rewrite + §8 counter rows + §9.1 review).
-Last activity: 2026-05-12 — Plan 22-03 executed (4 tasks, 4 commits: b8d1796, 1842491, 938c8ac, docs). 6 new SessionKeyCascadeTests. 186 passing tests + 18 ignored + 0 failed. Phase 22 closed.
+Milestone: v2.1 Hermes-less Session Tiering — COMPLETE 2026-05-12
+Phase: Phase 23 — Documentation — COMPLETE (1/1 plans)
+Plan: 23-01 complete (1/1 plans in Phase 23) — Phase 23 COMPLETE — v2.1 MILESTONE CLOSED
+Status: v2.1 fully complete. All 3 phases, 6 plans shipped. README synced to v2.1 behavior. Ready for `/gsd:audit-milestone` and `/gsd:complete-milestone`.
+Last activity: 2026-05-12 — Plan 23-01 executed (4 tasks, 3 content commits + 1 metadata: 9d9f525, 157c49f, c1635fa). README §10 rewritten for v2.1 three-tier cascade; §8 three counter rows added; §9.1 phase-range bumped to 17–22. Phase 23 closed. v2.1 milestone closed.
 
 **v2.1 phase summary:**
 
@@ -23,7 +23,7 @@ Last activity: 2026-05-12 — Plan 22-03 executed (4 tasks, 4 commits: b8d1796, 
 |-------|------|--------------|-------|--------|
 | 21 — HSP + CFP Primitives | New BCL-only extraction adapters with unit tests | HSP-01..04, CFP-01..04 (8) | 2 | COMPLETE (21-01 ✓, 21-02 ✓) |
 | 22 — Cascade Rewire + Migration + OBS | CorrelationMiddleware 3-tier cascade; HMRS-02 deleted; stats counters; smoke script updated | TIER-01..05, OBS-01, MIG-01..06 (12) | 3 | COMPLETE (22-01 ✓, 22-02 ✓, 22-03 ✓) |
-| 23 — Documentation | README §10 rewrite; §7 row removal; §8 counter rows; §9.1 review | DOC-01..04 (4) | 1 | Not started |
+| 23 — Documentation | README §10 rewrite; §7 row removal; §8 counter rows; §9.1 review | DOC-01..04 (4) | 1 | COMPLETE (23-01 ✓) |
 
 **Cumulative project state (post-v2.0):**
 
@@ -108,13 +108,18 @@ Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modif
 
 ### Blockers/Concerns
 
-- None blocking Phase 23 start.
+- None. v2.1 milestone complete.
 - Carry-over from v1.3: ModelsTests.fs IEmbedder errors (non-blocking; tracked above).
-- v2.0 SC-1/SC-2 live-rig acceptance: deferred to operator manual run; not a blocker for v2.1.
-- README §10 still references FingerprintEnabled (§10 lines 824, 836, 848) — intentional; §10 rewrite is Phase 23 Plan 23-01 (DOC-01).
+- v2.0 SC-1/SC-2 live-rig acceptance: deferred to operator manual run; not a blocker for next milestone.
+
+### Plan 23-01 Decisions
+
+- **§9.1 cosmetic bump applied:** "Phase 17–19" → "Phase 17–22" (low cost, improves accuracy).
+- **Tier 1 §8 description corrected:** Explicitly states stock Hermes --pass-session-id fires Tier 2 NOT Tier 1 (per RESEARCH Pitfall 5; keeps §8 consistent with §10).
+- **Smoke test reference kept in §10:** Script updated in commit 1842491 (Phase 22-02); still accurate.
 
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: Plan 22-03 complete (4/4 tasks, 4 commits: b8d1796, 1842491, 938c8ac, docs). Phase 22 COMPLETE. 186 + 18 ignored + 0 failed. SessionKeyCascadeTests (6 tests, TC-1..TC-6), CHANGELOG [2.1.0], README §7 row removed.
-Resume file: None. Next action: execute Phase 23 Plan 23-01 (README §10 rewrite + §8 /stats counter rows + §9.1 review).
+Stopped at: Plan 23-01 complete (4/4 tasks, 3 content commits + 1 metadata: 9d9f525, 157c49f, c1635fa + docs). Phase 23 COMPLETE. v2.1 milestone CLOSED. README §10 rewritten for three-tier cascade; §8 three counter rows added; §9.1 phase-range bumped.
+Resume file: None. Next action: `/gsd:audit-milestone` and `/gsd:complete-milestone` to archive v2.1.
