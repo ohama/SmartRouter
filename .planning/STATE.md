@@ -7,15 +7,23 @@ See: .planning/MILESTONES.md (v1.3 + v2.0 entries; reverse chronological)
 
 **Core value:** Route every request to the model best suited to it — fast 35B for simple work, expensive 122B only when the task or signals justify it — while protecting 122B from concurrent overload.
 
-**Current focus:** v2.1 Hermes-less Session Tiering — STARTED 2026-05-12. Defining requirements.
+**Current focus:** v2.1 Hermes-less Session Tiering — ROADMAP created 2026-05-12.
 
 ## Current Position
 
 Milestone: v2.1 Hermes-less Session Tiering — STARTED 2026-05-12
-Phase: Not started (defining requirements)
+Phase: Phase 21 — HSP + CFP Extraction Primitives (not yet started)
 Plan: —
-Status: Scope locked — Tier 2 (system-prompt parse) + Tier 3 (content fingerprint) replace v2.0 IP+UA fingerprint; X-Session-Id header path unchanged. Both Routing.Mode values use the new tiers. Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modification.md`.
-Last activity: 2026-05-12 — PROJECT.md updated with v2.1 milestone goals; STATE.md reset; next step is research decision then REQUIREMENTS.md.
+Status: ROADMAP created. 3 phases (21-23), 6 plans, 24/24 requirements mapped. Next action: `/gsd:plan-phase 21`.
+Last activity: 2026-05-12 — REQUIREMENTS.md defined (24 reqs); ROADMAP.md created (3 phases: 21 adapters, 22 cascade+migration, 23 docs); STATE.md updated to Phase 21.
+
+**v2.1 phase summary:**
+
+| Phase | Goal | Requirements | Plans | Status |
+|-------|------|--------------|-------|--------|
+| 21 — HSP + CFP Primitives | New BCL-only extraction adapters with unit tests | HSP-01..04, CFP-01..04 (8) | 2 | Not started |
+| 22 — Cascade Rewire + Migration + OBS | CorrelationMiddleware 3-tier cascade; HMRS-02 deleted; stats counters; smoke script updated | TIER-01..05, OBS-01, MIG-01..06 (12) | 3 | Not started |
+| 23 — Documentation | README §10 rewrite; §7 row removal; §8 counter rows; §9.1 review | DOC-01..04 (4) | 1 | Not started |
 
 **Cumulative project state (post-v2.0):**
 
@@ -64,6 +72,7 @@ Full decision logs are in PROJECT.md Key Decisions table. Milestone-level summar
 
 - **v1.3** (shipped 2026-05-11): Hexagonal F# Core BCL-only; `task {}` only; bge-m3 int8 multilingual ML; quality fallback + judge OPT-IN; heuristic retirement Phase 12.
 - **v2.0** (shipped 2026-05-12): Selfrouting primary (ML dormant); 35B self-route (NOT 7B separate); Hard Rules keyword-only (NOT full Heuristic.fs revival); Hermes ABOVE smart-router with session_id propagation downward; streaming-skip for self-classify (SR-06); Hard Rules wins over explicit override (HR-06).
+- **v2.1** (roadmap 2026-05-12): HermesSessionExtract + ContentFingerprint in `SmartRouter.Cli.Adapters` (ARCH-01); Tier 2/3 resolve post-body-parse in ChatCompletions.fs scope (TIER-03); `archive/v2.0-network-fingerprint` tag before deletion (MIG-06); schema_version=1 unchanged (DOC-04).
 
 Plan-level execution decisions archived per-phase in `.planning/milestones/v2.0-phases/*/`.
 
@@ -94,12 +103,12 @@ Source doc: `~/projs/smart-router-distillation/idea/hermes-session-without-modif
 
 ### Blockers/Concerns
 
-- None blocking next milestone start.
+- None blocking Phase 21 start.
 - Carry-over from v1.3: ModelsTests.fs IEmbedder errors (non-blocking; tracked above).
-- v2.0 SC-1/SC-2 live-rig acceptance: deferred to operator manual run; not a blocker for next milestone scoping.
+- v2.0 SC-1/SC-2 live-rig acceptance: deferred to operator manual run; not a blocker for v2.1.
 
 ## Session Continuity
 
 Last session: 2026-05-12
-Stopped at: v2.0 milestone archived. ROADMAP + REQUIREMENTS + 4 phase dirs + research moved to `.planning/milestones/v2.0-*`. MILESTONES.md prepended with v2.0 entry; PROJECT.md evolved (v2.0 → Validated; Key Decisions outcomes ✓ Good); STATE.md reset.
-Resume file: None. Next action: `/gsd:new-milestone` after scope decision.
+Stopped at: v2.1 ROADMAP.md created (3 phases, 6 plans, 24/24 reqs mapped). STATE.md updated to Phase 21. REQUIREMENTS.md traceability table filled.
+Resume file: None. Next action: `/gsd:plan-phase 21`.

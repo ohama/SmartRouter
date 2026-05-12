@@ -97,39 +97,39 @@ Explicitly excluded for v2.1.
 
 ## Traceability
 
-Filled by roadmapper during ROADMAP.md creation.
+Assigned by roadmapper 2026-05-12.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| HSP-01 | TBD | Pending |
-| HSP-02 | TBD | Pending |
-| HSP-03 | TBD | Pending |
-| HSP-04 | TBD | Pending |
-| CFP-01 | TBD | Pending |
-| CFP-02 | TBD | Pending |
-| CFP-03 | TBD | Pending |
-| CFP-04 | TBD | Pending |
-| TIER-01 | TBD | Pending |
-| TIER-02 | TBD | Pending |
-| TIER-03 | TBD | Pending |
-| TIER-04 | TBD | Pending |
-| TIER-05 | TBD | Pending |
-| OBS-01 | TBD | Pending |
-| MIG-01 | TBD | Pending |
-| MIG-02 | TBD | Pending |
-| MIG-03 | TBD | Pending |
-| MIG-04 | TBD | Pending |
-| MIG-05 | TBD | Pending |
-| MIG-06 | TBD | Pending |
-| DOC-01 | TBD | Pending |
-| DOC-02 | TBD | Pending |
-| DOC-03 | TBD | Pending |
-| DOC-04 | TBD | Pending |
+| HSP-01 | Phase 21 | Pending |
+| HSP-02 | Phase 21 | Pending |
+| HSP-03 | Phase 21 | Pending |
+| HSP-04 | Phase 21 | Pending |
+| CFP-01 | Phase 21 | Pending |
+| CFP-02 | Phase 21 | Pending |
+| CFP-03 | Phase 21 | Pending |
+| CFP-04 | Phase 21 | Pending |
+| TIER-01 | Phase 22 | Pending |
+| TIER-02 | Phase 22 | Pending |
+| TIER-03 | Phase 22 | Pending |
+| TIER-04 | Phase 22 | Pending |
+| TIER-05 | Phase 22 | Pending |
+| OBS-01 | Phase 22 | Pending |
+| MIG-01 | Phase 22 | Pending |
+| MIG-02 | Phase 22 | Pending |
+| MIG-03 | Phase 22 | Pending |
+| MIG-04 | Phase 22 | Pending |
+| MIG-05 | Phase 22 | Pending |
+| MIG-06 | Phase 22 | Pending |
+| DOC-01 | Phase 23 | Pending |
+| DOC-02 | Phase 23 | Pending |
+| DOC-03 | Phase 23 | Pending |
+| DOC-04 | Phase 23 | Pending |
 
 **Coverage:**
 - v2.1 requirements: 24 total (4 HSP + 4 CFP + 5 TIER + 1 OBS + 6 MIG + 4 DOC)
-- Mapped to phases: 0 (TBD — roadmapper will assign)
-- Unmapped: 24 (TBD)
+- Mapped to phases: 24/24 (Phase 21: 8, Phase 22: 12, Phase 23: 4)
+- Unmapped: 0
 - Future: 8 (2 DB + 2 HMRS-FUTURE + 1 MODE-FUTURE + 3 SPEC + 1 DRT)
 
 ---
