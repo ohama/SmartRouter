@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.1] - 2026-05-13
+
+Hotfix release closing issue [#14](https://github.com/ohama/SmartRouter/issues/14):
+named `HttpClient` registrations using the `services.AddHttpClient(name, fun c -> ...)`
+2-arg form were silently dropping `BaseAddress` and `Timeout` assignments due
+to F# overload resolution not reliably converting the lambda to
+`Action<HttpClient>`. The forbidden pattern (documented at `CompositionRoot.fs:214`
+and in `documentation/howto/wire-fsharp-namedhttpclient-with-configurehttpclient.md`)
+was present in 4 call sites spanning the entire v2.0+ lifetime.
+
+**Impact:** The default `Routing.Mode="selfrouting"` Stage 4 self-classify path
+was broken in every shipped v2.0.0 → v2.2.0 release. Every request that reached
+Stage 4 silently fell through to Default routing because `selfrouter`
+`BaseAddress` was null and every call returned `InvalidOperationException:
+An invalid request URI was provided`. The cascade degraded gracefully so
+production observability (`/stats`, `DecisionLog`) did not surface the issue;
+it was found by a downstream consumer building an E2E test harness.
+
+The `judge` (Phase 16, opt-in via `Routing.Judge.Enabled=true`) and `teacher`
+(ML retraining accumulation, `--retrain` CLI mode) paths were also broken in
+the same way — every request was silently failing instead of reaching the
+configured endpoint.
+
+### Fixed
+
+- **`selfrouter` HttpClient `BaseAddress` (issue #14, `CompositionRoot.fs:485`).**
+  The 2-arg `services.AddHttpClient("selfrouter", fun c -> ...)` registration
+  is replaced with the `.ConfigureHttpClient(...)` chain form. Stage 4
+  self-classify calls now actually reach `Upstreams.Model35B` (default
+  `http://127.0.0.1:8000`) instead of failing with relative-URI errors.
+- **`judge` HttpClient `BaseAddress` (`CompositionRoot.fs:763`).** Same
+  pattern, same fix. Operators with `Routing.Judge.Enabled=true` will now
+  see judge calls succeed against `Upstreams.Model122B` (default
+  `http://127.0.0.1:8001`).
+- **`teacher` HttpClient `BaseAddress` (`CompositionRoot.fs:829`,
+  `configureRequestPipeline` branch).** ML retraining hard-case accumulation
+  now reaches the teacher endpoint configured in `TeacherLabeler:Endpoint`.
+- **`teacher` HttpClient `BaseAddress` (`CompositionRoot.fs:1278`,
+  `configureWithoutMl` branch).** The `--retrain` CLI mode now reaches the
+  teacher endpoint instead of failing.
+
+### Added
+
+- **`tests/SmartRouter.Tests/NamedHttpClientBaseAddressTests.fs`** — 8-testCase
+  regression suite that builds a real DI provider for both
+  `configureRequestPipeline` and `configureWithoutMl`, resolves
+  `IHttpClientFactory`, creates each named client, and asserts `BaseAddress`
+  is non-null and matches the configured endpoint. Covers canonical
+  good cases (`upstream35b`, `upstream122b`, streaming variants) plus all
+  4 previously-broken sites. The existing howto doc + the FORBIDDEN warning
+  comment at `CompositionRoot.fs:214` were documentation safeguards;
+  this test is the missing CI gate that would have caught the original
+  drift. Test count: 191 → 199 passing.
+
+### Notes
+
+- **Operator-visible behavior is now what the README has always claimed.**
+  Phase 19+ documentation describes `selfrouter` Stage 4 classify as a live
+  routing stage; the code now matches that description. No README update is
+  required because the README was already accurate — the bug was silent
+  divergence between code and docs.
+- **No new dependencies, no schema changes.** `DecisionLog schema_version=1`
+  unchanged; `/stats` flat snake_case fields unchanged; ARCH-01 (Core
+  BCL-only) and ARCH-02 (`task {}` only) preserved.
+- **TD-5 (`PITFALL-10` timing race in `QueueTests.fs`) still intermittent.**
+  Pre-existing flake, unrelated to v2.2.1. Production logic in
+  `QueueDispatcher` is correct (Fairness counter assertions always pass; only
+  the FIFO completion-order assertion for `high4` is flaky). Tracked for a
+  future minor milestone.
+- **Recommendation for operators upgrading from v2.0.0–v2.2.0:** If you have
+  been running `Routing.Mode="selfrouting"` (the default since v2.0), the
+  Stage 4 self-classify path has effectively been a no-op. Routing decisions
+  prior to this release were:
+  1. Hard Rules (Stage 0) — worked correctly
+  2. Explicit model override (Stage 1) — worked correctly
+  3. Explicit task table (Stage 2) — worked correctly
+  4. Sticky session (Stage 3) — worked correctly
+  5. ~~35B self-classify (Stage 4)~~ — silently broken, fell through
+  6. Default 35B (Stage 5) — worked correctly (caught the fall-through)
+
+  After upgrading, you should see Stage 4 selfrouter actually engage. Watch
+  the new `selfrouter_*` `/stats` counters to confirm the cache is being
+  populated. If you were previously OK with Default-35B routing, no
+  observable change. If you wanted Stage 4 to upgrade ambiguous prompts to
+  122B based on the SAFE/UNSAFE classify, that will now happen.
+
 ## [2.2.0] - 2026-05-13
 
 v2.2 milestone — Operator Fail-Fast on Port Conflict. Single-phase minimal
