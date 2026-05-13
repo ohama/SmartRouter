@@ -482,9 +482,10 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         // Named "selfrouter" HttpClient — 5s timeout (SR-01; classify must be quick; NOT the 300s
         // inference upstream clients). Separate from "upstream35b" to prevent classify calls from
         // inheriting the 300s inference resilience config. Mirrors "judge" registration shape.
-        services.AddHttpClient("selfrouter", fun (c: System.Net.Http.HttpClient) ->
-            c.BaseAddress <- Uri(selfRouterOpts.Endpoint)
-            c.Timeout     <- TimeSpan.FromSeconds(float selfRouterOpts.TimeoutSeconds))
+        services.AddHttpClient("selfrouter")
+            .ConfigureHttpClient(fun (c: System.Net.Http.HttpClient) ->
+                c.BaseAddress <- Uri(selfRouterOpts.Endpoint)
+                c.Timeout     <- TimeSpan.FromSeconds(float selfRouterOpts.TimeoutSeconds))
             .AddResilienceHandler("selfrouter-pipeline", fun (builder: Polly.ResiliencePipelineBuilder<System.Net.Http.HttpResponseMessage>) ->
                 // SR-01: 1 retry at 200ms constant delay (fail-fast; judge uses 2 retries
                 // with exponential backoff but classify is on the hot path — we want to
@@ -760,9 +761,10 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
         // upstream clients. Mirrors teacher-pipeline retry shape but with shorter
         // backoff (researcher OQ #5: 2 retries at 200ms/400ms — judge is on the hot
         // path; teacher's 1s/2s/4s is too slow).
-        services.AddHttpClient("judge", fun (c: System.Net.Http.HttpClient) ->
-            c.BaseAddress <- Uri(effectiveEndpoint)
-            c.Timeout     <- TimeSpan.FromSeconds(float effectiveTimeoutSec))
+        services.AddHttpClient("judge")
+            .ConfigureHttpClient(fun (c: System.Net.Http.HttpClient) ->
+                c.BaseAddress <- Uri(effectiveEndpoint)
+                c.Timeout     <- TimeSpan.FromSeconds(float effectiveTimeoutSec))
             .AddResilienceHandler("judge-pipeline", fun (builder: Polly.ResiliencePipelineBuilder<System.Net.Http.HttpResponseMessage>) ->
                 let retryOpts = HttpRetryStrategyOptions()
                 retryOpts.MaxRetryAttempts <- 2
@@ -826,12 +828,13 @@ let configureRequestPipeline (services: IServiceCollection) (config: IConfigurat
     //
     // Resilience handler: 3 retry attempts, exponential 1s/2s/4s, transient errors only.
     // HttpClient.Timeout = TeacherLabeler:TimeoutSeconds (default 30s) — applied per attempt.
-    services.AddHttpClient("teacher", fun (c: System.Net.Http.HttpClient) ->
-        let opts = config.GetSection("TeacherLabeler").Get<TeacherLabelerOptions>()
-        let endpoint = if String.IsNullOrWhiteSpace(opts.Endpoint) then "http://127.0.0.1:8001" else opts.Endpoint
-        let timeoutSec = if opts.TimeoutSeconds <= 0 then 30 else opts.TimeoutSeconds
-        c.BaseAddress <- Uri(endpoint)
-        c.Timeout     <- TimeSpan.FromSeconds(float timeoutSec))
+    services.AddHttpClient("teacher")
+        .ConfigureHttpClient(fun (c: System.Net.Http.HttpClient) ->
+            let opts = config.GetSection("TeacherLabeler").Get<TeacherLabelerOptions>()
+            let endpoint = if String.IsNullOrWhiteSpace(opts.Endpoint) then "http://127.0.0.1:8001" else opts.Endpoint
+            let timeoutSec = if opts.TimeoutSeconds <= 0 then 30 else opts.TimeoutSeconds
+            c.BaseAddress <- Uri(endpoint)
+            c.Timeout     <- TimeSpan.FromSeconds(float timeoutSec))
         .AddResilienceHandler("teacher-pipeline", fun (builder: Polly.ResiliencePipelineBuilder<System.Net.Http.HttpResponseMessage>) ->
             // Use AddResilienceHandler (NOT AddStandardResilienceHandler) so we can
             // make the 4xx-skip explicit per FAIL-02 ("transient errors only").
@@ -1275,12 +1278,13 @@ let configureWithoutMl (services: IServiceCollection) (config: IConfiguration) :
     services.Configure<TeacherLabelerOptions>(config.GetSection("TeacherLabeler")) |> ignore
     services.Configure<HardCaseDatasetOptions>(config.GetSection("HardCaseDataset")) |> ignore
 
-    services.AddHttpClient("teacher", fun (c: System.Net.Http.HttpClient) ->
-        let opts = config.GetSection("TeacherLabeler").Get<TeacherLabelerOptions>()
-        let endpoint = if String.IsNullOrWhiteSpace(opts.Endpoint) then "http://127.0.0.1:8001" else opts.Endpoint
-        let timeoutSec = if opts.TimeoutSeconds <= 0 then 30 else opts.TimeoutSeconds
-        c.BaseAddress <- Uri(endpoint)
-        c.Timeout     <- TimeSpan.FromSeconds(float timeoutSec))
+    services.AddHttpClient("teacher")
+        .ConfigureHttpClient(fun (c: System.Net.Http.HttpClient) ->
+            let opts = config.GetSection("TeacherLabeler").Get<TeacherLabelerOptions>()
+            let endpoint = if String.IsNullOrWhiteSpace(opts.Endpoint) then "http://127.0.0.1:8001" else opts.Endpoint
+            let timeoutSec = if opts.TimeoutSeconds <= 0 then 30 else opts.TimeoutSeconds
+            c.BaseAddress <- Uri(endpoint)
+            c.Timeout     <- TimeSpan.FromSeconds(float timeoutSec))
         .AddResilienceHandler("teacher-pipeline", fun (builder: Polly.ResiliencePipelineBuilder<System.Net.Http.HttpResponseMessage>) ->
             let opts = config.GetSection("TeacherLabeler").Get<TeacherLabelerOptions>()
             let timeoutSec = if opts.TimeoutSeconds <= 0 then 30 else opts.TimeoutSeconds
