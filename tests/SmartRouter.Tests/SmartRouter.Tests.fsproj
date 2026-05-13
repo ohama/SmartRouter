@@ -52,6 +52,8 @@
     <Compile Include="SessionKeyCascadeTests.fs" />
     <!-- Phase 25 -->
     <Compile Include="PortProbeTests.fs" />
+    <!-- Issue #14: F# named HttpClient must use ConfigureHttpClient chain form -->
+    <Compile Include="NamedHttpClientBaseAddressTests.fs" />
     <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>

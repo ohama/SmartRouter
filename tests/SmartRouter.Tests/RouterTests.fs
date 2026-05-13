@@ -44,6 +44,7 @@ let rootTests : Test list =
         SmartRouter.Tests.ContentFingerprintTests.tests                           // Phase 21 (Plan 21-02)
         SmartRouter.Tests.SessionKeyCascadeTests.tests                            // Phase 22 (Plan 22-03)
         SmartRouter.Tests.PortProbeTests.tests                                    // Phase 25 (Plan 25-01)
+        SmartRouter.Tests.NamedHttpClientBaseAddressTests.tests                   // Issue #14 (BaseAddress regression)
     ]
 
 [<EntryPoint>]
